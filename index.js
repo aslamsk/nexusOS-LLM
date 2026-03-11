@@ -38,7 +38,8 @@ class NexusOrchestrator {
         // Inject the active working directory into the prompt if specified
         let augmentedRequest = userRequest;
         if (this.taskDir) {
-            augmentedRequest += `\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: ${this.taskDir}. Do not save files to the root directory.`;
+            const folderName = path.basename(this.taskDir);
+            augmentedRequest += `\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: ${this.taskDir}. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/${folderName}/filename.ext)`;
         }
 
         this.context.push({ role: 'user', content: augmentedRequest });

@@ -10,6 +10,8 @@ const io = new Server(server);
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
+// Expose the outputs directory so users can download generated files
+app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
 
 io.on('connection', (socket) => {
     console.log('User connected to Web UI');

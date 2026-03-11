@@ -401,7 +401,16 @@
         function addChatMessage(text, sender) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `chat-msg ${sender}`;
-            msgDiv.textContent = text;
+
+            // Escape HTML for safety
+            const tempDiv = document.createElement('div');
+            tempDiv.textContent = text;
+            let escapedText = tempDiv.innerHTML;
+
+            // Parse markdown links into clickable HTML links
+            escapedText = escapedText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color: #58a6ff; font-weight: bold; text-decoration: underline;">$1</a>');
+
+            msgDiv.innerHTML = escapedText;
             chatHistory.appendChild(msgDiv);
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
