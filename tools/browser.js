@@ -20,6 +20,9 @@ class BrowserTool {
             this.page = await this.browser.newPage();
             // Set a realistic viewport
             await this.page.setViewport({ width: 1280, height: 800 });
+        } else if (this.page && this.page.isClosed()) {
+            this.page = await this.browser.newPage();
+            await this.page.setViewport({ width: 1280, height: 800 });
         }
     }
 
@@ -42,7 +45,14 @@ class BrowserTool {
             switch (action) {
                 case 'open':
                     if (!args.url) return 'Error: action=open requires url';
-                    await this.page.goto(args.url, { waitUntil: 'networkidle2' });
+                    try {
+                        await this.page.goto(args.url, { waitUntil: 'networkidle2' });
+                    } catch (navError) {
+                        console.log("Navigation error, recreating page: " + navError.message);
+                        this.page = await this.browser.newPage();
+                        await this.page.setViewport({ width: 1280, height: 800 });
+                        await this.page.goto(args.url, { waitUntil: 'networkidle2' });
+                    }
                     return `Successfully opened ${args.url}. Page title: ${await this.page.title()}`;
 
                 case 'click':
