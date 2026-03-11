@@ -69,18 +69,15 @@ class BrowserTool {
 
                 case 'clickText':
                     if (!args.text) return 'Error: action=clickText requires text';
-                    // Use modern Puppeteer XPath selector syntax
-                    const elements = await this.page.$$(`::-p-xpath(//*[contains(text(), '${args.text}')])`);
-                    const element = elements[0];
-                    if (element) {
-                        try {
-                            await element.click();
-                            return `Successfully clicked element containing text: '${args.text}'`;
-                        } catch (err) {
-                            return `Error clicking element with text '${args.text}': ${err.message}`;
-                        }
-                    } else {
-                        return `Error: Could not find any element containing text: '${args.text}'`;
+                    try {
+                        // Use Puppeteer's built-in text selector which finds the deepest matching element
+                        const selector = `::-p-text(${args.text})`;
+                        await this.page.waitForSelector(selector, { timeout: 5000 });
+                        // Click via evaluate to bypass strict visibility/overlay checks
+                        await this.page.$eval(selector, el => el.click());
+                        return `Successfully clicked element containing text: '${args.text}'`;
+                    } catch (err) {
+                        return `Error clicking element with text '${args.text}': ${err.message}`;
                     }
 
                 case 'extract':
