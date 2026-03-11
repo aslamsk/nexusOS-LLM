@@ -67,6 +67,21 @@ class BrowserTool {
                     await this.page.type(args.selector, args.text);
                     return `Successfully typed into selector: ${args.selector}`;
 
+                case 'keyPress':
+                    if (!args.key) return 'Error: action=keyPress requires key (e.g., "Enter")';
+                    await this.page.keyboard.press(args.key);
+                    return `Successfully pressed key: ${args.key}`;
+
+
+                case 'waitForNetworkIdle':
+                    const timeout = args.timeout || 15000;
+                    try {
+                        await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: timeout });
+                        return `Successfully waited for network to become idle (page has finished loading/updating).`;
+                    } catch (err) {
+                        return `Network did not become fully idle within ${timeout}ms, but proceeding anyway.`;
+                    }
+
                 case 'clickText':
                     if (!args.text) return 'Error: action=clickText requires text';
                     try {
@@ -85,6 +100,45 @@ class BrowserTool {
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
                     const text = await this.page.$eval(args.selector, el => el.innerText);
                     return `Extracted text from ${args.selector}:\n${text}`;
+
+                case 'extractActiveElements':
+                    // Wait briefly for generic JS frameworks to settle
+                    await new Promise(r => setTimeout(r, 1000));
+
+                    return await this.page.evaluate(() => {
+                        const interactables = Array.from(document.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [onclick], [tabindex]:not([tabindex="-1"])'));
+                        const visibleElements = interactables.filter(el => {
+                            const style = window.getComputedStyle(el);
+                            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                        });
+
+                        const parsedElements = visibleElements.map((el, index) => {
+                            // Assign a unique ID if it doesn't have one to make targeting easy
+                            if (!el.id) el.id = `nx-autoid-${index}`;
+
+                            let textContent = el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '';
+                            textContent = textContent.replace(/\s+/g, ' ').trim();
+
+                            return {
+                                tag: el.tagName.toLowerCase(),
+                                id: el.id,
+                                text: textContent.substring(0, 100), // Max 100 chars
+                                type: el.type || undefined
+                            };
+                        });
+
+                        // Deduplicate and filter out empty text elements that aren't inputs
+                        const uniqueMap = new Map();
+                        parsedElements.forEach(item => {
+                            if ((item.text || item.tag === 'input' || item.tag === 'textarea' || item.tag === 'select') && !uniqueMap.has(item.id)) {
+                                uniqueMap.set(item.id, item);
+                            }
+                        });
+
+                        const result = Array.from(uniqueMap.values());
+                        if (result.length === 0) return "[] (No interactive elements found. The page might still be loading or requires scrolling.)";
+                        return JSON.stringify(result, null, 2);
+                    });
 
                 case 'screenshot':
                     if (!args.savePath) return 'Error: action=screenshot requires savePath';
