@@ -67,6 +67,20 @@ class BrowserTool {
                     await this.page.type(args.selector, args.text);
                     return `Successfully typed into selector: ${args.selector}`;
 
+                case 'clickText':
+                    if (!args.text) return 'Error: action=clickText requires text';
+                    const [element] = await this.page.$x(`//*[contains(text(), '${args.text}')]`);
+                    if (element) {
+                        try {
+                            await element.click();
+                            return `Successfully clicked element containing text: '${args.text}'`;
+                        } catch (err) {
+                            return `Error clicking element with text '${args.text}': ${err.message}`;
+                        }
+                    } else {
+                        return `Error: Could not find any element containing text: '${args.text}'`;
+                    }
+
                 case 'extract':
                     if (!args.selector) return 'Error: action=extract requires selector';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
