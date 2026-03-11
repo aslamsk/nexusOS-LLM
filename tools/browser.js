@@ -69,7 +69,9 @@ class BrowserTool {
 
                 case 'clickText':
                     if (!args.text) return 'Error: action=clickText requires text';
-                    const [element] = await this.page.$x(`//*[contains(text(), '${args.text}')]`);
+                    // Use modern Puppeteer XPath selector syntax
+                    const elements = await this.page.$$(`::-p-xpath(//*[contains(text(), '${args.text}')])`);
+                    const element = elements[0];
                     if (element) {
                         try {
                             await element.click();
