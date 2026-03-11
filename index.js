@@ -84,8 +84,12 @@ class NexusOrchestrator {
             }
         }
 
-        // Ensure browser is closed
-        await BrowserTool.close();
+        // Conditionally close browser
+        const shouldClose = /auto[- ]?close(d)?/i.test(userRequest);
+        if (shouldClose) {
+            this.onUpdate({ type: 'step', message: 'Auto-closing browser as requested...' });
+            await BrowserTool.close();
+        }
     }
 
     async dispatchTool(toolCall) {
