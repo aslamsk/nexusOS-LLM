@@ -12,7 +12,11 @@ class BrowserTool {
 
     async init() {
         if (!this.browser) {
-            this.browser = await puppeteer.launch({ headless: false });
+            const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE; // Detect Cloud Run
+            this.browser = await puppeteer.launch({
+                headless: isProd ? 'new' : false,
+                args: isProd ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
+            });
             this.page = await this.browser.newPage();
             // Set a realistic viewport
             await this.page.setViewport({ width: 1280, height: 800 });
