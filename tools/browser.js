@@ -20,7 +20,7 @@ class BrowserTool {
             this.page = await this.browser.newPage();
             // Set a realistic viewport
             await this.page.setViewport({ width: 1280, height: 800 });
-        } else if (this.page && this.page.isClosed()) {
+        } else if (!this.page || this.page.isClosed()) {
             this.page = await this.browser.newPage();
             await this.page.setViewport({ width: 1280, height: 800 });
         }
@@ -82,6 +82,10 @@ class BrowserTool {
                     return `Error: Unknown browser action '${action}'`;
             }
         } catch (error) {
+            if (this.page) {
+                try { await this.page.close(); } catch (e) { }
+                this.page = null;
+            }
             return `Browser action error: ${error.message}`;
         }
     }
