@@ -16,23 +16,24 @@ app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
 io.on('connection', (socket) => {
     console.log('User connected to Web UI');
 
+    // Create a unique output folder for this entire session
+    const fs = require('fs');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const sessionDir = path.join(__dirname, 'outputs', `session_${timestamp}`);
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    // Initialize ONE orchestrator instance for this user session
+    // This allows the agent to remember context from previous questions
+    const orchestrator = new NexusOrchestrator((logEvent) => {
+        // Stream logs back to the client in real-time
+        socket.emit('nexus_log', logEvent);
+    }, sessionDir);
+
     socket.on('start_task', async (data) => {
         const { prompt } = data;
         console.log(`Received task from Web UI: ${prompt}`);
-
-        // Create a unique output folder for this task
-        const fs = require('fs');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const taskDir = path.join(__dirname, 'outputs', `task_${timestamp}`);
-        if (!fs.existsSync(taskDir)) {
-            fs.mkdirSync(taskDir, { recursive: true });
-        }
-
-        // Initialize a new orchestrator instance for this task
-        const orchestrator = new NexusOrchestrator((logEvent) => {
-            // Stream logs back to the client in real-time
-            socket.emit('nexus_log', logEvent);
-        }, taskDir);
 
         try {
             await orchestrator.execute(prompt);
