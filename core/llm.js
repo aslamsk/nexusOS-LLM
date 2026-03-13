@@ -95,6 +95,189 @@ class LLMService {
                     },
                     required: ["prompt", "savePath"]
                 }
+            },
+            {
+                name: "metaCreateCampaign",
+                description: "Create a new Meta Ads Campaign.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        name: { type: "STRING", description: "Name of the campaign." },
+                        objective: { type: "STRING", description: "Campaign objective (e.g., 'OUTCOME_TRAFFIC'). Defaults to 'OUTCOME_TRAFFIC'." }
+                    },
+                    required: ["name"]
+                }
+            },
+            {
+                name: "metaCreateAdSet",
+                description: "Create a new Meta Ad Set with budget and targeting.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        campaignId: { type: "STRING", description: "ID of the parent campaign." },
+                        name: { type: "STRING", description: "Name of the ad set." },
+                        budget: { type: "NUMBER", description: "Daily budget in Rupees (e.g., 100)." },
+                        targeting: { type: "OBJECT", description: "Targeting object (e.g., {geo_locations: {countries: ['IN']}})." }
+                    },
+                    required: ["campaignId", "name", "budget"]
+                }
+            },
+            {
+                name: "metaUploadImage",
+                description: "Upload a local image to Meta to get an image_hash.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        imagePath: { type: "STRING", description: "Absolute path to the local image file." }
+                    },
+                    required: ["imagePath"]
+                }
+            },
+            {
+                name: "metaCreateCreative",
+                description: "Create a new Meta Ad Creative.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        name: { type: "STRING", description: "Internal name for the creative." },
+                        title: { type: "STRING", description: "The headline of the ad (e.g. 'MK Fashion - Luxury Silk Saree')." },
+                        body: { type: "STRING", description: "The main text/description of the ad." },
+                        imageHash: { type: "STRING", description: "The hash returned by 'metaUploadImage'." },
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
+                        cta: { type: "STRING", description: "The Call to Action type, e.g., 'SHOP_NOW', 'WHATSAPP_MESSAGE', 'LEARN_MORE'. Default is 'SHOP_NOW'." }
+                    },
+                    required: ["name", "title", "body", "imageHash"]
+                }
+            },
+            {
+                name: "metaPublishOrganicVideo",
+                description: "Publish a free, organic video post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
+                        title: { type: "STRING", description: "Title of the video." },
+                        description: { type: "STRING", description: "Description for the video." },
+                        videoPath: { type: "STRING", description: "Absolute path to the local video file." }
+                    },
+                    required: ["title", "description", "videoPath"]
+                }
+            },
+            {
+                name: "metaPublishOrganicReel",
+                description: "Publish a free, organic Reel to a Facebook Page. Uses META_PAGE_ID from .env if pageId is missing.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
+                        description: { type: "STRING", description: "Caption for the Reel." },
+                        videoPath: { type: "STRING", description: "Absolute path to the local video file." }
+                    },
+                    required: ["description", "videoPath"]
+                }
+            },
+            {
+                name: "metaCreateAd",
+                description: "Create the final Ad on Meta.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        adSetId: { type: "STRING", description: "ID of the parent ad set." },
+                        creativeId: { type: "STRING", description: "ID of the ad creative." },
+                        name: { type: "STRING", description: "Name of the ad." }
+                    },
+                    required: ["adSetId", "creativeId", "name"]
+                }
+            },
+            {
+                name: "metaPublishOrganicPost",
+                description: "Publish a free, organic text post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
+                        message: { type: "STRING", description: "The text of the post." },
+                        link: { type: "STRING", description: "Optional link to include." }
+                    },
+                    required: ["message"]
+                }
+            },
+            {
+                name: "metaPublishOrganicPhoto",
+                description: "Publish a free, organic photo post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
+                        message: { type: "STRING", description: "Caption for the photo." },
+                        imagePath: { type: "STRING", description: "Absolute path to the local image file." }
+                    },
+                    required: ["message", "imagePath"]
+                }
+            },
+            {
+                name: "metaGetPageInsights",
+                description: "Get engagement insights (impressions, engagement, fans) for a Facebook Page. Uses META_PAGE_ID from .env if pageId is missing.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." }
+                    }
+                }
+            },
+            {
+                name: "generateVideo",
+                description: "Convert a static image into a 5-second video MP4 file suitable for Reels.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        imagePath: { type: "STRING", description: "Absolute path to the source image." },
+                        outputPath: { type: "STRING", description: "Absolute path for the output .mp4 file." }
+                    },
+                    required: ["imagePath", "outputPath"]
+                }
+            },
+            {
+                name: "metaGetComments",
+                description: "Get comments for a specific Meta object (Post ID or Ad ID).",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        objectId: { type: "STRING", description: "The ID of the post or ad to fetch comments for." }
+                    },
+                    required: ["objectId"]
+                }
+            },
+            {
+                name: "jarvisExecute",
+                description: "Trigger the multi-agent Jarvis brain to strategically plan and execute a high-level goal (e.g., 'Launch a luxury saree campaign').",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        goal: { type: "STRING", description: "The high-level objective to fulfill." }
+                    },
+                    required: ["goal"]
+                }
+            },
+            {
+                name: "metaReplyToComment",
+                description: "Reply to a specific comment on a Meta Page post.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        commentId: { type: "STRING", description: "The ID of the comment to reply to." },
+                        message: { type: "STRING", description: "The text of the reply." }
+                    },
+                    required: ["commentId", "message"]
+                }
+            },
+            {
+                name: "metaGetAccountInfo",
+                description: "Get details about the configured Meta Ad Account.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {}
+                }
             }
         ];
     }

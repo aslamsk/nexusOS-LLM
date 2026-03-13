@@ -48,12 +48,30 @@ class BrowserTool {
                     try {
                         await this.page.goto(args.url, { waitUntil: 'networkidle2' });
                     } catch (navError) {
+                        const isBotBlocked = navError.message.includes('Protocol error') || 
+                                             navError.message.includes('Connection closed') ||
+                                             navError.message.includes('timeout');
+                        
+                        if (isBotBlocked && !args.url.includes('r.jina.ai')) {
+                            console.log(`[BrowserTool] Bot block detected for ${args.url}. Retrying via Jina proxy...`);
+                            const proxyUrl = `https://r.jina.ai/${args.url}`;
+                            await this.page.goto(proxyUrl, { waitUntil: 'networkidle2' });
+                            return `Successfully opened ${args.url} via Jina Proxy (Bypass active).`;
+                        }
+
                         console.log("Navigation error, recreating page: " + navError.message);
                         this.page = await this.browser.newPage();
                         await this.page.setViewport({ width: 1280, height: 800 });
                         await this.page.goto(args.url, { waitUntil: 'networkidle2' });
                     }
                     return `Successfully opened ${args.url}. Page title: ${await this.page.title()}`;
+
+                case 'scrape':
+                    if (!args.url) return 'Error: action=scrape requires url';
+                    const jinaUrl = `https://r.jina.ai/${args.url}`;
+                    await this.page.goto(jinaUrl, { waitUntil: 'networkidle2' });
+                    const markdown = await this.page.evaluate(() => document.body.innerText);
+                    return markdown;
 
                 case 'click':
                     if (!args.selector) return 'Error: action=click requires selector';

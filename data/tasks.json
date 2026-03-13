@@ -1,0 +1,212 @@
+[
+  {
+    "id": "3a2eb59c-496a-45a8-bf2f-9ddfb49d8dbe",
+    "projectId": "9b895029-ecd7-43be-90d9-7a5865e8029c",
+    "role": "Manager",
+    "title": "Generate Research Report on Autonomous AI Agents",
+    "description": "Conduct comprehensive research and compile a professional report on autonomous AI agents, detailing their current state, applications, challenges, and future outlook. Save the report to D:\\nexus-os\\outputs.",
+    "status": "completed",
+    "createdAt": 1773363565648,
+    "updatedAt": 1773363577530
+  },
+  {
+    "id": "19b81b44-d76f-4ee2-abd2-27698ae9bfc9",
+    "projectId": "9b895029-ecd7-43be-90d9-7a5865e8029c",
+    "role": "manager",
+    "title": "Final Workflow Report",
+    "description": "Review all artifacts and produce a comprehensive project summary.",
+    "status": "pending",
+    "createdAt": 1773363577570,
+    "updatedAt": 1773363577570
+  },
+  {
+    "id": "d3a53481-789b-4705-a112-121b6b2c8327",
+    "projectId": "9b895029-ecd7-43be-90d9-7a5865e8029c",
+    "role": "Designer",
+    "title": "Design Marketing Banner for AI Agents Report",
+    "description": "Create a visually appealing and professional marketing banner design that complements the research report on autonomous AI agents. The banner should be engaging and suitable for promotional use. Save the banner image to D:\\nexus-os\\outputs.",
+    "status": "completed",
+    "createdAt": 1773363577605,
+    "updatedAt": 1773363594589
+  },
+  {
+    "id": "ed596191-af03-4558-b8af-efdcc6f2407b",
+    "projectId": "99a8ccbd-7f8f-4f84-9938-e57d739b316b",
+    "role": "manager",
+    "title": "Direct Execution",
+    "description": "Create a modern professional digital services promotional banner for a freelancer named Aslam Shaik. Size: 1080 × 1080 pixels (square, suitable for WhatsApp, Instagram, and Facebook). Style: clean corporate tech design, dark blue and teal gradient background, minimal and premium layout, glowing tech elements, modern typography, professional digital agency style. Include subtle illustrations like laptop, mobile app interface, coding symbols, and digital marketing graphs. Headline: Need Professional Digital Services? Services to display (with icons): • Website Development • Mobile App Development • Digital Marketing (SEO & Social Media) • Logo & Brand Identity Design • E-Commerce Website Development • WordPress Website Development • UI/UX Design • IT Job Support Contact Section: Contact Now Aslam Shaik 📞 7075736393 Call-to-action: Affordable • Professional • Fast Delivery Layout: logo and brand name at top bold headline in center services in a clean list contact information highlighted at bottom ultra high resolution, premium marketing banner, sharp typography, balanced spacing, professional IT services advertisement. clean grid layout, modern UI design, corporate branding style, professional advertising banner, high contrast, minimal clutter, premium tech company aesthetic. Save the output image to D:\\nexus-os\\outputs\\aslam_shaik_banner.png",
+    "status": "pending",
+    "createdAt": 1773365481996,
+    "updatedAt": 1773365481996
+  },
+  {
+    "id": "6839d5f6-6995-4705-9105-072d17a126f1",
+    "projectId": "52096b4f-fdb6-46a2-b6cc-34e098698da4",
+    "role": "manager",
+    "title": "Direct Execution",
+    "description": "open D drive in my system",
+    "status": "pending",
+    "createdAt": 1773389639398,
+    "updatedAt": 1773389639398
+  },
+  {
+    "id": "aab9bbd7-360b-4b98-9a29-78c729f9b215",
+    "projectId": "fe6e16d5-ba3e-4ede-b486-7fedb91d3b55",
+    "role": "manager",
+    "title": "Direct Execution",
+    "description": "open D drive in my system",
+    "status": "pending",
+    "createdAt": 1773389872287,
+    "updatedAt": 1773389872287
+  },
+  {
+    "id": "29071289-9ac3-4f77-8ae0-84586d2e5765",
+    "projectId": "cac16c26-37a3-4317-be23-63d027e0d584",
+    "role": "manager",
+    "title": "Direct Execution",
+    "description": "open D drive in my system",
+    "status": "pending",
+    "createdAt": 1773391818439,
+    "updatedAt": 1773391818439
+  },
+  {
+    "id": "3dc63ac7-23a0-4774-8af6-7dde9fefd1f1",
+    "projectId": "1303ea7f-6f77-40df-98cd-5044b215de3e",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for accessing the D drive and managing output to D:\\nexus-os\\outputs, then delegate to the Architect and Fullstack Developer for implementation.",
+    "status": "completed",
+    "createdAt": 1773391897918,
+    "updatedAt": 1773392459931
+  },
+  {
+    "id": "1ce3bf75-ca2f-4eb0-851f-3f139578e632",
+    "projectId": "e47d682b-c384-48c4-a691-0b76dee7ad78",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope and delegate to specialists. The goal is to open the D drive and report the occupied GB space. This will require a 'Technical Build' approach, involving an 'Architect' to design the command and a 'Fullstack_Developer' to execute it and extract the information.",
+    "status": "completed",
+    "createdAt": 1773391953452,
+    "updatedAt": 1773392461792
+  },
+  {
+    "id": "0e0d7bf8-ee45-4d08-bc6c-e7cd60d3b778",
+    "projectId": "e47d682b-c384-48c4-a691-0b76dee7ad78",
+    "role": "Architect",
+    "title": "Design Command for D Drive Space",
+    "description": "Design a shell command to open the D drive and extract the occupied GB space. The output should be easily parsable.",
+    "status": "pending",
+    "createdAt": 1773391955815,
+    "updatedAt": 1773391955815
+  },
+  {
+    "id": "c8c76d91-3c34-484c-8a33-a305ab97b58f",
+    "projectId": "9270dd9b-5a24-4d68-990e-07610719a790",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Retrieve D drive space usage and free space.",
+    "status": "completed",
+    "createdAt": 1773392551635,
+    "updatedAt": 1773392569990
+  },
+  {
+    "id": "7fdb6752-f140-4e8b-9fc1-24220208a76c",
+    "projectId": "f7937a30-e0d4-44a5-9e15-8083e046feef",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for the Flask CRUD application, including requirements for data models, API endpoints, and file saving location. Delegate to the Architect for system design.",
+    "status": "completed",
+    "createdAt": 1773396334754,
+    "updatedAt": 1773396541459
+  },
+  {
+    "id": "d1124954-1872-43b3-9563-5148d113d417",
+    "projectId": "2b111969-23c0-4d5b-ab78-823ab1df951e",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for a Flask CRUD application, including requirements for data models, API endpoints, and file saving location. Delegate to the Architect for system design.",
+    "status": "completed",
+    "createdAt": 1773396338470,
+    "updatedAt": 1773396543308
+  },
+  {
+    "id": "983c6d5b-97d4-4f2d-ba72-5344561b7b08",
+    "projectId": "3a811d8d-89c2-49c1-9fe5-39d52331dc4e",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for the Flask CRUD application architecture, including data model, API endpoints, and file saving location, then delegate to the Architect for detailed system design.",
+    "status": "failed",
+    "createdAt": 1773396345119,
+    "updatedAt": 1773396350356
+  },
+  {
+    "id": "e0ffd25c-4e24-4ee1-85cb-2aa7a03f5998",
+    "projectId": "ebef046b-c2b2-4a80-98cd-06271b876019",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for the Flask CRUD application, including core functionalities, database considerations, and deployment strategy. Delegate initial architectural design to the Architect.",
+    "status": "completed",
+    "createdAt": 1773396356110,
+    "updatedAt": 1773396542499
+  },
+  {
+    "id": "61a28a86-9208-456c-8f46-6ee55af12552",
+    "projectId": "56c87908-365e-4128-ae51-fe09863ee6c0",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for the Flask CRUD application, including core functionalities, database considerations, and deployment strategy. Delegate initial architectural design to the Architect.",
+    "status": "completed",
+    "createdAt": 1773396359890,
+    "updatedAt": 1773396543924
+  },
+  {
+    "id": "1e3172be-453b-4df4-ae1d-9cdf67988b3d",
+    "projectId": "2c22d6dc-0bb5-4051-9469-95421b438fb4",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope for the Flask CRUD application, including core functionalities (Create, Read, Update, Delete operations for a specific resource, e.g., users, products, tasks), database considerations (e.g., SQLite for simplicity, PostgreSQL for scalability), and deployment strategy (e.g., Docker, Heroku, AWS EC2). Subsequently, delegate the initial architectural design to the Architect.",
+    "status": "completed",
+    "createdAt": 1773396364122,
+    "updatedAt": 1773396544575
+  },
+  {
+    "id": "9dd77244-ccbd-4d76-8f98-2322537831c6",
+    "projectId": "55a8bd37-c25a-41f5-8c9b-69cda70103fc",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning for MK Fashion Banner",
+    "description": "Define the full scope of the premium animated HTML banner page for MK Fashion, including all specified animations, design elements, and responsiveness. Delegate the technical design to an Architect and the implementation to a Fullstack Developer. Oversee the entire project lifecycle and ensure the final output meets all requirements, delivering a single HTML file to D:\\nexus-os\\outputs\\mk_fashion_banner.html.",
+    "status": "completed",
+    "createdAt": 1773428607708,
+    "updatedAt": 1773428636653
+  },
+  {
+    "id": "55b375b9-5a04-45d1-8061-428ee88d74a7",
+    "projectId": "342e3477-f262-4562-a810-3584bcafcc39",
+    "role": "manager",
+    "title": "Project Initiation & Strategic Planning",
+    "description": "Define the full scope of the premium animated HTML banner page for MK Fashion, including all specified animations, design elements, and responsiveness. Delegate the technical design to an Architect and the implementation to a Fullstack Developer. Oversee the entire project lifecycle and ensure the final output meets all requirements, delivering a single HTML file to D:\\nexus-os\\outputs\\mk_fashion_banner.html.",
+    "status": "completed",
+    "createdAt": 1773428611664,
+    "updatedAt": 1773428637625
+  },
+  {
+    "id": "82d46557-d2cb-4626-8d3e-4821585893c7",
+    "projectId": "342e3477-f262-4562-a810-3584bcafcc39",
+    "role": "Architect",
+    "title": "Technical Design for MK Fashion Banner",
+    "description": "Based on the defined scope, create a detailed technical design document for the premium animated HTML banner. This should include technology stack recommendations (e.g., specific animation libraries, CSS frameworks), file structure, component breakdown, and a plan for ensuring responsiveness and performance. The design should explicitly address how each animation and design element will be technically achieved.",
+    "status": "pending",
+    "createdAt": 1773428620652,
+    "updatedAt": 1773428620652
+  },
+  {
+    "id": "3c008a0f-7b59-46ad-9eba-1842bdb3c216",
+    "projectId": "342e3477-f262-4562-a810-3584bcafcc39",
+    "role": "Fullstack Developer",
+    "title": "Implement MK Fashion Animated HTML Banner",
+    "description": "Develop the premium animated HTML banner page according to the Architect's technical design and the project scope. The output must be a single HTML file, `mk_fashion_banner.html`, containing all HTML, CSS, and JavaScript. Ensure all specified animations, design elements, and responsiveness requirements are met. Deliver the final file to `D:\\nexus-os\\outputs\\mk_fashion_banner.html`.",
+    "status": "pending",
+    "createdAt": 1773428620653,
+    "updatedAt": 1773428620653
+  }
+]
