@@ -8,7 +8,7 @@ const logs = ref([])
 const chatHistory = ref([
   { 
     sender: 'nexus', 
-    text: 'Welcome to Nexus OS. I am fully operational and capable of advanced planning, web browsing, code generation, and visual design. How can I help you today?'
+    text: 'Nexus OS is fully operational. What is the mission today, Boss?'
   }
 ])
 
