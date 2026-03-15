@@ -17,6 +17,40 @@ class MetaAdsTool {
     }
 
     /**
+     * Set and persist Meta credentials to the .env file.
+     */
+    async setCredentials(accessToken, adAccountId, pageId) {
+        console.log(`[MetaAds] Persisting new credentials to .env...`);
+        const envPath = path.join(process.cwd(), '.env');
+        let envContent = '';
+        if (fs.existsSync(envPath)) {
+            envContent = fs.readFileSync(envPath, 'utf8');
+        }
+
+        const updates = {
+            'META_ACCESS_TOKEN': accessToken,
+            'META_AD_ACCOUNT_ID': adAccountId,
+            'META_PAGE_ID': pageId
+        };
+
+        for (const [key, value] of Object.entries(updates)) {
+            if (!value) continue;
+            const regex = new RegExp(`^${key}=.*`, 'm');
+            if (envContent.match(regex)) {
+                envContent = envContent.replace(regex, `${key}=${value}`);
+            } else {
+                envContent += `\n${key}=${value}`;
+            }
+        }
+
+        fs.writeFileSync(envPath, envContent.trim() + '\n');
+        // Reload into current process
+        require('dotenv').config();
+        this.accessToken = process.env.META_ACCESS_TOKEN;
+        return "Meta credentials successfully updated and persisted.";
+    }
+
+    /**
      * Helper to make API requests to Meta Graph
      */
     async _request(method, endpoint, data = {}) {

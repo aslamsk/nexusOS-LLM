@@ -272,6 +272,18 @@ class LLMService {
                 }
             },
             {
+                name: "metaSetCredentials",
+                description: "Save Meta Ads credentials (access token, account ID, page ID) to the environment configuration.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        accessToken: { type: "STRING", description: "The Meta User Access Token." },
+                        adAccountId: { type: "STRING", description: "The Meta Ad Account ID (e.g. 123456789)." },
+                        pageId: { type: "STRING", description: "The Facebook Page ID." }
+                    }
+                }
+            },
+            {
                 name: "metaGetAccountInfo",
                 description: "Get details about the configured Meta Ad Account.",
                 parameters: {

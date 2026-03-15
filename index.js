@@ -161,6 +161,7 @@ class NexusOrchestrator {
                 case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
                 case 'generateVideo': return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
                 case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
+                case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
                 case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);
                 default: return `Error: Tool ${name} not found.`;
             }
