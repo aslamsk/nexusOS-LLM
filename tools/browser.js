@@ -21,15 +21,22 @@ class BrowserTool {
         if (!this.browser) {
             const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
             console.log(`[Browser] Launching browser (prod=${isProd})...`);
+            const commonArgs = [
+                '--ignore-certificate-errors',
+                '--ignore-urlfetcher-cert-requests',
+                '--disable-web-security'
+            ];
+
             this.browser = await puppeteer.launch({
                 headless: isProd ? 'new' : false,
+                ignoreHTTPSErrors: true,
                 args: isProd ? [
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--ignore-certificate-errors'
-                ] : ['--ignore-certificate-errors']
+                    ...commonArgs
+                ] : commonArgs
             });
             this.page = await this.browser.newPage();
             await this.page.setViewport({ width: 1280, height: 800 });
