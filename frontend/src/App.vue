@@ -18,9 +18,9 @@ const isWaitingForInput = ref(false)
 const taskStatusText = ref('Idle')
 const taskStatusColor = ref('#8b949e')
 const generatedOutputs = ref([])
+const showOutputs = ref(false)
 
 const chatContainer = ref(null)
-const logContainerRef = ref(null)
 
 // Push Notifications Setup
 const requestNotificationPermission = async () => {
@@ -41,21 +41,38 @@ onMounted(() => {
 
   socket.on('nexus_log', (data) => {
     logs.value.push(data)
-    scrollToBottom(logContainerRef)
+    
+    // Automatically display agent thoughts in the chat to make it feel alive
+    if (data.type === 'thought') {
+      const lastMsg = chatHistory.value[chatHistory.value.length - 1]
+      if (lastMsg.sender === 'nexus_thought') {
+         lastMsg.text = data.message // Update existing thought
+      } else {
+         addChatMessage(data.message, 'nexus_thought')
+      }
+    } else if (data.type === 'action') {
+      const lastMsg = chatHistory.value[chatHistory.value.length - 1]
+      if (lastMsg.sender === 'nexus_thought') {
+         lastMsg.text += `<br><span class="tool-call">🛠️ Using tool: ${data.name}</span>`
+      } else {
+         addChatMessage(`<span class="tool-call">🛠️ Using tool: ${data.name}</span>`, 'nexus_thought')
+      }
+    }
 
     if (data.type === 'error') {
       endTask(true)
+      addChatMessage(`❌ Error: ${data.message}`, 'nexus_error')
     } else if (data.type === 'complete') {
-      const finalMsg = logs.value.slice().reverse().find(l => l.type === 'thought')?.message || 'Task completed.'
+      const finalMsg = logs.value.slice().reverse().find(l => l.type === 'result')?.message || 'Task completed.'
       addChatMessage(finalMsg, 'nexus')
       endTask(false)
-      sendNotification('Nexus OS Task Complete', { body: finalMsg })
+      sendNotification('Nexus OS Task Complete', { body: 'Finished processing your request.' })
     } else if (data.type === 'input_requested') {
       isWaitingForInput.value = true
       isWorking.value = false
-      taskStatusText.value = 'Waiting for your input...'
+      taskStatusText.value = 'Waiting for input...'
       taskStatusColor.value = '#d29922'
-      addChatMessage(data.message, 'nexus')
+      addChatMessage(`⚠️ ${data.message}`, 'nexus_warning')
       sendNotification('Nexus OS Requires Input', { body: data.message })
     }
   })
@@ -81,8 +98,10 @@ const addChatMessage = (text, sender) => {
 
 const formatMessage = (text) => {
   if (!text) return ''
-  // Format markdown links
-  return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="chat-link">$1</a>')
+  // Format markdown links securely
+  let formatted = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="chat-link">$1</a>')
+  formatted = formatted.replace(/\n/g, '<br>')
+  return formatted
 }
 
 const submitTask = () => {
@@ -97,16 +116,12 @@ const submitTask = () => {
     isWorking.value = true
     taskStatusText.value = 'Processing...'
     taskStatusColor.value = '#58a6ff'
-    
-    // Resume task
     socket.emit('user_input', { prompt })
   } else {
-    // New task
     logs.value = []
     isWorking.value = true
     taskStatusText.value = 'Processing...'
     taskStatusColor.value = '#58a6ff'
-    
     socket.emit('start_task', { prompt })
   }
 }
@@ -114,104 +129,75 @@ const submitTask = () => {
 const endTask = (isError) => {
   isWorking.value = false
   isWaitingForInput.value = false
-  taskStatusText.value = isError ? 'Error' : 'Idle'
-  taskStatusColor.value = isError ? '#ff7b72' : '#8b949e'
+  taskStatusText.value = isError ? 'Error' : 'Online'
+  taskStatusColor.value = isError ? '#ff7b72' : '#3fb950'
 }
 </script>
 
 <template>
   <div class="app-container">
     <header>
-      <h1>Nexus OS</h1>
-      <div class="status">
-        <span :class="['status-dot', { active: true }]"></span> System Online
+      <div class="brand">
+        <h1>Nexus OS</h1>
+        <div class="status">
+          <span class="status-dot" :style="{ backgroundColor: taskStatusColor, boxShadow: `0 0 8px ${taskStatusColor}` }"></span> 
+          {{ taskStatusText }}
+        </div>
       </div>
+      <button v-if="generatedOutputs.length > 0" class="icon-btn" @click="showOutputs = !showOutputs">
+        📂 Files ({{ generatedOutputs.length }})
+      </button>
     </header>
 
-    <div class="workspace">
-      <!-- Logs Panel -->
-      <div class="panel logs-panel">
-        <div class="panel-header">
-          AGENTIC EXECUTION LOGS
-          <span class="task-status" :style="{ color: taskStatusColor }">{{ taskStatusText }}</span>
-        </div>
-        <div class="log-container" ref="logContainerRef">
-          <div v-if="logs.length === 0" class="empty-state">
-            Nexus OS initialized. Awaiting commands.
-          </div>
-          <div v-for="(log, idx) in logs" :key="idx" class="log-entry">
-            <template v-if="log.type === 'start'">
-              <span class="log-start">⚡ {{ log.message }}</span>
-            </template>
-            <template v-else-if="log.type === 'step'">
-              <div class="log-step">{{ log.message }}</div>
-            </template>
-            <template v-else-if="log.type === 'thought'">
-              <span class="tag tag-thought">THOUGHT</span>
-              <span class="log-thought">{{ log.message }}</span>
-            </template>
-            <template v-else-if="log.type === 'action'">
-              <span class="tag tag-action">TOOL CALL</span>
-              <span class="log-action">{{ log.name }}</span>
-              <div class="log-args">Args: {{ JSON.stringify(log.args) }}</div>
-            </template>
-            <template v-else-if="log.type === 'result'">
-              <span class="tag tag-result">RESULT</span>
-              <div class="log-result">{{ log.message }}</div>
-            </template>
-            <template v-else-if="log.type === 'error'">
-              <span class="log-error">❌ {{ log.message }}</span>
-            </template>
-            <template v-else-if="log.type === 'complete'">
-              <div class="log-complete">✓ {{ log.message }}</div>
-            </template>
-            <template v-else-if="log.type === 'input_requested'">
-              <div class="log-input-req">⚠️ {{ log.message }}</div>
-            </template>
-            <template v-else>
-              {{ log.message || JSON.stringify(log) }}
-            </template>
-          </div>
-        </div>
+    <!-- Overlay for Files -->
+    <div v-if="showOutputs" class="outputs-overlay">
+      <div class="outputs-header">
+        <h3>Generated Files</h3>
+        <button class="close-btn" @click="showOutputs = false">✕</button>
       </div>
-
-      <!-- Right Column: Outputs and Chat -->
-      <div class="right-column">
-        <!-- Outputs Panel -->
-        <div v-if="generatedOutputs.length > 0" class="panel outputs-panel">
-          <div class="panel-header">TASK OUTPUTS</div>
-          <div class="outputs-list">
-            <a v-for="file in generatedOutputs" :key="file.name" :href="file.url" target="_blank" class="output-item">
-              📄 {{ file.name }}
-            </a>
-          </div>
-        </div>
-
-        <!-- Chat Panel -->
-        <div class="panel chat-panel">
-          <div class="panel-header">USER INTERFACE</div>
-          <div class="chat-history" ref="chatContainer">
-            <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-msg', msg.sender]">
-              <span v-html="formatMessage(msg.text)"></span>
-            </div>
-          </div>
-
-          <div v-show="isWorking" class="typing-indicator">Nexus OS is working...</div>
-
-          <div class="input-area">
-            <div :class="['input-container', { focus: true }]">
-              <textarea 
-                v-model="promptInput" 
-                @keydown.enter.prevent="submitTask"
-                :placeholder="isWaitingForInput ? 'Reply to Nexus OS...' : 'Give me a task... (Press Enter to send)'"
-                :disabled="isWorking"
-              ></textarea>
-              <button @click="submitTask" :disabled="isWorking || !promptInput.trim()">SEND</button>
-            </div>
-          </div>
-        </div>
+      <div class="outputs-list">
+        <a v-for="file in generatedOutputs" :key="file.name" :href="file.url" target="_blank" class="output-item" download>
+          📄 {{ file.name }}
+        </a>
       </div>
     </div>
+
+    <!-- Main Chat Area -->
+    <main class="chat-history" ref="chatContainer" @click="showOutputs = false">
+      <div class="chat-wrapper">
+        <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-bubble-container', msg.sender]">
+          <div v-if="msg.sender.startsWith('nexus')" class="avatar nexus-avatar">N</div>
+          <div :class="['chat-bubble', msg.sender]">
+            <span v-html="formatMessage(msg.text)"></span>
+          </div>
+          <div v-if="msg.sender === 'user'" class="avatar user-avatar">U</div>
+        </div>
+        <div v-show="isWorking" class="chat-bubble-container nexus_thought">
+          <div class="avatar nexus-avatar">N</div>
+          <div class="chat-bubble nexus_thought typing-indicator">
+            Thinking<span>.</span><span>.</span><span>.</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Input Area -->
+    <footer class="input-area">
+      <div class="input-container">
+        <textarea 
+          v-model="promptInput" 
+          @keydown.enter.prevent="submitTask"
+          :placeholder="isWaitingForInput ? 'Provide the requested info...' : 'Message Nexus OS...'"
+          :disabled="isWorking"
+          rows="1"
+        ></textarea>
+        <button @click="submitTask" :disabled="isWorking || !promptInput.trim()" class="send-btn">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+          </svg>
+        </button>
+      </div>
+    </footer>
   </div>
 </template>
 
@@ -219,43 +205,39 @@ const endTask = (isError) => {
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap');
 
 :root {
-  --bg-color: #0d1117;
-  --panel-bg: rgba(22, 27, 34, 0.7);
+  --bg-color: #0b0f19;
+  --panel-bg: rgba(22, 27, 34, 0.8);
   --border-color: rgba(255, 255, 255, 0.1);
-  --text-main: #c9d1d9;
-  --text-muted: #8b949e;
+  --text-main: #e2e8f0;
+  --text-muted: #94a3b8;
   --accent-primary: #58a6ff;
-  --accent-secondary: #ff7b72;
-  --accent-success: #3fb950;
-  --accent-warning: #d29922;
-  --input-bg: #010409;
+  --user-bg: #1e3a8a;
+  --nexus-bg: #1e293b;
+  --input-bg: #0f172a;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
   font-family: 'Inter', sans-serif;
   background-color: var(--bg-color);
   color: var(--text-main);
-  background-image: radial-gradient(circle at top right, rgba(88, 166, 255, 0.05), transparent 40%),
-                    radial-gradient(circle at bottom left, rgba(163, 113, 247, 0.05), transparent 40%);
+  overscroll-behavior-y: none;
 }
 
 .app-container {
   height: 100vh;
+  height: 100dvh; /* For mobile browsers */
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  position: relative;
 }
 
+/* Header */
 header {
-  padding: 1rem 2rem;
+  padding: 1rem;
   background: var(--panel-bg);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
@@ -263,271 +245,192 @@ header {
   z-index: 10;
 }
 
-header h1 {
+.brand h1 {
   font-family: 'Outfit', sans-serif;
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   background: linear-gradient(90deg, #58a6ff, #a371f7);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .status {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   display: flex;
   align-items: center;
+  margin-top: 4px;
 }
 
 .status-dot {
-  height: 10px;
-  width: 10px;
-  background-color: var(--accent-success);
+  height: 8px; width: 8px;
   border-radius: 50%;
-  margin-right: 8px;
-  box-shadow: 0 0 8px var(--accent-success);
+  margin-right: 6px;
+  transition: background-color 0.3s;
 }
 
-.workspace {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  padding: 1.5rem;
-  gap: 1.5rem;
-}
-
-.panel {
-  background: var(--panel-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
-}
-
-.panel-header {
-  padding: 0.8rem 1rem;
-  border-bottom: 1px solid var(--border-color);
+.icon-btn {
+  background: rgba(88, 166, 255, 0.15);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  color: var(--accent-primary);
+  padding: 0.5rem 0.8rem;
+  border-radius: 20px;
   font-size: 0.85rem;
   font-weight: 600;
-  color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.2);
-  display: flex;
-  justify-content: space-between;
-  letter-spacing: 0.5px;
+  cursor: pointer;
 }
 
-.logs-panel {
-  flex: 1.5;
-}
-
-.log-container {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  scroll-behavior: smooth;
-}
-
-.empty-state {
-  color: var(--text-muted);
-  text-align: center;
-  margin-top: 2rem;
-  font-style: italic;
-}
-
-.log-entry {
-  margin-bottom: 0.8rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
-  animation: fadeIn 0.3s ease;
-}
-
-.log-entry:last-child {
-  border-bottom: none;
-}
-
-.tag {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  margin-right: 8px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.tag-thought { background: rgba(163, 113, 247, 0.2); color: #a371f7; }
-.tag-action { background: rgba(210, 153, 34, 0.2); color: var(--accent-warning); }
-.tag-result { background: rgba(201, 209, 217, 0.1); }
-
-.log-start { color: var(--accent-primary); font-weight: bold; }
-.log-step { color: var(--text-muted); margin-top: 1rem; }
-.log-thought { color: #a371f7; }
-.log-action { color: var(--accent-warning); font-weight: 500;}
-.log-args { color: #8b949e; font-size: 0.8rem; margin-top: 4px; }
-.log-result { color: var(--text-main); padding-left: 1rem; border-left: 2px solid var(--border-color); margin-top: 5px; white-space: pre-wrap; }
-.log-error { color: var(--accent-secondary); font-weight: bold; }
-.log-complete { color: var(--accent-success); font-weight: bold; margin-top: 1rem; }
-.log-input-req { color: var(--accent-warning); font-weight: bold; margin-top: 1rem; }
-
-.right-column {
-  flex: 1;
+/* Outputs Overlay */
+.outputs-overlay {
+  position: absolute;
+  top: 70px; right: 10px;
+  width: 300px; max-width: 90vw;
+  background: var(--panel-bg);
+  backdrop-filter: blur(15px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
-  max-width: 450px;
+  max-height: 50vh;
 }
 
-.outputs-panel {
-  max-height: 200px;
+.outputs-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
+
+.close-btn { background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; }
 
 .outputs-list {
   padding: 1rem;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  display: flex; flexDirection: column; gap: 0.5rem;
 }
 
 .output-item {
-  color: var(--accent-primary);
+  color: var(--text-main);
   text-decoration: none;
-  padding: 0.5rem;
-  background: rgba(255,255,255,0.03);
-  border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.05);
-  transition: all 0.2s;
+  padding: 0.8rem;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
   font-size: 0.9rem;
+  display: flex; align-items: center;
 }
 
-.output-item:hover {
-  background: rgba(88, 166, 255, 0.1);
-  border-color: rgba(88, 166, 255, 0.3);
-}
-
-.chat-panel {
-  flex: 1;
-}
-
+/* Chat Area */
 .chat-history {
   flex: 1;
   overflow-y: auto;
-  padding: 1.5rem;
+  padding: 1.5rem 1rem;
+  scroll-behavior: smooth;
+  display: flex;
+  justify-content: center;
+}
+
+.chat-wrapper {
+  width: 100%;
+  max-width: 800px;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  scroll-behavior: smooth;
+  gap: 1.2rem;
 }
 
-.chat-msg {
+.chat-bubble-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.chat-bubble-container.user { justify-content: flex-end; }
+.chat-bubble-container.nexus, .chat-bubble-container.nexus_thought, .chat-bubble-container.nexus_warning, .chat-bubble-container.nexus_error { justify-content: flex-start; }
+
+.avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: bold; flex-shrink: 0;
+}
+.nexus-avatar { background: linear-gradient(135deg, #1e3a8a, #a371f7); color: white; }
+.user-avatar { background: #334155; color: white; }
+
+.chat-bubble {
   max-width: 85%;
-  padding: 0.8rem 1rem;
-  border-radius: 12px;
-  line-height: 1.5;
+  padding: 0.8rem 1.2rem;
+  border-radius: 18px;
   font-size: 0.95rem;
-  animation: fadeIn 0.3s ease;
+  line-height: 1.5;
+  word-wrap: break-word;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.chat-msg.user {
-  align-self: flex-end;
-  background: var(--input-bg);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  border-bottom-right-radius: 2px;
-}
+.chat-bubble.user { background: var(--user-bg); border-bottom-right-radius: 4px; }
+.chat-bubble.nexus { background: var(--nexus-bg); border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.05); }
+.chat-bubble.nexus_thought { background: transparent; color: var(--text-muted); font-size: 0.85rem; padding: 0.5rem 0; border: none; }
+.chat-bubble.nexus_warning { background: rgba(210, 153, 34, 0.15); border: 1px solid #d29922; color: #ebd197; border-bottom-left-radius: 4px; }
+.chat-bubble.nexus_error { background: rgba(255, 123, 114, 0.15); border: 1px solid #ff7b72; color: #ff7b72; border-bottom-left-radius: 4px; }
 
-.chat-msg.nexus {
-  align-self: flex-start;
-  background: rgba(88, 166, 255, 0.1);
-  border: 1px solid rgba(88, 166, 255, 0.2);
-  color: #c9d1d9;
-  border-bottom-left-radius: 2px;
-}
+.tool-call { color: #a371f7; font-family: monospace; font-size: 0.8rem; }
+.chat-link { color: var(--accent-primary); text-decoration: underline; }
 
-.chat-link {
-  color: var(--accent-primary);
-  font-weight: 500;
-  text-decoration: underline;
-}
-
+/* Input Area */
 .input-area {
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.2);
-  border-top: 1px solid var(--border-color);
+  background: var(--bg-color);
+  display: flex;
+  justify-content: center;
 }
 
 .input-container {
+  width: 100%;
+  max-width: 800px;
   display: flex;
   background: var(--input-bg);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: 24px;
+  padding: 0.5rem 1rem;
+  align-items: center;
   transition: border-color 0.2s;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 
-.input-container:focus-within {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 1px var(--accent-primary);
-}
+.input-container:focus-within { border-color: var(--accent-primary); }
 
 textarea {
   flex: 1;
   background: transparent;
   border: none;
-  padding: 1rem;
   color: var(--text-main);
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: 1rem;
   resize: none;
-  height: 60px;
+  height: 40px;
+  line-height: 40px;
   outline: none;
 }
 
-textarea:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-button {
-  background: rgba(255, 255, 255, 0.05);
+.send-btn {
+  background: var(--accent-primary);
   border: none;
-  border-left: 1px solid var(--border-color);
-  padding: 0 1.5rem;
-  color: var(--accent-primary);
-  font-weight: 600;
+  border-radius: 50%;
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  color: white;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: transform 0.2s;
 }
 
-button:hover:not(:disabled) {
-  background: rgba(88, 166, 255, 0.15);
-}
+.send-btn:hover:not(:disabled) { transform: scale(1.05); }
+.send-btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
 
-button:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
-}
+.typing-indicator span { animation: blink 1.4s infinite both; }
+.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
 
-.typing-indicator {
-  padding: 0.5rem 1.5rem;
-  color: var(--accent-primary);
-  font-size: 0.85rem;
-  font-style: italic;
-  animation: pulse 1.5s infinite;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes pulse {
-  0% { opacity: 0.6; }
-  50% { opacity: 1; }
-  100% { opacity: 0.6; }
-}
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
 </style>

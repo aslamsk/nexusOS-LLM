@@ -13,6 +13,11 @@ app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 // Expose the outputs directory so users can download generated files
 app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
 
+// Explicit wildcard route for SPA client-side routing and fallback
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
+});
+
 io.on('connection', (socket) => {
     console.log('User connected to Web UI');
 
