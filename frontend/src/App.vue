@@ -98,8 +98,27 @@ const addChatMessage = (text, sender) => {
 
 const formatMessage = (text) => {
   if (!text) return ''
-  // Format markdown links securely
-  let formatted = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="chat-link">$1</a>')
+  
+  let formatted = text
+  
+  // 1. Handle Images: ![alt](url) or [alt](url) where url ends in image extension
+  // Match standard markdown images and standard links that look like images
+  const imageRegex = /\[([^\]]+)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)/gi
+  formatted = formatted.replace(imageRegex, (match, alt, url) => {
+    return `<div class="chat-image-container">
+              <img src="${url}" alt="${alt}" class="chat-image" onclick="window.open('${url}', '_blank')" />
+              <a href="${url}" download class="download-overlay">Download Image</a>
+            </div>`
+  })
+
+  // 2. Handle other files (Standard links)
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g
+  formatted = formatted.replace(linkRegex, (match, alt, url) => {
+    // If it was already replaced by the image regex, skip it (simple check: does it start with <div)
+    if (url.match(/\.(?:png|jpg|jpeg|webp|gif)$/i)) return match
+    return `<a href="${url}" target="_blank" class="chat-link" download="${alt}">📄 ${alt}</a>`
+  })
+
   formatted = formatted.replace(/\n/g, '<br>')
   return formatted
 }
@@ -375,7 +394,49 @@ header {
 .chat-bubble.nexus_error { background: rgba(255, 123, 114, 0.15); border: 1px solid #ff7b72; color: #ff7b72; border-bottom-left-radius: 4px; }
 
 .tool-call { color: #a371f7; font-family: monospace; font-size: 0.8rem; }
-.chat-link { color: var(--accent-primary); text-decoration: underline; }
+.chat-link { 
+  color: var(--accent-primary); 
+  text-decoration: none; 
+  background: rgba(88, 166, 255, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  display: inline-block;
+  margin-top: 5px;
+}
+
+.chat-image-container {
+  margin-top: 10px;
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background: #000;
+  max-width: 100%;
+}
+
+.chat-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.chat-image:hover { opacity: 0.9; }
+
+.download-overlay {
+  position: absolute;
+  bottom: 8px; right: 8px;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  text-decoration: none;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255,255,255,0.2);
+}
 
 /* Input Area */
 .input-area {

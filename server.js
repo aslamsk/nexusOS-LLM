@@ -10,8 +10,18 @@ const io = new Server(server);
 
 // Serve static files from the build directory
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
+
 // Expose the outputs directory so users can download generated files
-app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
+app.use('/outputs', (req, res, next) => {
+    console.log(`[Static] Output requested: ${req.url}`);
+    // Force download if requested via query param or if it's a non-previewable file
+    if (req.query.download) {
+        res.setHeader('Content-Disposition', 'attachment');
+    }
+    next();
+}, express.static(path.join(__dirname, 'outputs'), {
+    maxAge: '1d'
+}));
 
 // Explicit wildcard route for SPA client-side routing and fallback
 // Use a regex to bypass path-to-regexp syntax issues in Express 5
