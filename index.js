@@ -4,6 +4,9 @@ const FileSystemTool = require('./tools/fileSystem');
 const TerminalTool = require('./tools/terminal');
 const BrowserTool = require('./tools/browser');
 const ImageGenTool = require('./tools/imageGen');
+const N8nDiscoverTool = require('./tools/n8nDiscover');
+const MetaAdsTool = require('./tools/metaAds');
+const VideoGenTool = require('./tools/videoGen');
 const LLMService = require('./core/llm');
 
 /**
@@ -20,10 +23,13 @@ class NexusOrchestrator {
             listDir: FileSystemTool.listDir,
             runCommand: TerminalTool.runCommand,
             browserAction: BrowserTool.executeAction.bind(BrowserTool),
-            generateImage: ImageGenTool.generateImage.bind(ImageGenTool)
+            generateImage: ImageGenTool.generateImage.bind(ImageGenTool),
+            n8nSearch: N8nDiscoverTool.searchWorkflows.bind(N8nDiscoverTool),
+            getN8nWorkflow: N8nDiscoverTool.getWorkflow.bind(N8nDiscoverTool),
+            metaAds: MetaAdsTool
         };
         this.llmService = new LLMService();
-        this.maxSteps = 15;
+        this.maxSteps = 40;
         this.taskDir = taskDir;
         // Callback to emit events to the frontend
         this.onUpdate = onUpdate || ((event) => console.log(`[${event.type.toUpperCase()}]`, event.message || event.args || ''));
@@ -126,6 +132,36 @@ class NexusOrchestrator {
                 case 'runCommand': return await this.tools.runCommand(args.command, args.cwd);
                 case 'browserAction': return await this.tools.browserAction(args);
                 case 'generateImage': return await this.tools.generateImage(args.prompt, args.savePath);
+                case 'n8nSearch': return await this.tools.n8nSearch(args.query);
+                case 'getN8nWorkflow': return await this.tools.getN8nWorkflow(args.path);
+                case 'metaCreateCampaign': return await this.tools.metaAds.createCampaign(args.name, args.objective);
+                case 'metaCreateAdSet': 
+                    return await this.tools.metaAds.createAdSet(
+                        args.campaignId, 
+                        args.name, 
+                        args.budget || args.dailyBudget || 1000, 
+                        args.targeting
+                    );
+                case 'metaCreateCreative': 
+                    return await this.tools.metaAds.createAdCreative(
+                        args.name, 
+                        args.title, 
+                        args.body, 
+                        args.imageHash || args.imageUrl, 
+                        args.pageId,
+                        args.cta || 'SHOP_NOW'
+                    );
+                case 'metaCreateAd': return await this.tools.metaAds.createAd(args.adSetId, args.creativeId, args.name);
+                case 'metaPublishOrganicPost': return await this.tools.metaAds.publishPagePost(args.pageId, args.message, args.link);
+                case 'metaPublishOrganicPhoto': return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath);
+                case 'metaPublishOrganicVideo': return await this.tools.metaAds.publishPageVideo(args.pageId, args.title, args.description, args.videoPath);
+                case 'metaPublishOrganicReel': return await this.tools.metaAds.publishPageReel(args.pageId, args.description, args.videoPath);
+                case 'metaGetPageInsights': return await this.tools.metaAds.getPageInsights(args.pageId);
+                case 'metaGetAccountInfo': return await this.tools.metaAds.getAccountInfo();
+                case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
+                case 'generateVideo': return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+                case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
+                case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);
                 default: return `Error: Tool ${name} not found.`;
             }
         } catch (error) {
