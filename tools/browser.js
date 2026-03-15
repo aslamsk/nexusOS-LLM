@@ -27,8 +27,9 @@ class BrowserTool {
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
                     '--disable-dev-shm-usage',
-                    '--disable-gpu'
-                ] : []
+                    '--disable-gpu',
+                    '--ignore-certificate-errors'
+                ] : ['--ignore-certificate-errors']
             });
             this.page = await this.browser.newPage();
             await this.page.setViewport({ width: 1280, height: 800 });
