@@ -11,14 +11,26 @@ class BrowserTool {
     }
 
     async init() {
+        // Check if browser is disconnected
+        if (this.browser && !this.browser.isConnected()) {
+            console.log("[Browser] Detected disconnected browser, cleaning up...");
+            this.browser = null;
+            this.page = null;
+        }
+
         if (!this.browser) {
-            const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE; // Detect Cloud Run
+            const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
+            console.log(`[Browser] Launching browser (prod=${isProd})...`);
             this.browser = await puppeteer.launch({
                 headless: isProd ? 'new' : false,
-                args: isProd ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
+                args: isProd ? [
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ] : []
             });
             this.page = await this.browser.newPage();
-            // Set a realistic viewport
             await this.page.setViewport({ width: 1280, height: 800 });
         } else if (!this.page || this.page.isClosed()) {
             this.page = await this.browser.newPage();
