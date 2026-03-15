@@ -17,11 +17,14 @@ WORKDIR /usr/src/app
 # Copy package.json and package-lock.json
 COPY package*.json ./
 
-# Install dependencies
+# Install backend dependencies
 RUN npm install
 
 # Copy application files
 COPY . .
+
+# Install frontend dependencies and build
+RUN cd frontend && npm install && npm run build
 
 # Expose port
 EXPOSE 3000
