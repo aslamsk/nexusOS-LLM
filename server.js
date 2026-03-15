@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
 app.use('/outputs', express.static(path.join(__dirname, 'outputs')));
 
 // Explicit wildcard route for SPA client-side routing and fallback
-app.get('*', (req, res) => {
+app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 
