@@ -29,7 +29,7 @@ class MetaAdsTool {
         }
 
         if (!this.accessToken || !this.adAccountId) {
-            return { error: "Meta API credentials missing. Please set META_ACCESS_TOKEN and META_AD_ACCOUNT_ID in .env" };
+            return { error: "Meta API credentials missing. You MUST call askUserForInput to ask the user to provide their META_ACCESS_TOKEN and META_AD_ACCOUNT_ID" };
         }
 
         const url = `https://graph.facebook.com/${this.apiVersion}/${endpoint}`;
@@ -144,6 +144,9 @@ class MetaAdsTool {
         // Dynamic reload
         require('dotenv').config();
         const token = process.env.META_ACCESS_TOKEN;
+        if (!token) {
+            return { error: "Meta API token missing. You MUST call askUserForInput to ask the user to provide their META_ACCESS_TOKEN." };
+        }
 
         // Use spawnSync for robust multipart/form-data upload of local file
         const { spawnSync } = require('child_process');
@@ -190,7 +193,7 @@ class MetaAdsTool {
         }
 
         if (!activePageId) {
-            return { error: "Missing Page ID. Please set META_PAGE_ID in .env or provide it in the tool call." };
+            return { error: "Missing Page ID. You MUST call askUserForInput to ask the user to provide their META_PAGE_ID." };
         }
 
         return await this._request('POST', endpoint, {
