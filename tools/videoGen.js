@@ -19,7 +19,7 @@ class VideoGenTool {
         const args = [
             '-loop', '1',
             '-i', imagePath,
-            '-vf', "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black",
+            '-vf', "scale=1920:1920,zoompan=z='min(zoom+0.0015,1.5)':d=300:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920,setsar=1",
             '-c:v', 'libx264',
             '-t', '10',
             '-r', '30',

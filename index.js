@@ -178,12 +178,14 @@ class NexusOrchestrator {
                         // Attempt generative video, fallback to free Gemini-based version if no token
                         if (process.env.REPLICATE_API_TOKEN) {
                             const result = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                            if (!result.error) return result;
+                            if (!result.error) return `SUCCESS: Generative Video created at ${args.outputPath}`;
                             console.warn("[Orchestrator] Replicate failed, falling back to Gemini+FFmpeg:", result.error);
                         }
-                        return await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
+                        const freeResult = await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
+                        return freeResult.error ? `Error: ${freeResult.error}` : `SUCCESS: Free Video created at ${args.outputPath}`;
                     }
-                    return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+                    const localResult = await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+                    return localResult.error ? `Error: ${localResult.error}` : `SUCCESS: Video created at ${args.outputPath}`;
                 case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
                 case 'googleAdsListCampaigns': return await this.tools.googleAds.listCampaigns(args.customerId);
                 case 'googleAdsCreateCampaign': return await this.tools.googleAds.createCampaign(args.customerId, args.campaignData);
