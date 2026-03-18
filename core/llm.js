@@ -164,14 +164,15 @@ class LLMService {
             },
             {
                 name: "metaPublishOrganicVideo",
-                description: "Publish a free, organic video post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
+                description: "Publish a video post or Reel to a Facebook Page (Free).",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
-                        title: { type: "STRING", description: "Title of the video." },
-                        description: { type: "STRING", description: "Description for the video." },
-                        videoPath: { type: "STRING", description: "Absolute path to the local video file." }
+                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional: will use META_PAGE_ID from .env if omitted." },
+                        title: { type: "STRING" },
+                        description: { type: "STRING" },
+                        videoPath: { type: "STRING", description: "Absolute path to the video file." },
+                        isReel: { type: "BOOLEAN" }
                     },
                     required: ["title", "description", "videoPath"]
                 }
@@ -351,9 +352,9 @@ class LLMService {
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        customerId: { type: "STRING", description: "The Google Ads Customer ID (without dashes)." }
+                        customerId: { type: "STRING", description: "The Google Ads Customer ID. Optional: will use GOOGLE_ADS_CUSTOMER_ID from .env if omitted." }
                     },
-                    required: ["customerId"]
+                    required: []
                 }
             },
             {
@@ -362,7 +363,7 @@ class LLMService {
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        customerId: { type: "STRING", description: "The Customer ID." },
+                        customerId: { type: "STRING", description: "The Customer ID. Optional: will use GOOGLE_ADS_CUSTOMER_ID from .env if omitted." },
                         campaignData: {
                             type: "OBJECT",
                             properties: {
@@ -372,7 +373,7 @@ class LLMService {
                             required: ["name", "budget_resource_name"]
                         }
                     },
-                    required: ["customerId", "campaignData"]
+                    required: ["campaignData"]
                 }
             },
             {
@@ -381,10 +382,10 @@ class LLMService {
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        urn: { type: "STRING", description: "The Organization URN (numbers only part)." },
+                        urn: { type: "STRING", description: "The Organization URN. Optional: will use LINKEDIN_ORG_URN from .env if omitted." },
                         text: { type: "STRING", description: "The post content." }
                     },
-                    required: ["urn", "text"]
+                    required: ["text"]
                 }
             },
             {

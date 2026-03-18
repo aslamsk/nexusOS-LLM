@@ -90,7 +90,49 @@ class VideoGenTool {
     }
 
     /**
-     * AI GENERATIVE (FREE): Generate video from prompt using Gemini (Imagen) + Local FFmpeg.
+     * GOOGLE VEO / GEMINI VIDEO: High-fidelity generative video (Ad Quality).
+     */
+    async generateWithVeo(prompt, outputPath) {
+        console.log(`[VideoGen] Initiating Google Veo generation: "${prompt}"`);
+        try {
+            const { GoogleGenAI } = require('@google/genai');
+            const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            
+            // In 2026, Veo 3.1 is the latest cinematic model
+            const model = genAI.getGenerativeModel({ model: "veo-3.1-generate-001" });
+
+            const result = await model.generateContent({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: {
+                    videoGenerationConfig: {
+                        durationSeconds: 10,
+                        aspectRatio: "9:16", // Commercial/Reel format
+                        fps: 30
+                    }
+                }
+            });
+
+            const videoPart = result.response.candidates[0].content.parts.find(p => p.videoMetadata);
+            if (!videoPart) throw new Error("Veo failed to return video data.");
+
+            // Download the generated video bytes
+            const videoBytes = videoPart.inlineData.data;
+            const fs = require('fs');
+            const path = require('path');
+            
+            const dir = path.dirname(outputPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            fs.writeFileSync(outputPath, Buffer.from(videoBytes, 'base64'));
+            return { success: true, path: outputPath };
+        } catch (e) {
+            console.error("[VideoGen Veo Error]", e);
+            return { error: "Google Veo generation failed", details: e.message };
+        }
+    }
+
+    /**
+     * AI GENERATIVE (FREE FALLBACK): Generate video from prompt using Gemini (Imagen) + Local FFmpeg.
      */
     async generateFromPromptFree(prompt, outputPath) {
         console.log(`[VideoGen] Using FREE Gemini+FFmpeg fallback for: "${prompt}"`);

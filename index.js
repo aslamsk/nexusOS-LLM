@@ -175,12 +175,17 @@ class NexusOrchestrator {
                 case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
                 case 'generateVideo': 
                     if (args.prompt) {
-                        // Attempt generative video, fallback to free Gemini-based version if no token
+                        // 1. Attempt High-Fidelity Google Veo (Ad Quality)
+                        const veoResult = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath);
+                        if (!veoResult.error) return `SUCCESS: Ad-quality Veo created at ${args.outputPath}`;
+                        
+                        // 2. Fallback to Replicate if Veo fails and token exists
                         if (process.env.REPLICATE_API_TOKEN) {
-                            const result = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                            if (!result.error) return `SUCCESS: Generative Video created at ${args.outputPath}`;
-                            console.warn("[Orchestrator] Replicate failed, falling back to Gemini+FFmpeg:", result.error);
+                            const repResult = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                            if (!repResult.error) return `SUCCESS: Generative Video created at ${args.outputPath}`;
                         }
+
+                        // 3. Last fallback: Gemini Image + Manual FFmpeg (Free Mode)
                         const freeResult = await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
                         return freeResult.error ? `Error: ${freeResult.error}` : `SUCCESS: Free Video created at ${args.outputPath}`;
                     }
