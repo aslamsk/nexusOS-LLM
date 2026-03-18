@@ -10,7 +10,7 @@ class BrowserTool {
         this.page = null;
     }
 
-    async init() {
+    async init(isMobile = false, mobileDevice = 'ios') {
         // Check if browser is disconnected
         if (this.browser && !this.browser.isConnected()) {
             console.log("[Browser] Detected disconnected browser, cleaning up...");
@@ -20,7 +20,7 @@ class BrowserTool {
 
         if (!this.browser) {
             const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
-            console.log(`[Browser] Launching browser (prod=${isProd})...`);
+            console.log(`[Browser] Launching browser (prod=${isProd}, mobile=${isMobile})...`);
             const commonArgs = [
                 '--ignore-certificate-errors',
                 '--ignore-urlfetcher-cert-requests',
@@ -28,7 +28,7 @@ class BrowserTool {
             ];
 
             this.browser = await puppeteer.launch({
-                headless: isProd ? 'new' : false,
+                headless: 'new', // Use new headless mode by default for stability
                 ignoreHTTPSErrors: true,
                 args: isProd ? [
                     '--no-sandbox', 
@@ -39,9 +39,25 @@ class BrowserTool {
                 ] : commonArgs
             });
             this.page = await this.browser.newPage();
-            await this.page.setViewport({ width: 1280, height: 800 });
+            await this._setupContext(isMobile, mobileDevice);
         } else if (!this.page || this.page.isClosed()) {
             this.page = await this.browser.newPage();
+            await this._setupContext(isMobile, mobileDevice);
+        }
+    }
+
+    async _setupContext(isMobile, mobileDevice = 'ios') {
+        if (isMobile) {
+            const deviceName = mobileDevice === 'android' ? 'Pixel 7' : 'iPhone 13';
+            console.log(`[Browser] Emulating ${deviceName}...`);
+            const device = puppeteer.KnownDevices[deviceName];
+            if (device) {
+                await this.page.emulate(device);
+            } else {
+                // Fallback to basic mobile viewport if device not found
+                await this.page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+            }
+        } else {
             await this.page.setViewport({ width: 1280, height: 800 });
         }
     }
@@ -58,7 +74,7 @@ class BrowserTool {
      * Dispatcher for browser actions requested by the LLM
      */
     async executeAction(args) {
-        await this.init();
+        await this.init(args.isMobile, args.mobileDevice);
 
         const action = args.action;
         try {
