@@ -6,6 +6,8 @@ const BrowserTool = require('./tools/browser');
 const ImageGenTool = require('./tools/imageGen');
 const N8nDiscoverTool = require('./tools/n8nDiscover');
 const MetaAdsTool = require('./tools/metaAds');
+const GoogleAdsTool = require('./tools/googleAds');
+const LinkedInAdsTool = require('./tools/linkedinAds');
 const VideoGenTool = require('./tools/videoGen');
 const BackgroundRemovalTool = require('./tools/backgroundRemoval');
 const LLMService = require('./core/llm');
@@ -30,7 +32,9 @@ class NexusOrchestrator {
             n8nSearch: N8nDiscoverTool.searchWorkflows.bind(N8nDiscoverTool),
             getN8nWorkflow: N8nDiscoverTool.getWorkflow.bind(N8nDiscoverTool),
             removeBg: BackgroundRemovalTool.removeBg.bind(BackgroundRemovalTool),
-            metaAds: MetaAdsTool
+            metaAds: MetaAdsTool,
+            googleAds: GoogleAdsTool,
+            linkedinAds: LinkedInAdsTool
         };
         this.llmService = new LLMService();
         this.maxSteps = 40;
@@ -167,8 +171,15 @@ class NexusOrchestrator {
                 case 'metaGetPageInsights': return await this.tools.metaAds.getPageInsights(args.pageId);
                 case 'metaGetAccountInfo': return await this.tools.metaAds.getAccountInfo();
                 case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
-                case 'generateVideo': return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+                case 'generateVideo': 
+                    if (args.prompt) {
+                        return await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                    }
+                    return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
                 case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
+                case 'googleAdsListCampaigns': return await this.tools.googleAds.listCampaigns(args.customerId);
+                case 'googleAdsCreateCampaign': return await this.tools.googleAds.createCampaign(args.customerId, args.campaignData);
+                case 'linkedinPublishPost': return await this.tools.linkedinAds.publishOrganicPost(args.urn, args.text);
                 case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
                 case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
                 case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);

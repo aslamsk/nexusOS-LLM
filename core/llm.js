@@ -240,14 +240,15 @@ class LLMService {
             },
             {
                 name: "generateVideo",
-                description: "Convert a static image into a 5-second video MP4 file suitable for Reels.",
+                description: "Generate a video. Can convert a static image to a 10s loop OR generate a completely new video from a text prompt (requires Replicate API).",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        imagePath: { type: "STRING", description: "Absolute path to the source image." },
+                        prompt: { type: "STRING", description: "Text description of the video to generate from scratch." },
+                        imagePath: { type: "STRING", description: "Absolute path to the source image (for image-to-video conversion)." },
                         outputPath: { type: "STRING", description: "Absolute path for the output .mp4 file." }
                     },
-                    required: ["imagePath", "outputPath"]
+                    required: ["outputPath"]
                 }
             },
             {
@@ -342,6 +343,48 @@ class LLMService {
                         outputPath: { type: "STRING", description: "Absolute path where the output image should be saved (should end in .png)." }
                     },
                     required: ["inputPath", "outputPath"]
+                }
+            },
+            {
+                name: "googleAdsListCampaigns",
+                description: "List enabled campaigns for a Google Ads account.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING", description: "The Google Ads Customer ID (without dashes)." }
+                    },
+                    required: ["customerId"]
+                }
+            },
+            {
+                name: "googleAdsCreateCampaign",
+                description: "Create a new Search campaign in Google Ads (status: PAUSED).",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING", description: "The Customer ID." },
+                        campaignData: {
+                            type: "OBJECT",
+                            properties: {
+                                name: { type: "STRING" },
+                                budget_resource_name: { type: "STRING", description: "Resource name of a pre-existing budget." }
+                            },
+                            required: ["name", "budget_resource_name"]
+                        }
+                    },
+                    required: ["customerId", "campaignData"]
+                }
+            },
+            {
+                name: "linkedinPublishPost",
+                description: "Publish an organic post to a LinkedIn Organization page.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        urn: { type: "STRING", description: "The Organization URN (numbers only part)." },
+                        text: { type: "STRING", description: "The post content." }
+                    },
+                    required: ["urn", "text"]
                 }
             }
         ];
