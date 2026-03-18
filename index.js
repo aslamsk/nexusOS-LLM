@@ -7,6 +7,7 @@ const ImageGenTool = require('./tools/imageGen');
 const N8nDiscoverTool = require('./tools/n8nDiscover');
 const MetaAdsTool = require('./tools/metaAds');
 const VideoGenTool = require('./tools/videoGen');
+const BackgroundRemovalTool = require('./tools/backgroundRemoval');
 const LLMService = require('./core/llm');
 
 /**
@@ -21,11 +22,14 @@ class NexusOrchestrator {
             readFile: FileSystemTool.readFile,
             writeFile: FileSystemTool.writeFile,
             listDir: FileSystemTool.listDir,
+            replaceFileContent: FileSystemTool.replaceFileContent,
+            multiReplaceFileContent: FileSystemTool.multiReplaceFileContent,
             runCommand: TerminalTool.runCommand,
             browserAction: BrowserTool.executeAction.bind(BrowserTool),
             generateImage: ImageGenTool.generateImage.bind(ImageGenTool),
             n8nSearch: N8nDiscoverTool.searchWorkflows.bind(N8nDiscoverTool),
             getN8nWorkflow: N8nDiscoverTool.getWorkflow.bind(N8nDiscoverTool),
+            removeBg: BackgroundRemovalTool.removeBg.bind(BackgroundRemovalTool),
             metaAds: MetaAdsTool
         };
         this.llmService = new LLMService();
@@ -129,6 +133,10 @@ class NexusOrchestrator {
                 case 'readFile': return await this.tools.readFile(args.absolutePath);
                 case 'writeFile': return await this.tools.writeFile(args.absolutePath, args.content);
                 case 'listDir': return await this.tools.listDir(args.absolutePath);
+                case 'replaceFileContent': 
+                    return await this.tools.replaceFileContent(args.absolutePath, args.startLine, args.endLine, args.targetContent, args.replacementContent);
+                case 'multiReplaceFileContent':
+                    return await this.tools.multiReplaceFileContent(args.absolutePath, args.chunks);
                 case 'runCommand': return await this.tools.runCommand(args.command, args.cwd);
                 case 'browserAction': return await this.tools.browserAction(args);
                 case 'generateImage': return await this.tools.generateImage(args.prompt, args.savePath);
@@ -160,6 +168,7 @@ class NexusOrchestrator {
                 case 'metaGetAccountInfo': return await this.tools.metaAds.getAccountInfo();
                 case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
                 case 'generateVideo': return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+                case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
                 case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
                 case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
                 case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);

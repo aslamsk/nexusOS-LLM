@@ -290,6 +290,57 @@ class LLMService {
                     type: "OBJECT",
                     properties: {}
                 }
+            },
+            {
+                name: "replaceFileContent",
+                description: "Surgically replace a specific line range in a file. Lines are 1-indexed.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        absolutePath: { type: "STRING", description: "Absolute path to the file." },
+                        startLine: { type: "NUMBER", description: "The starting line number (1-indexed)." },
+                        endLine: { type: "NUMBER", description: "The ending line number (1-indexed)." },
+                        targetContent: { type: "STRING", description: "The exact content currently at those lines (used for verification)." },
+                        replacementContent: { type: "STRING", description: "The new content to insert." }
+                    },
+                    required: ["absolutePath", "startLine", "endLine", "targetContent", "replacementContent"]
+                }
+            },
+            {
+                name: "multiReplaceFileContent",
+                description: "Perform multiple surgical replacements in a single file.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        absolutePath: { type: "STRING", description: "Absolute path to the file." },
+                        chunks: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    startLine: { type: "NUMBER" },
+                                    endLine: { type: "NUMBER" },
+                                    targetContent: { type: "STRING" },
+                                    replacementContent: { type: "STRING" }
+                                },
+                                required: ["startLine", "endLine", "targetContent", "replacementContent"]
+                            }
+                        }
+                    },
+                    required: ["absolutePath", "chunks"]
+                }
+            },
+            {
+                name: "removeBg",
+                description: "Remove the background from an image using AI.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        inputPath: { type: "STRING", description: "Absolute path to the source image file." },
+                        outputPath: { type: "STRING", description: "Absolute path where the output image should be saved (should end in .png)." }
+                    },
+                    required: ["inputPath", "outputPath"]
+                }
             }
         ];
     }

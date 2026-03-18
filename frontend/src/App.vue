@@ -19,6 +19,82 @@ const taskStatusText = ref('Idle')
 const taskStatusColor = ref('#8b949e')
 const generatedOutputs = ref([])
 const showOutputs = ref(false)
+const fileInput = ref(null)
+const isUploading = ref(false)
+const isDragging = ref(false)
+const showSplash = ref(true)
+
+onMounted(() => {
+  // Hide splash after 3 seconds
+  setTimeout(() => {
+    showSplash.value = false
+  }, 3000)
+})
+
+const triggerFileUpload = () => {
+  fileInput.value.click()
+}
+
+const handleFileUpload = async (eventOrFiles) => {
+  let files;
+  if (eventOrFiles instanceof DragEvent) {
+    files = eventOrFiles.dataTransfer.files;
+  } else if (eventOrFiles?.target?.files) {
+    files = eventOrFiles.target.files;
+  } else {
+    files = eventOrFiles; // direct file array
+  }
+  
+  const file = files[0]
+  if (!file) return
+
+  isUploading.value = true
+  const formData = new FormData()
+  formData.append('file', file)
+
+  try {
+    const response = await fetch('/upload', {
+      method: 'POST',
+      body: formData
+    })
+    
+    const text = await response.text()
+    let data;
+    try {
+      data = JSON.parse(text)
+    } catch (e) {
+      throw new Error(`Invalid server response (not JSON): ${text.substring(0, 100)}`)
+    }
+
+    if (response.ok) {
+      addChatMessage(`📎 File uploaded: **${data.originalName}**\nPath: \`${data.path}\` (You can now use this file in your mission instructions)`, 'user')
+      sendNotification('Upload Success', { body: `File ${data.originalName} is now available.` })
+    } else {
+      addChatMessage(`❌ Upload failed: ${data.error}`, 'nexus_error')
+    }
+  } catch (error) {
+    addChatMessage(`❌ Upload error: ${error.message}`, 'nexus_error')
+  } finally {
+    isUploading.value = false
+    if (eventOrFiles?.target) eventOrFiles.target.value = '' // Reset input
+  }
+}
+
+const onDragOver = (e) => {
+  e.preventDefault()
+  isDragging.value = true
+}
+
+const onDragLeave = (e) => {
+  e.preventDefault()
+  isDragging.value = false
+}
+
+const onDrop = (e) => {
+  e.preventDefault()
+  isDragging.value = false
+  handleFileUpload(e)
+}
 
 const chatContainer = ref(null)
 
@@ -154,9 +230,38 @@ const endTask = (isError) => {
 </script>
 
 <template>
-  <div class="app-container">
+  <div 
+    class="app-container"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <!-- Drag over overlay -->
+    <div v-if="isDragging" class="dropzone-overlay">
+      <div class="dropzone-content">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
+          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"></path>
+        </svg>
+        <p>Drop to upload to Nexus OS</p>
+      </div>
+    </div>
+
+    <!-- Animated Splash Screen -->
+    <transition name="fade">
+      <div v-if="showSplash" class="splash-screen">
+        <div class="splash-content">
+          <img src="/pwa-512x512.png" alt="Nexus OS Logo" class="splash-logo" />
+          <div class="splash-loader">
+            <div class="loader-bar"></div>
+          </div>
+          <p class="splash-text">Initializing Nexus Intelligence...</p>
+        </div>
+      </div>
+    </transition>
+
     <header>
       <div class="brand">
+        <img src="/pwa-192x192.png" alt="Logo" class="header-logo" />
         <h1>Nexus OS</h1>
         <div class="status">
           <span class="status-dot" :style="{ backgroundColor: taskStatusColor, boxShadow: `0 0 8px ${taskStatusColor}` }"></span> 
@@ -203,6 +308,23 @@ const endTask = (isError) => {
     <!-- Input Area -->
     <footer class="input-area">
       <div class="input-container">
+        <input 
+          type="file" 
+          ref="fileInput" 
+          style="display: none" 
+          @change="handleFileUpload"
+        />
+        <button 
+          class="upload-btn" 
+          @click="triggerFileUpload" 
+          :disabled="isWorking || isUploading"
+          title="Upload file"
+        >
+          <svg v-if="!isUploading" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M16.5 6c-2.48 0-4.5 2.02-4.5 4.5v7c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5v-7c0-.55-.45-1-1-1s-1 .45-1 1v7h-1.5v-7c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v7c0 2.21-1.79 4-4 4s-4-1.79-4-4v-7c0-3.31 2.69-6 6-6s6 2.69 6 6v10.5h-1.5V10.5c0-2.48-2.02-4.5-4.5-4.5z"></path>
+          </svg>
+          <div v-else class="upload-loader"></div>
+        </button>
         <textarea 
           v-model="promptInput" 
           @keydown.enter.prevent="submitTask"
@@ -252,7 +374,112 @@ body {
   position: relative;
 }
 
-/* Header */
+/* Splash Screen */
+.splash-screen {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg-color);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.splash-content {
+  text-align: center;
+}
+
+.splash-logo {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  margin-bottom: 2.5rem;
+  animation: logoPulse 2s infinite ease-in-out;
+  border-radius: 40px;
+}
+
+.splash-loader {
+  width: 240px;
+  height: 4px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 2px;
+  margin: 0 auto 1.5rem;
+  overflow: hidden;
+}
+
+.loader-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), #a371f7);
+  animation: loadProgress 2.5s ease-out forwards;
+}
+
+.splash-text {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+@keyframes logoPulse {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0px var(--accent-primary)); }
+  50% { transform: scale(1.05); filter: drop-shadow(0 0 30px rgba(88, 166, 255, 0.4)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 0px var(--accent-primary)); }
+}
+
+@keyframes loadProgress {
+  0% { width: 0; }
+  100% { width: 100%; }
+}
+
+.fade-leave-active { transition: opacity 0.8s ease; }
+.fade-leave-to { opacity: 0; }
+
+/* Dropzone Overlay */
+.dropzone-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(88, 166, 255, 0.1);
+  backdrop-filter: blur(8px);
+  border: 2px dashed var(--accent-primary);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.dropzone-content {
+  text-align: center;
+  color: var(--accent-primary);
+}
+
+.dropzone-content p {
+  margin-top: 1rem;
+  font-weight: 600;
+  font-size: 1.2rem;
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.brand { display: flex; align-items: center; }
+
+.header-logo {
+  height: 32px;
+  width: 32px;
+  margin-right: 12px;
+  border-radius: 8px;
+  animation: miniPulse 4s infinite ease-in-out;
+}
+
+@keyframes miniPulse {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.1); filter: brightness(1.2) drop-shadow(0 0 5px var(--accent-primary)); }
+}
+
+/* Status */
 header {
   padding: 1rem;
   background: var(--panel-bg);
@@ -487,6 +714,32 @@ textarea {
 
 .send-btn:hover:not(:disabled) { transform: scale(1.05); }
 .send-btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+.upload-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+}
+
+.upload-btn:hover:not(:disabled) { color: var(--accent-primary); }
+.upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.upload-loader {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .typing-indicator span { animation: blink 1.4s infinite both; }
 .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }

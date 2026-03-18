@@ -11,6 +11,10 @@ export default defineConfig({
       },
       '/outputs': {
         target: 'http://localhost:3000'
+      },
+      '/upload': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
       }
     }
   },
@@ -18,7 +22,7 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.png'],
       manifest: {
         name: 'Nexus OS',
         short_name: 'NexusOS',
@@ -30,12 +34,14 @@ export default defineConfig({
           {
             src: 'pwa-192x192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           },
           {
             src: 'pwa-512x512.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           }
         ]
       }
