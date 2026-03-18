@@ -68,36 +68,96 @@ app.use('/outputs', (req, res, next) => {
 
 // Explicit wildcard route for SPA client-side routing and fallback
 // Use a regex to bypass path-to-regexp syntax issues in Express 5
+app.get(/.*/, (req, res, next) => {
+    if (req.path === '/sessions') {
+        const files = fs.readdirSync(sessionsBaseDir);
+        const sessions = files.map(f => {
+            const content = JSON.parse(fs.readFileSync(path.join(sessionsBaseDir, f), 'utf8'));
+            return {
+                id: content.sessionId,
+                lastUpdated: content.lastUpdated,
+                preview: content.chatHistory?.[1]?.text?.substring(0, 50) || 'New Mission'
+            };
+        }).sort((a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated));
+        return res.send(sessions);
+    }
+    next();
+});
+
 app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
 
+const sessionsBaseDir = path.join(__dirname, 'sessions');
+if (!fs.existsSync(sessionsBaseDir)) fs.mkdirSync(sessionsBaseDir, { recursive: true });
+
 io.on('connection', (socket) => {
     console.log('User connected to Web UI');
+    let orchestrator = null;
+    let sessionDir = null;
+    let sessionId = null;
 
-    // Create a unique output folder for this entire session
-    const fs = require('fs');
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const sessionDir = path.join(__dirname, 'outputs', `session_${timestamp}`);
-    if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-    }
+    socket.on('join_session', (data) => {
+        sessionId = data.sessionId || `session_${Date.now()}`;
+        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
+        let savedState = null;
 
-    // Initialize ONE orchestrator instance for this user session
-    // This allows the agent to remember context from previous questions
-    const orchestrator = new NexusOrchestrator((logEvent) => {
-        // Stream logs back to the client in real-time
-        socket.emit('nexus_log', logEvent);
-    }, sessionDir);
+        if (fs.existsSync(sessionMetaFile)) {
+            console.log(`[Session] Resuming persistent session: ${sessionId}`);
+            savedState = JSON.parse(fs.readFileSync(sessionMetaFile, 'utf8'));
+            sessionDir = savedState.sessionDir;
+        }
+
+        if (!sessionDir) {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            sessionDir = path.join(__dirname, 'outputs', `session_${timestamp}`);
+        }
+
+        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+
+        orchestrator = new NexusOrchestrator((logEvent) => {
+            socket.emit('nexus_log', logEvent);
+            // Auto-save on every log event to ensure persistence
+            saveSession();
+        }, sessionDir);
+
+        if (savedState) {
+            orchestrator.restorePersistentState(savedState.orchestratorState);
+            socket.emit('session_recovered', { 
+                sessionId, 
+                history: savedState.chatHistory || [],
+                logs: savedState.logs || []
+            });
+        } else {
+            socket.emit('session_created', { sessionId });
+        }
+        
+        updateOutputsList();
+    });
+
+    const saveSession = () => {
+        if (!sessionId || !orchestrator) return;
+        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
+        // We'll need to capture the chat history and logs from the frontend or track them here.
+        // For now, let's at least save the orchestrator internal state.
+        const state = {
+            sessionId,
+            sessionDir,
+            orchestratorState: orchestrator.getPersistentState(),
+            // history and logs should be sent by client periodically or tracked by server
+            lastUpdated: new Date().toISOString()
+        };
+        fs.writeFileSync(sessionMetaFile, JSON.stringify(state, null, 2));
+    };
 
     socket.on('start_task', async (data) => {
         const { prompt } = data;
-        console.log(`Received task from Web UI: ${prompt}`);
-
+        if (!orchestrator) return;
+        console.log(`Received task: ${prompt}`);
         try {
             await orchestrator.execute(prompt);
-            // After execute or pause, send updated outputs list
             updateOutputsList();
+            saveSession();
         } catch (error) {
             socket.emit('nexus_log', { type: 'error', message: `Orchestrator Error: ${error.message}` });
         }
@@ -105,13 +165,25 @@ io.on('connection', (socket) => {
 
     socket.on('user_input', async (data) => {
         const { prompt } = data;
-        console.log(`Received user input from Web UI: ${prompt}`);
-
+        if (!orchestrator) return;
         try {
             await orchestrator.resume(prompt);
             updateOutputsList();
+            saveSession();
         } catch (error) {
             socket.emit('nexus_log', { type: 'error', message: `Orchestrator Error: ${error.message}` });
+        }
+    });
+
+    socket.on('sync_history', (data) => {
+        // Client sends full history for deep persistence
+        if (!sessionId) return;
+        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
+        if (fs.existsSync(sessionMetaFile)) {
+            const state = JSON.parse(fs.readFileSync(sessionMetaFile, 'utf8'));
+            state.chatHistory = data.history;
+            state.logs = data.logs;
+            fs.writeFileSync(sessionMetaFile, JSON.stringify(state, null, 2));
         }
     });
 

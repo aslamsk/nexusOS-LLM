@@ -43,6 +43,7 @@ class NexusOrchestrator {
         this.taskDir = taskDir;
         // Callback to emit events to the frontend
         this.onUpdate = onUpdate || ((event) => console.log(`[${event.type.toUpperCase()}]`, event.message || event.args || ''));
+        this.lastUploadedFile = null;
     }
 
     /**
@@ -56,6 +57,12 @@ class NexusOrchestrator {
         if (this.taskDir) {
             const folderName = path.basename(this.taskDir);
             augmentedRequest += `\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: ${this.taskDir}. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/${folderName}/filename.ext)`;
+        }
+
+        // Detect uploaded file paths in the request to maintain state
+        const filePathMatch = augmentedRequest.match(/Path: `([^`]+)`/);
+        if (filePathMatch) {
+            this.lastUploadedFile = filePathMatch[1];
         }
 
         this.context.push({ role: 'user', content: augmentedRequest });
@@ -80,6 +87,16 @@ class NexusOrchestrator {
     async _runLoop(originalRequest) {
         for (; this.stepCount < this.maxSteps; this.stepCount++) {
             this.onUpdate({ type: 'step', message: `--- Step ${this.stepCount + 1} ---` });
+
+            // Inject stateful tracking context (Dynamic System Update)
+            if (this.lastUploadedFile) {
+                const stateContext = `[CURRENT_SYSTEM_STATE] Active File Context: "${this.lastUploadedFile}". If a user says "improve this", "run this", "change this", or "promote this", ALWAYS assume they mean this file.`;
+                // We prepend/update a system message about state
+                const systemIdx = this.context.findIndex(m => m.role === 'system');
+                if (systemIdx !== -1) {
+                    this.context[systemIdx].content = this.systemPrompt + "\n\n" + stateContext;
+                }
+            }
 
             // Ask LLM what to do next
             const response = await this.llmService.generateResponse(this.context);
@@ -111,6 +128,12 @@ class NexusOrchestrator {
                 // Execute the tool
                 const result = await this.dispatchTool(response.toolCall);
                 const resultString = String(result);
+
+                // PROACTIVE FEEDBACK: If tool result is an error, broadcast it as a thought immediately
+                if (resultString.toLowerCase().includes('error') || resultString.toLowerCase().includes('missing')) {
+                    this.onUpdate({ type: 'thought', message: `🔍 Workflow Insight: ${resultString}` });
+                }
+
                 const truncatedResult = resultString.length > 5000 ? resultString.substring(0, 5000) + '...' : resultString;
 
                 this.onUpdate({ type: 'result', message: truncatedResult });
@@ -145,7 +168,8 @@ class NexusOrchestrator {
                     return await this.tools.multiReplaceFileContent(args.absolutePath, args.chunks);
                 case 'runCommand': return await this.tools.runCommand(args.command, args.cwd);
                 case 'browserAction': return await this.tools.browserAction(args);
-                case 'generateImage': return await this.tools.generateImage(args.prompt, args.savePath);
+                case 'generateImage': return await ImageGenTool.generateImage(args.prompt, args.savePath);
+                case 'improveImage': return await ImageGenTool.improveImage(args.prompt, args.imagePath, args.savePath);
                 case 'n8nSearch': return await this.tools.n8nSearch(args.query);
                 case 'getN8nWorkflow': return await this.tools.getN8nWorkflow(args.path);
                 case 'metaCreateCampaign': return await this.tools.metaAds.createCampaign(args.name, args.objective);
@@ -204,6 +228,27 @@ class NexusOrchestrator {
         } catch (error) {
             return `Error executing tool: ${error.message}`;
         }
+    }
+
+    /**
+     * Gets the current serializable state for persistence.
+     */
+    getPersistentState() {
+        return {
+            context: this.context,
+            lastUploadedFile: this.lastUploadedFile,
+            stepCount: this.stepCount
+        };
+    }
+
+    /**
+     * Loads a previously saved state.
+     */
+    restorePersistentState(state) {
+        if (!state) return;
+        if (state.context) this.context = state.context;
+        if (state.lastUploadedFile) this.lastUploadedFile = state.lastUploadedFile;
+        if (state.stepCount !== undefined) this.stepCount = state.stepCount;
     }
 }
 

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { io } from 'socket.io-client'
 
 const socket = io() // connects to same host
@@ -12,6 +12,22 @@ const chatHistory = ref([
   }
 ])
 
+const sessionId = ref(localStorage.getItem('nexus_session_id'))
+
+// Sync history to server for persistence (debounced to prevent socket congestion)
+let syncTimeout = null;
+watch([chatHistory, logs], () => {
+  if (sessionId.value) {
+    clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(() => {
+      socket.emit('sync_history', { 
+        history: JSON.parse(JSON.stringify(chatHistory.value)),
+        logs: JSON.parse(JSON.stringify(logs.value))
+      })
+    }, 1000);
+  }
+}, { deep: true })
+
 const promptInput = ref('')
 const isWorking = ref(false)
 const isWaitingForInput = ref(false)
@@ -23,6 +39,44 @@ const fileInput = ref(null)
 const isUploading = ref(false)
 const isDragging = ref(false)
 const showSplash = ref(true)
+const showHistory = ref(false)
+const sessions = ref([])
+
+const fetchSessions = async () => {
+  try {
+    const res = await fetch('/sessions')
+    sessions.value = await res.json()
+  } catch (err) {
+    console.error('Failed to fetch sessions:', err)
+  }
+}
+
+const toggleHistory = () => {
+  showHistory.value = !showHistory.value
+  if (showHistory.value) fetchSessions()
+}
+
+const switchSession = (id) => {
+  sessionId.value = id
+  localStorage.setItem('nexus_session_id', id)
+  // Re-join session via socket
+  socket.emit('join_session', { sessionId: id })
+  showHistory.value = false
+}
+
+const startNewMission = () => {
+  const newId = `session_${Date.now()}`
+  sessionId.value = newId
+  localStorage.setItem('nexus_session_id', newId)
+  
+  // Reset local state for fresh mission
+  chatHistory.value = [{ sender: 'nexus', text: 'Nexus OS is fully operational. What is the mission today, Boss?' }]
+  logs.value = []
+  generatedOutputs.value = []
+  
+  socket.emit('join_session', { sessionId: newId })
+  showHistory.value = false
+}
 
 onMounted(() => {
   // Hide splash after 3 seconds
@@ -123,12 +177,12 @@ const sendNotification = async (title, options) => {
 }
 
 onMounted(() => {
-  // requestNotificationPermission() // Disabled auto-request for iOS compliance
+  // requestNotificationPermission() // (Moved to button)
 
   socket.on('nexus_log', (data) => {
     logs.value.push(data)
     
-    // Automatically display agent thoughts in the chat to make it feel alive
+    // Automatically display agent thoughts in the chat
     if (data.type === 'thought') {
       const lastMsg = chatHistory.value[chatHistory.value.length - 1]
       if (lastMsg.sender === 'nexus_thought') {
@@ -279,6 +333,9 @@ const endTask = (isError) => {
         </div>
       </div>
       <div class="header-actions">
+        <button class="icon-btn history-btn" @click="toggleHistory">
+          📜 History
+        </button>
         <button v-if="notificationPermission !== 'granted'" class="icon-btn notify-btn" @click="requestNotificationPermission">
           🔔 Enable Alerts
         </button>
@@ -287,6 +344,34 @@ const endTask = (isError) => {
         </button>
       </div>
     </header>
+
+    <!-- Mission History Sidebar -->
+    <transition name="slide">
+      <div v-if="showHistory" class="history-sidebar">
+        <div class="sidebar-header">
+          <h3>Mission History</h3>
+          <button class="close-btn" @click="showHistory = false">✕</button>
+        </div>
+        <div class="sidebar-actions">
+          <button class="new-mission-btn" @click="startNewMission">+ Start New Mission</button>
+        </div>
+        <div class="session-list">
+          <div 
+            v-for="session in sessions" 
+            :key="session.id" 
+            class="session-item"
+            :class="{ active: sessionId === session.id }"
+            @click="switchSession(session.id)"
+          >
+            <div class="session-preview">{{ session.preview }}</div>
+            <div class="session-meta">{{ new Date(session.lastUpdated).toLocaleString() }}</div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Overlay backdrop for sidebar -->
+    <div v-if="showHistory" class="sidebar-backdrop" @click="showHistory = false"></div>
 
     <!-- Overlay for Files -->
     <div v-if="showOutputs" class="outputs-overlay">
@@ -762,4 +847,103 @@ textarea {
 
 @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
+
+/* History Sidebar */
+.history-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 320px;
+  height: 100%;
+  background: var(--card-bg);
+  border-right: 1px solid var(--border-color);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 10px 0 30px rgba(0,0,0,0.5);
+}
+
+.sidebar-header {
+  padding: 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-actions {
+  padding: 1rem;
+}
+
+.new-mission-btn {
+  width: 100%;
+  padding: 0.8rem;
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+
+.new-mission-btn:hover { opacity: 0.9; }
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.session-item {
+  padding: 1rem;
+  margin-bottom: 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.session-item:hover {
+  background: rgba(255,255,255,0.07);
+  border-color: var(--border-color);
+}
+
+.session-item.active {
+  background: rgba(88, 166, 255, 0.1);
+  border-color: var(--accent-primary);
+}
+
+.session-preview {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.25rem;
+}
+
+.session-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
+  z-index: 999;
+}
+
+.slide-enter-active, .slide-leave-active {
+  transition: transform 0.3s ease;
+}
+
+.slide-enter-from, .slide-leave-to {
+  transform: translateX(-100%);
+}
 </style>

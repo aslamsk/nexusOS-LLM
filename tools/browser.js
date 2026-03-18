@@ -86,13 +86,14 @@ class BrowserTool {
             switch (action) {
                 case 'open':
                     if (!args.url) return 'Error: action=open requires url';
+                    const navOptions = { waitUntil: 'networkidle2', timeout: 15000 };
                     try {
-                        await this.page.goto(args.url, { waitUntil: 'networkidle2' });
+                        await this.page.goto(args.url, navOptions);
                     } catch (navError) {
                         console.log("Navigation error, recreating page: " + navError.message);
                         this.page = await this.browser.newPage();
                         await this.page.setViewport({ width: 1280, height: 800 });
-                        await this.page.goto(args.url, { waitUntil: 'networkidle2' });
+                        await this.page.goto(args.url, navOptions);
                     }
                     return `Successfully opened ${args.url}. Page title: ${await this.page.title()}`;
 

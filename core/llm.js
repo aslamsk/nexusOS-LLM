@@ -14,7 +14,7 @@ class LLMService {
         }
 
         this.ai = new GoogleGenAI({ apiKey: apiKey });
-        this.modelName = 'gemini-2.5-flash';
+        this.modelName = 'gemini-1.5-flash';
     }
 
     /**
@@ -87,15 +87,28 @@ class LLMService {
                 }
             },
             {
-                name: "generateImage",
-                description: "Generate an image using Imagen 3 based on a text prompt.",
+                name: "generate_image",
+                description: "Generate a new image from a text prompt.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        prompt: { type: "STRING", description: "Text description of the image." },
-                        savePath: { type: "STRING", description: "Absolute path where the image should be saved." }
+                        prompt: { type: "STRING", description: "The description of the image." },
+                        savePath: { type: "STRING", description: "Absolute path to save the .png file." }
                     },
                     required: ["prompt", "savePath"]
+                }
+            },
+            {
+                name: "improveImage",
+                description: "Refine or improve an existing image (e.g., 'improve this banner'). Use this when a user provides an image and asks for changes/improvements.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        prompt: { type: "STRING", description: "The specific improvements or changes requested." },
+                        imagePath: { type: "STRING", description: "Absolute path to the existing image file." },
+                        savePath: { type: "STRING", description: "Absolute path to save the improved .png file." }
+                    },
+                    required: ["prompt", "imagePath", "savePath"]
                 }
             },
             {
