@@ -176,7 +176,7 @@ class NexusOrchestrator {
                 case 'generateVideo': 
                     if (args.prompt) {
                         // 1. Attempt High-Fidelity Google Veo (Ad Quality)
-                        const veoResult = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath);
+                        const veoResult = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath, args.imagePath);
                         if (!veoResult.error) return `SUCCESS: Ad-quality Veo created at ${args.outputPath}`;
                         
                         // 2. Fallback to Replicate if Veo fails and token exists

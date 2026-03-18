@@ -98,22 +98,32 @@ const onDrop = (e) => {
 
 const chatContainer = ref(null)
 
-// Push Notifications Setup
+const notificationPermission = ref(Notification.permission)
+
 const requestNotificationPermission = async () => {
   if (!('Notification' in window)) return
-  if (Notification.permission !== 'denied' && Notification.permission !== 'granted') {
-    await Notification.requestPermission()
-  }
+  const result = await Notification.requestPermission()
+  notificationPermission.value = result
 }
 
-const sendNotification = (title, options) => {
-  if (('Notification' in window) && Notification.permission === 'granted') {
-    new Notification(title, options)
+const sendNotification = async (title, options) => {
+  if (!('serviceWorker' in navigator)) {
+    if (Notification.permission === 'granted') new Notification(title, options)
+    return
+  }
+  
+  const registration = await navigator.serviceWorker.ready
+  if (registration && Notification.permission === 'granted') {
+    registration.showNotification(title, {
+       icon: '/pwa-192x192.png',
+       badge: '/favicon.svg',
+       ...options
+    })
   }
 }
 
 onMounted(() => {
-  requestNotificationPermission()
+  // requestNotificationPermission() // Disabled auto-request for iOS compliance
 
   socket.on('nexus_log', (data) => {
     logs.value.push(data)
@@ -268,9 +278,14 @@ const endTask = (isError) => {
           {{ taskStatusText }}
         </div>
       </div>
-      <button v-if="generatedOutputs.length > 0" class="icon-btn" @click="showOutputs = !showOutputs">
-        📂 Files ({{ generatedOutputs.length }})
-      </button>
+      <div class="header-actions">
+        <button v-if="notificationPermission !== 'granted'" class="icon-btn notify-btn" @click="requestNotificationPermission">
+          🔔 Enable Alerts
+        </button>
+        <button v-if="generatedOutputs.length > 0" class="icon-btn" @click="showOutputs = !showOutputs">
+          📂 Files ({{ generatedOutputs.length }})
+        </button>
+      </div>
     </header>
 
     <!-- Overlay for Files -->

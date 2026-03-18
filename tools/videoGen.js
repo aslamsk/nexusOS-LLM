@@ -92,8 +92,8 @@ class VideoGenTool {
     /**
      * GOOGLE VEO / GEMINI VIDEO: High-fidelity generative video (Ad Quality).
      */
-    async generateWithVeo(prompt, outputPath) {
-        console.log(`[VideoGen] Initiating Google Veo generation: "${prompt}"`);
+    async generateWithVeo(prompt, outputPath, imagePath = null) {
+        console.log(`[VideoGen] Initiating Google Veo generation: "${prompt}" ${imagePath ? '(Image-to-Video)' : '(Text-to-Video)'}`);
         try {
             const { GoogleGenAI } = require('@google/genai');
             const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -101,8 +101,19 @@ class VideoGenTool {
             // In 2026, Veo 3.1 is the latest cinematic model
             const model = genAI.getGenerativeModel({ model: "veo-3.1-generate-001" });
 
+            const parts = [{ text: prompt }];
+            if (imagePath) {
+                const fs = require('fs');
+                parts.push({
+                    inlineData: {
+                        data: fs.readFileSync(imagePath).toString('base64'),
+                        mimeType: 'image/png' // Assuming PNG
+                    }
+                });
+            }
+
             const result = await model.generateContent({
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                contents: [{ role: 'user', parts }],
                 generationConfig: {
                     videoGenerationConfig: {
                         durationSeconds: 10,
