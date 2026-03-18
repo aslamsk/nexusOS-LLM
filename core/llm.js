@@ -81,7 +81,7 @@ class LLMService {
                         text: { type: "STRING", description: "Text to type (for 'type')." },
                         savePath: { type: "STRING", description: "Path to save screenshot (for 'screenshot')." },
                         isMobile: { type: "BOOLEAN", description: "Whether to emulate a mobile device. Defaults to false." },
-                        mobileDevice: { type: "STRING", description: "The type of mobile device to emulate: 'ios' (iPhone 13) or 'android' (Pixel 7). Defaults to 'ios'." }
+                        mobileDevice: { type: "STRING", description: "The type of mobile device to emulate: 'ios' (iPhone 13), 'iphone-xs', or 'android' (Pixel 7). Defaults to 'ios'." }
                     },
                     required: ["action"]
                 }

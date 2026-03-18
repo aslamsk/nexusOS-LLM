@@ -48,7 +48,12 @@ class BrowserTool {
 
     async _setupContext(isMobile, mobileDevice = 'ios') {
         if (isMobile) {
-            const deviceName = mobileDevice === 'android' ? 'Pixel 7' : 'iPhone 13';
+            let deviceName;
+            switch(mobileDevice) {
+                case 'android': deviceName = 'Pixel 7'; break;
+                case 'iphone-xs': deviceName = 'iPhone X'; break; // Puppeteer uses 'iPhone X' for XS/11 Pro dimensions
+                default: deviceName = 'iPhone 13';
+            }
             console.log(`[Browser] Emulating ${deviceName}...`);
             const device = puppeteer.KnownDevices[deviceName];
             if (device) {
