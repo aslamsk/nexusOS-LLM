@@ -10,6 +10,7 @@ const GoogleAdsTool = require('./tools/googleAds');
 const LinkedInAdsTool = require('./tools/linkedinAds');
 const VideoGenTool = require('./tools/videoGen');
 const BackgroundRemovalTool = require('./tools/backgroundRemoval');
+const OpenRouterTool = require('./tools/openRouter');
 const LLMService = require('./core/llm');
 
 /**
@@ -34,7 +35,8 @@ class NexusOrchestrator {
             removeBg: BackgroundRemovalTool.removeBg.bind(BackgroundRemovalTool),
             metaAds: MetaAdsTool,
             googleAds: GoogleAdsTool,
-            linkedinAds: LinkedInAdsTool
+            linkedinAds: LinkedInAdsTool,
+            openRouter: OpenRouterTool
         };
         this.llmService = new LLMService();
         this.maxSteps = 40;
@@ -173,7 +175,13 @@ class NexusOrchestrator {
                 case 'metaUploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
                 case 'generateVideo': 
                     if (args.prompt) {
-                        return await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                        // Attempt generative video, fallback to free Gemini-based version if no token
+                        if (process.env.REPLICATE_API_TOKEN) {
+                            const result = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                            if (!result.error) return result;
+                            console.warn("[Orchestrator] Replicate failed, falling back to Gemini+FFmpeg:", result.error);
+                        }
+                        return await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
                     }
                     return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
                 case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
@@ -183,6 +191,7 @@ class NexusOrchestrator {
                 case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
                 case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
                 case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);
+                case 'openRouterChat': return await this.tools.openRouter.chat(args.prompt, args.model);
                 default: return `Error: Tool ${name} not found.`;
             }
         } catch (error) {

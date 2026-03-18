@@ -386,6 +386,18 @@ class LLMService {
                     },
                     required: ["urn", "text"]
                 }
+            },
+            {
+                name: "openRouterChat",
+                description: "Ask a question to an OpenRouter model (multi-model support).",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        prompt: { type: "STRING", description: "The message to send." },
+                        model: { type: "STRING", description: "OpenRouter model ID (e.g. nvidia/nemotron-nano-12b-v2-vl:free)." }
+                    },
+                    required: ["prompt"]
+                }
             }
         ];
     }

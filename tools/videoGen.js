@@ -48,10 +48,25 @@ class VideoGenTool {
 
         console.log(`[VideoGen] Generating video from prompt: "${prompt}"`);
         try {
-            // Using 'zeroscope-v2-xl' as a default high-quality text-to-video model
+            // Robust version fetching: Try models.get first, then fallback to listing versions
+            let versionHash;
+            try {
+                const model = await this.replicate.models.get("anotherjesse/zeroscope-v2-xl");
+                versionHash = model.latest_version ? model.latest_version.id : null;
+                
+                if (!versionHash) {
+                    const versions = await this.replicate.models.versions.list("anotherjesse", "zeroscope-v2-xl");
+                    versionHash = versions.results[0].id;
+                }
+            } catch (err) {
+                // Final hardcoded fallback if everything fails
+                versionHash = "9f7430067c36cdac3f9bcbc1ec778433dafb01c40f5a720df5df756cadf284fc";
+            }
+            
+            console.log(`[VideoGen] Using model version: ${versionHash}`);
             const output = await this.replicate.run(
-                "lucataco/animate-diff:be2271c30c00653510522d08a0d42e20b606869503ebb3ef963ca4fa5c81414c",
-                { input: { prompt: prompt, n_frames: 16 } }
+                `anotherjesse/zeroscope-v2-xl:${versionHash}`,
+                { input: { prompt: prompt, num_frames: 24 } }
             );
 
             // Replicate returns a URL to the video file
@@ -71,6 +86,26 @@ class VideoGenTool {
             });
         } catch (e) {
             return { error: "Generative video failed", details: e.message };
+        }
+    }
+
+    /**
+     * AI GENERATIVE (FREE): Generate video from prompt using Gemini (Imagen) + Local FFmpeg.
+     */
+    async generateFromPromptFree(prompt, outputPath) {
+        console.log(`[VideoGen] Using FREE Gemini+FFmpeg fallback for: "${prompt}"`);
+        try {
+            const ImageGenTool = require('./imageGen');
+            const tempImagePath = outputPath.replace('.mp4', '.png');
+            
+            // 1. Generate core image using Gemini/Imagen
+            const imgResult = await ImageGenTool.generateImage(`Cinematic keyframe: ${prompt}`, tempImagePath);
+            if (imgResult.includes('Error')) return { error: "Initial image generation failed", details: imgResult };
+
+            // 2. Convert to video using local FFmpeg
+            return await this.imageToVideo(tempImagePath, outputPath);
+        } catch (e) {
+            return { error: "Free video generation failed", details: e.message };
         }
     }
 }
