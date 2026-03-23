@@ -1,25 +1,26 @@
-require('dotenv').config();
+const ConfigService = require('./config');
 const { GoogleGenAI } = require('@google/genai');
 
 /**
  * Nexus OS: LLM Subsystem
- * Encapsulates the interaction with the Gemini API.
+ * Encapsulates the interaction with the Gemini API with auto-key rotation.
  */
 class LLMService {
     constructor() {
-        // Initialize the Gemini client
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            console.warn("[Nexus OS Warning] GEMINI_API_KEY is not set in the environment. LLM calls will fail.");
-        }
+        this.modelName = 'gemini-2.5-flash';
+    }
 
-        this.ai = new GoogleGenAI({ apiKey: apiKey });
-        this.modelName = 'gemini-1.5-flash';
+    /**
+     * Get an initialized Gemini client with a specific API key.
+     */
+    async _getClient(keyName = 'GEMINI_API_KEY') {
+        const apiKey = await ConfigService.get(keyName);
+        if (!apiKey) return null;
+        return new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
     }
 
     /**
      * Define the tools available to the LLM.
-     * These definitions must match the tools registered in the Orchestrator.
      */
     getToolDefinitions() {
         return [
@@ -71,361 +72,250 @@ class LLMService {
             },
             {
                 name: "browserAction",
-                description: "Perform an action using the browser sub-agent.",
+                description: "Perform an action using the browser sub-agent (opening links, clicking, extracting text).",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        action: { type: "STRING", description: "Action to perform: 'open', 'click', 'type', 'extract', 'screenshot'" },
-                        url: { type: "STRING", description: "URL to open (for 'open')." },
-                        selector: { type: "STRING", description: "CSS selector (for 'click', 'type', 'extract')." },
-                        text: { type: "STRING", description: "Text to type (for 'type')." },
-                        savePath: { type: "STRING", description: "Path to save screenshot (for 'screenshot')." },
-                        isMobile: { type: "BOOLEAN", description: "Whether to emulate a mobile device. Defaults to false." },
-                        mobileDevice: { type: "STRING", description: "The type of mobile device to emulate: 'ios' (iPhone 13), 'iphone-xs', or 'android' (Pixel 7). Defaults to 'ios'." }
+                        action: { type: "STRING", description: "Action: 'open', 'click', 'type', 'extract', 'screenshot'" },
+                        url: { type: "STRING", description: "URL to open." },
+                        selector: { type: "STRING", description: "CSS selector." },
+                        text: { type: "STRING", description: "Text to type." },
+                        savePath: { type: "STRING", description: "Path to save screenshot." }
                     },
                     required: ["action"]
                 }
             },
             {
-                name: "generate_image",
-                description: "Generate a new image from a text prompt.",
+                name: "searchWeb",
+                description: "Search the web for live information, news, or data using the Brave Search API.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        prompt: { type: "STRING", description: "The description of the image." },
+                        query: { type: "STRING", description: "The search query." }
+                    },
+                    required: ["query"]
+                }
+            },
+            {
+                name: "codeMap",
+                description: "Recursively map a codebase/directory to understand the file structure.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        absolutePath: { type: "STRING", description: "Root directory to map." },
+                        maxDepth: { type: "NUMBER", description: "Max recursion depth. Default is 3." }
+                    },
+                    required: ["absolutePath"]
+                }
+            },
+            {
+                name: "codeSearch",
+                description: "Search for a string or pattern across all code files in a directory.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        absolutePath: { type: "STRING", description: "Directory to search." },
+                        query: { type: "STRING", description: "Search term or regex." }
+                    },
+                    required: ["absolutePath", "query"]
+                }
+            },
+            {
+                name: "codeFindFn",
+                description: "Locate a function definition across the codebase.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        absolutePath: { type: "STRING", description: "Directory to search." },
+                        functionName: { type: "STRING", description: "Name of the function to find." }
+                    },
+                    required: ["absolutePath", "functionName"]
+                }
+            },
+            {
+                name: "generate_image",
+                description: "Generate a new image from a text prompt (premium quality).",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        prompt: { type: "STRING", description: "Description of the image." },
                         savePath: { type: "STRING", description: "Absolute path to save the .png file." }
                     },
                     required: ["prompt", "savePath"]
                 }
             },
             {
-                name: "improveImage",
-                description: "Refine or improve an existing image (e.g., 'improve this banner'). Use this when a user provides an image and asks for changes/improvements.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        prompt: { type: "STRING", description: "The specific improvements or changes requested." },
-                        imagePath: { type: "STRING", description: "Absolute path to the existing image file." },
-                        savePath: { type: "STRING", description: "Absolute path to save the improved .png file." }
-                    },
-                    required: ["prompt", "imagePath", "savePath"]
-                }
-            },
-            {
-                name: "askUserForInput",
-                description: "Ask the user a question to get more information or confirmation before proceeding.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        question: { type: "STRING", description: "The question to ask the user." }
-                    },
-                    required: ["question"]
-                }
-            },
-            {
-                name: "metaCreateCampaign",
-                description: "Create a new Meta Ads Campaign.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        name: { type: "STRING", description: "Name of the campaign." },
-                        objective: { type: "STRING", description: "Campaign objective (e.g., 'OUTCOME_TRAFFIC'). Defaults to 'OUTCOME_TRAFFIC'." }
-                    },
-                    required: ["name"]
-                }
-            },
-            {
-                name: "metaCreateAdSet",
-                description: "Create a new Meta Ad Set with budget and targeting.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        campaignId: { type: "STRING", description: "ID of the parent campaign." },
-                        name: { type: "STRING", description: "Name of the ad set." },
-                        budget: { type: "NUMBER", description: "Daily budget in Rupees (e.g., 100)." },
-                        targeting: { type: "OBJECT", description: "Targeting object (e.g., {geo_locations: {countries: ['IN']}})." }
-                    },
-                    required: ["campaignId", "name", "budget"]
-                }
-            },
-            {
-                name: "metaUploadImage",
-                description: "Upload a local image to Meta to get an image_hash.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        imagePath: { type: "STRING", description: "Absolute path to the local image file." }
-                    },
-                    required: ["imagePath"]
-                }
-            },
-            {
-                name: "metaCreateCreative",
-                description: "Create a new Meta Ad Creative.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        name: { type: "STRING", description: "Internal name for the creative." },
-                        title: { type: "STRING", description: "The headline of the ad (e.g. 'MK Fashion - Luxury Silk Saree')." },
-                        body: { type: "STRING", description: "The main text/description of the ad." },
-                        imageHash: { type: "STRING", description: "The hash returned by 'metaUploadImage'." },
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
-                        cta: { type: "STRING", description: "The Call to Action type, e.g., 'SHOP_NOW', 'WHATSAPP_MESSAGE', 'LEARN_MORE'. Default is 'SHOP_NOW'." }
-                    },
-                    required: ["name", "title", "body", "imageHash"]
-                }
-            },
-            {
-                name: "metaPublishOrganicVideo",
-                description: "Publish a video post or Reel to a Facebook Page (Free).",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional: will use META_PAGE_ID from .env if omitted." },
-                        title: { type: "STRING" },
-                        description: { type: "STRING" },
-                        videoPath: { type: "STRING", description: "Absolute path to the video file." },
-                        isReel: { type: "BOOLEAN" }
-                    },
-                    required: ["title", "description", "videoPath"]
-                }
-            },
-            {
-                name: "metaPublishOrganicReel",
-                description: "Publish a free, organic Reel to a Facebook Page. Uses META_PAGE_ID from .env if pageId is missing.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
-                        description: { type: "STRING", description: "Caption for the Reel." },
-                        videoPath: { type: "STRING", description: "Absolute path to the local video file." }
-                    },
-                    required: ["description", "videoPath"]
-                }
-            },
-            {
-                name: "metaCreateAd",
-                description: "Create the final Ad on Meta.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        adSetId: { type: "STRING", description: "ID of the parent ad set." },
-                        creativeId: { type: "STRING", description: "ID of the ad creative." },
-                        name: { type: "STRING", description: "Name of the ad." }
-                    },
-                    required: ["adSetId", "creativeId", "name"]
-                }
-            },
-            {
-                name: "metaPublishOrganicPost",
-                description: "Publish a free, organic text post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
-                        message: { type: "STRING", description: "The text of the post." },
-                        link: { type: "STRING", description: "Optional link to include." }
-                    },
-                    required: ["message"]
-                }
-            },
-            {
-                name: "metaPublishOrganicPhoto",
-                description: "Publish a free, organic photo post to a Facebook Page feed. Uses META_PAGE_ID from .env if pageId is missing.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." },
-                        message: { type: "STRING", description: "Caption for the photo." },
-                        imagePath: { type: "STRING", description: "Absolute path to the local image file." }
-                    },
-                    required: ["message", "imagePath"]
-                }
-            },
-            {
-                name: "metaGetPageInsights",
-                description: "Get engagement insights (impressions, engagement, fans) for a Facebook Page. Uses META_PAGE_ID from .env if pageId is missing.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        pageId: { type: "STRING", description: "The Facebook Page ID. Optional." }
-                    }
-                }
-            },
-            {
                 name: "generateVideo",
-                description: "Generate a video. Can convert a static image to a 10s loop OR generate a completely new video from a text prompt (requires Replicate API).",
+                description: "Generate a video from a text prompt or animate an existing image.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        prompt: { type: "STRING", description: "Text description of the video to generate from scratch." },
-                        imagePath: { type: "STRING", description: "Absolute path to the source image (for image-to-video conversion)." },
-                        outputPath: { type: "STRING", description: "Absolute path for the output .mp4 file." }
+                        prompt: { type: "STRING", description: "Text description of the video." },
+                        imagePath: { type: "STRING", description: "Path to source image to animate." },
+                        outputPath: { type: "STRING", description: "Path for output .mp4." }
                     },
                     required: ["outputPath"]
                 }
             },
             {
-                name: "metaGetComments",
-                description: "Get comments for a specific Meta object (Post ID or Ad ID).",
+                name: "removeBg",
+                description: "Remove the background from an image.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        objectId: { type: "STRING", description: "The ID of the post or ad to fetch comments for." }
+                        inputPath: { type: "STRING", description: "Path to source image." },
+                        outputPath: { type: "STRING", description: "Path for output .png." }
                     },
-                    required: ["objectId"]
+                    required: ["inputPath", "outputPath"]
                 }
             },
             {
-                name: "metaReplyToComment",
-                description: "Reply to a specific comment on a Meta Page post.",
+                name: "metaAds",
+                description: "Unified Meta Ads tool for campaigns, creatives, and organic posts.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        commentId: { type: "STRING", description: "The ID of the comment to reply to." },
-                        message: { type: "STRING", description: "The text of the reply." }
+                        action: { type: "STRING", description: "Action like 'publishOrganicPost', 'publishOrganicReel', 'createCampaign', etc." },
+                        pageId: { type: "STRING" },
+                        message: { type: "STRING" },
+                        link: { type: "STRING" },
+                        videoPath: { type: "STRING" },
+                        imagePath: { type: "STRING" }
                     },
-                    required: ["commentId", "message"]
-                }
-            },
-            {
-                name: "metaSetCredentials",
-                description: "Save Meta Ads credentials (access token, account ID, page ID) to the environment configuration.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        accessToken: { type: "STRING", description: "The Meta User Access Token." },
-                        adAccountId: { type: "STRING", description: "The Meta Ad Account ID (e.g. 123456789)." },
-                        pageId: { type: "STRING", description: "The Facebook Page ID." }
-                    }
-                }
-            },
-            {
-                name: "metaGetAccountInfo",
-                description: "Get details about the configured Meta Ad Account.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {}
+                    required: ["action"]
                 }
             },
             {
                 name: "replaceFileContent",
-                description: "Surgically replace a specific line range in a file. Lines are 1-indexed.",
+                description: "Surgically replace lines in a file by providing exact target content.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        absolutePath: { type: "STRING", description: "Absolute path to the file." },
-                        startLine: { type: "NUMBER", description: "The starting line number (1-indexed)." },
-                        endLine: { type: "NUMBER", description: "The ending line number (1-indexed)." },
-                        targetContent: { type: "STRING", description: "The exact content currently at those lines (used for verification)." },
-                        replacementContent: { type: "STRING", description: "The new content to insert." }
+                        absolutePath: { type: "STRING" },
+                        startLine: { type: "NUMBER" },
+                        endLine: { type: "NUMBER" },
+                        targetContent: { type: "STRING" },
+                        replacementContent: { type: "STRING" }
                     },
                     required: ["absolutePath", "startLine", "endLine", "targetContent", "replacementContent"]
                 }
             },
             {
                 name: "multiReplaceFileContent",
-                description: "Perform multiple surgical replacements in a single file.",
+                description: "Perform multiple surgical replacements in one file.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        absolutePath: { type: "STRING", description: "Absolute path to the file." },
-                        chunks: {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    startLine: { type: "NUMBER" },
-                                    endLine: { type: "NUMBER" },
-                                    targetContent: { type: "STRING" },
-                                    replacementContent: { type: "STRING" }
-                                },
-                                required: ["startLine", "endLine", "targetContent", "replacementContent"]
-                            }
-                        }
+                        absolutePath: { type: "STRING" },
+                        chunks: { type: "ARRAY", items: { type: "OBJECT" } }
                     },
                     required: ["absolutePath", "chunks"]
                 }
             },
             {
-                name: "removeBg",
-                description: "Remove the background from an image using AI.",
+                name: "sendEmail",
+                description: "Send an email to a client or team member via Gmail.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        inputPath: { type: "STRING", description: "Absolute path to the source image file." },
-                        outputPath: { type: "STRING", description: "Absolute path where the output image should be saved (should end in .png)." }
+                        to: { type: "STRING", description: "Recipient email address." },
+                        subject: { type: "STRING", description: "Email subject." },
+                        body: { type: "STRING", description: "Email body text." }
                     },
-                    required: ["inputPath", "outputPath"]
+                    required: ["to", "subject", "body"]
                 }
             },
             {
-                name: "googleAdsListCampaigns",
-                description: "List enabled campaigns for a Google Ads account.",
+                name: "readEmail",
+                description: "Read the latest emails from the Gmail inbox.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        customerId: { type: "STRING", description: "The Google Ads Customer ID. Optional: will use GOOGLE_ADS_CUSTOMER_ID from .env if omitted." }
-                    },
-                    required: []
+                        limit: { type: "NUMBER", description: "Number of emails to read. Default is 5." }
+                    }
                 }
             },
             {
-                name: "googleAdsCreateCampaign",
-                description: "Create a new Search campaign in Google Ads (status: PAUSED).",
+                name: "sendWhatsApp",
+                description: "Send a WhatsApp text message to a phone number.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        customerId: { type: "STRING", description: "The Customer ID. Optional: will use GOOGLE_ADS_CUSTOMER_ID from .env if omitted." },
-                        campaignData: {
-                            type: "OBJECT",
-                            properties: {
-                                name: { type: "STRING" },
-                                budget_resource_name: { type: "STRING", description: "Resource name of a pre-existing budget." }
-                            },
-                            required: ["name", "budget_resource_name"]
-                        }
+                        phone: { type: "STRING", description: "Phone number with country code (e.g. 918885202721)." },
+                        text: { type: "STRING", description: "Message content." }
                     },
-                    required: ["campaignData"]
+                    required: ["phone", "text"]
                 }
             },
             {
-                name: "linkedinPublishPost",
-                description: "Publish an organic post to a LinkedIn Organization page.",
+                name: "sendWhatsAppMedia",
+                description: "Send an image or video via WhatsApp.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        urn: { type: "STRING", description: "The Organization URN. Optional: will use LINKEDIN_ORG_URN from .env if omitted." },
-                        text: { type: "STRING", description: "The post content." }
+                        phone: { type: "STRING", description: "Phone number with country code." },
+                        mediaUrl: { type: "STRING", description: "Publicly accessible URL of the media." },
+                        caption: { type: "STRING", description: "Optional caption for the media." }
                     },
-                    required: ["text"]
+                    required: ["phone", "mediaUrl"]
                 }
             },
             {
-                name: "openRouterChat",
-                description: "Ask a question to an OpenRouter model (multi-model support).",
+                name: "saveMemory",
+                description: "Store a fact or learned information for use across future sessions.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        prompt: { type: "STRING", description: "The message to send." },
-                        model: { type: "STRING", description: "OpenRouter model ID (e.g. nvidia/nemotron-nano-12b-v2-vl:free)." }
+                        content: { type: "STRING", description: "The piece of information to remember." },
+                        category: { type: "STRING", description: "Category (e.g. 'client_preference', 'technical_note')." }
                     },
-                    required: ["prompt"]
+                    required: ["content"]
+                }
+            },
+            {
+                name: "searchMemory",
+                description: "Recall past information based on a search query.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        query: { type: "STRING", description: "The keyword or topic to search for." }
+                    },
+                    required: ["query"]
+                }
+            },
+            {
+                name: "delegateToAgent",
+                description: "Delegate a complex sub-task to a specialist agent (researcher, writer, coder, designer, ads_manager).",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        agentType: { type: "STRING", enum: ["researcher", "writer", "coder", "designer", "ads_manager"], description: "The type of specialist." },
+                        task: { type: "STRING", description: "Detailed mission for the sub-agent." }
+                    },
+                    required: ["agentType", "task"]
+                }
+            },
+            {
+                name: "askUserForInput",
+                description: "Ask the user a question to clarify something or get confirmation.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        question: { type: "STRING", description: "The question for the user." }
+                    },
+                    required: ["question"]
                 }
             }
         ];
     }
 
     /**
-     * Send the conversation history to the LLM and get the next response.
+     * Send conversation history to the LLM and get the next response.
      */
     async generateResponse(messages) {
         try {
             const formattedContents = messages.map(msg => {
                 if (msg.role === 'system') {
-                    // Gemini doesn't have a distinct system message in the same way, 
-                    // we can pass systemInstructions in the config or prepend it.
-                    // For simplicity here, we treat it as user if not supported directly, or pass via config
                     return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
                 } else if (msg.role === 'assistant') {
                     const parts = [];
@@ -441,7 +331,7 @@ class LLMService {
                     return { role: 'model', parts: parts };
                 } else if (msg.role === 'tool') {
                     return {
-                        role: 'user', // Tool responses are typically sent as user messages with functionResponse
+                        role: 'user',
                         parts: [{
                             functionResponse: {
                                 name: msg.name,
@@ -454,39 +344,80 @@ class LLMService {
                 }
             });
 
-            // If the first message is the system prompt, we extract it.
             let systemInstruction = null;
             if (messages[0] && messages[0].role === 'system') {
-                systemInstruction = {
-                    parts: [{ text: messages[0].content }]
-                };
-                formattedContents.shift(); // Remove from contents
+                systemInstruction = { parts: [{ text: messages[0].content }] };
+                formattedContents.shift();
             }
 
-            const response = await this.ai.models.generateContent({
-                model: this.modelName,
-                contents: formattedContents,
-                config: {
-                    systemInstruction: systemInstruction,
-                    tools: [{ functionDeclarations: this.getToolDefinitions() }],
-                    temperature: 0.2
+            const keys = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'];
+            let currentKeyIdx = 0;
+            let retryCount = 0;
+            const maxRetriesPerKey = 3;
+            let delay = 2000;
+
+            while (currentKeyIdx < keys.length) {
+                const keyName = keys[currentKeyIdx];
+                const ai = await this._getClient(keyName);
+                
+                if (!ai) {
+                    currentKeyIdx++; // Skip missing keys
+                    continue;
                 }
-            });
 
-            const functionCall = response.functionCalls?.[0];
-            const textContent = response.text;
+                try {
+                    const response = await ai.models.generateContent({
+                        model: this.modelName,
+                        systemInstruction: systemInstruction,
+                        contents: formattedContents,
+                        config: {
+                            tools: [{ functionDeclarations: this.getToolDefinitions() }],
+                            generationConfig: { temperature: 0.2 }
+                        }
+                    });
 
-            return {
-                text: textContent,
-                toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null
-            };
+                    const functionCall = response.functionCalls?.[0];
+                    let textContent = '';
+                    
+                    // Safely get text if available, avoiding SDK warnings for function-call-only responses
+                    try {
+                        if (response.candidates?.[0]?.content?.parts?.some(p => p.text)) {
+                            textContent = response.text;
+                        }
+                    } catch (e) {
+                        textContent = ''; // Fallback for pure function calls
+                    }
+
+                    return { text: textContent, toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null };
+                } catch (error) {
+                    if (error.message.includes('429')) {
+                        console.log(`[LLM] 429 Rate Limit on ${keyName}.`);
+                        if (retryCount < maxRetriesPerKey) {
+                            console.log(`[LLM] Retrying ${keyName} in ${delay / 1000}s... (Attempt ${retryCount + 1}/${maxRetriesPerKey})`);
+                            await new Promise(r => setTimeout(r, delay));
+                            retryCount++;
+                            delay *= 2;
+                            continue;
+                        } else {
+                            console.log(`[LLM] Rotating to backup Gemini API key...`);
+                            currentKeyIdx++;
+                            retryCount = 0;
+                            delay = 2000;
+                            continue;
+                        }
+                    }
+                    console.error("[LLM API Error]", error.message);
+                    return { text: `Error calling LLM: ${error.message}`, toolCall: null };
+                }
+            }
+
+            const quotaMsg = "Nexus OS has exhausted all 3 configured Gemini API keys. Please get a fresh free API key at aistudio.google.com and add it as Gemini API Key 1 or 2 in Settings.";
+            console.error(`[LLM Max Retries] ${quotaMsg}`);
+            return { text: `MISSION BREACH: API Quota Exhausted. ${quotaMsg}`, toolCall: null };
 
         } catch (error) {
             console.error("[LLM Error]", error);
-            return {
-                text: `Error calling LLM: ${error.message}`,
-                toolCall: null
-            };
+            return { text: `Error calling LLM: ${error.message}`, toolCall: null };
         }
     }
 }

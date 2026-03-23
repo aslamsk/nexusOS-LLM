@@ -1,8 +1,8 @@
+const ConfigService = require('../core/config');
 const axios = require('axios');
 
 class OpenRouterTool {
     constructor() {
-        this.apiKey = process.env.OPENROUTER_API_TOKEN;
         this.baseUrl = 'https://openrouter.ai/api/v1';
     }
 
@@ -12,8 +12,9 @@ class OpenRouterTool {
      * @param {string} model - The model ID (e.g., 'nvidia/nemotron-nano-12b-v2-vl:free').
      */
     async chat(prompt, model = 'nvidia/nemotron-nano-12b-v2-vl:free') {
-        if (!this.apiKey) {
-            return { error: "OPENROUTER_API_TOKEN missing in .env" };
+        const apiKey = await ConfigService.get('OPENROUTER_API_TOKEN');
+        if (!apiKey) {
+            return { error: "OPENROUTER_API_TOKEN missing in Firestore" };
         }
 
         console.log(`[OpenRouter] Sending request to model: ${model}`);
@@ -26,7 +27,7 @@ class OpenRouterTool {
                 },
                 {
                     headers: {
-                        'Authorization': `Bearer ${this.apiKey}`,
+                        'Authorization': `Bearer ${apiKey}`,
                         'HTTP-Referer': 'https://nexus-os.local', // Required by OpenRouter
                         'X-Title': 'Nexus OS', // Required by OpenRouter
                         'Content-Type': 'application/json'

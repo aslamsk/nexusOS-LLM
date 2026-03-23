@@ -1,949 +1,690 @@
 <script setup>
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, onMounted, nextTick, watch, computed } from 'vue'
 import { io } from 'socket.io-client'
 
-const socket = io() // connects to same host
+const socket = io()
 
-const logs = ref([])
-const chatHistory = ref([
-  { 
-    sender: 'nexus', 
-    text: 'Nexus OS is fully operational. What is the mission today, Boss?'
-  }
-])
+// ─── Navigation & Core ───────────────────
+const activeView = ref('chat')
+const isMobile = ref(window.innerWidth < 768)
+const handleResize = () => isMobile.value = window.innerWidth < 768
+onMounted(() => window.addEventListener('resize', handleResize))
 
+const chatHistory = ref([{ sender: 'nexus', text: 'Nexus OS is fully operational. Protocol Obsidian Ethereal active. What is your objective, Boss?' }])
 const sessionId = ref(localStorage.getItem('nexus_session_id'))
 
-// Sync history to server for persistence (debounced to prevent socket congestion)
 let syncTimeout = null;
-watch([chatHistory, logs], () => {
+watch([chatHistory], () => {
   if (sessionId.value) {
     clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(() => {
-      socket.emit('sync_history', { 
-        history: JSON.parse(JSON.stringify(chatHistory.value)),
-        logs: JSON.parse(JSON.stringify(logs.value))
-      })
-    }, 1000);
+    syncTimeout = setTimeout(() => socket.emit('sync_history', { history: JSON.parse(JSON.stringify(chatHistory.value)) }), 1000);
   }
 }, { deep: true })
 
 const promptInput = ref('')
 const isWorking = ref(false)
-const isWaitingForInput = ref(false)
-const taskStatusText = ref('Idle')
-const taskStatusColor = ref('#8b949e')
-const generatedOutputs = ref([])
-const showOutputs = ref(false)
-const fileInput = ref(null)
-const isUploading = ref(false)
-const isDragging = ref(false)
-const showSplash = ref(true)
-const showHistory = ref(false)
-const sessions = ref([])
 
-const fetchSessions = async () => {
+// ─── CRM & Tools Data ────────────────────
+const clients = ref([])
+const toolsData = ref([])
+const isLoadingCRM = ref(false)
+
+const navItems = [
+  { view: 'chat', label: 'Mission Control', icon: '⚡' },
+  { view: 'clients', label: 'Client Nexus', icon: '👥' },
+  { view: 'tools', label: 'Tools Matrix', icon: '🛠️' },
+  { view: 'settings', label: 'Settings', icon: '⚙️' }
+]
+
+const currentViewTitle = computed(() => navItems.find(i => i.view === activeView.value)?.label || 'Dashboard')
+
+// ─── Settings & Quotas ───────────────────
+const configEntries = ref([])
+const configEdits = ref({})
+const revealKeys = ref({})
+const configToast = ref({ show: false, message: '', type: 'success' })
+
+const openSettings = async () => {
+  activeView.value = 'settings'
   try {
-    const res = await fetch('/sessions')
-    sessions.value = await res.json()
-  } catch (err) {
-    console.error('Failed to fetch sessions:', err)
+    const res = await fetch('/api/config')
+    const data = await res.json()
+    configEntries.value = data.configs || []
+    
+    const edits = {}
+    const reveals = {}
+    for (const entry of configEntries.value) {
+      edits[entry.key] = entry.isSet ? entry.value : ''
+      reveals[entry.key] = false
+      if (entry.key === 'QUOTA_MODE' && !edits[entry.key]) edits[entry.key] = 'FREE'
+    }
+    configEdits.value = edits
+    revealKeys.value = reveals
+  } catch (e) {}
+}
+
+const saveConfig = async () => {
+  try {
+    const updates = {}
+    for (const [k, v] of Object.entries(configEdits.value)) if (v !== '') updates[k] = v
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates })
+    })
+    if (res.ok) showToast('System Protocol Updated', 'success')
+  } catch (e) {}
+}
+
+const showToast = (message, type) => {
+  configToast.value = { show: true, message, type }
+  setTimeout(() => configToast.value.show = false, 3000)
+}
+
+// ─── Client Nexus & Client Keys ──────────
+const isAddingClient = ref(false)
+const newClient = ref({ name: '', company: '' })
+
+const isManagingClientKeys = ref(false)
+const activeClient = ref(null)
+const clientKeysList = ref([])
+const clientKeyEdits = ref({})
+
+const loadClients = async () => {
+  isLoadingCRM.value = true
+  try {
+    const res = await fetch('/api/clients')
+    const data = await res.json()
+    clients.value = data.clients || []
+  } catch (e) {
+    showToast('CRM Sync Failed', 'error')
+  } finally {
+    isLoadingCRM.value = false
   }
 }
 
-const toggleHistory = () => {
-  showHistory.value = !showHistory.value
-  if (showHistory.value) fetchSessions()
+const saveClient = async () => {
+  if (!newClient.value.name) return showToast('Entity Name required', 'error')
+  try {
+    const res = await fetch('/api/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newClient.value)
+    })
+    if (res.ok) {
+      showToast('Client Entity Registered', 'success')
+      isAddingClient.value = false
+      newClient.value = { name: '', company: '' }
+      loadClients()
+    } else {
+      showToast('Registration Error', 'error')
+    }
+  } catch (e) { showToast('Registration Error', 'error') }
 }
 
-const switchSession = (id) => {
-  sessionId.value = id
-  localStorage.setItem('nexus_session_id', id)
-  // Re-join session via socket
-  socket.emit('join_session', { sessionId: id })
-  showHistory.value = false
+const manageClientKeys = async (client) => {
+  activeClient.value = client
+  try {
+    const res = await fetch(`/api/clients/${client.id}/keys`)
+    const data = await res.json()
+    clientKeysList.value = data.keys || []
+    
+    const edits = {}
+    for (const k of clientKeysList.value) {
+      edits[k.key] = k.isSet ? k.value : ''
+    }
+    clientKeyEdits.value = edits
+  } catch(e) {}
+  isManagingClientKeys.value = true
 }
 
-const startNewMission = () => {
-  const newId = `session_${Date.now()}`
-  sessionId.value = newId
-  localStorage.setItem('nexus_session_id', newId)
-  
-  // Reset local state for fresh mission
-  chatHistory.value = [{ sender: 'nexus', text: 'Nexus OS is fully operational. What is the mission today, Boss?' }]
-  logs.value = []
-  generatedOutputs.value = []
-  
-  socket.emit('join_session', { sessionId: newId })
-  showHistory.value = false
+const saveClientKeys = async () => {
+  try {
+    const updates = {}
+    for (const [k, v] of Object.entries(clientKeyEdits.value)) if (v !== '') updates[k] = v
+    const res = await fetch(`/api/clients/${activeClient.value.id}/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates })
+    })
+    if(res.ok) {
+      showToast('Isolated Client Keys Secured', 'success')
+      isManagingClientKeys.value = false
+    } else {
+      showToast('Error saving keys', 'error')
+    }
+  } catch(e){
+    showToast('Error saving keys', 'error')
+  }
 }
+
+// ─── Tools Matrix Edit Logic ──────────────
+const loadToolsDashboard = async () => {
+  try {
+    const res = await fetch('/api/system-status')
+    const data = await res.json()
+    toolsData.value = data.integrations || []
+  } catch (e) {}
+}
+
+const isEditingTool = ref(false)
+const activeTool = ref(null)
+
+const editTool = async (tool) => {
+  activeTool.value = tool
+  try {
+    const res = await fetch('/api/config')
+    const data = await res.json()
+    const rulesKey = 'TOOL_' + tool.id.toUpperCase() + '_RULES'
+    const existing = (data.configs || []).find(c => c.key === rulesKey)
+    if(existing && existing.isSet) {
+      configEdits.value[rulesKey] = existing.value
+    } else if(!configEdits.value[rulesKey]) {
+      configEdits.value[rulesKey] = ''
+    }
+  } catch (e) {}
+  isEditingTool.value = true
+}
+
+const updateToolConfig = async () => {
+    await saveConfig()
+    isEditingTool.value = false
+    showToast(`${activeTool.value.name} Guidelines Updated`, 'success')
+}
+
+const testTool = (tool) => {
+    isEditingTool.value = false
+    activeView.value = 'chat'
+    promptInput.value = `Test the ${tool.name} capability. Run a diagnostic and provide output.`
+    submitTask()
+}
+
+// ─── Mission Control Logic ───────────────
+const selectedClientForChat = ref('')
 
 onMounted(() => {
-  // Hide splash after 3 seconds
-  setTimeout(() => {
-    showSplash.value = false
-  }, 3000)
-})
-
-const triggerFileUpload = () => {
-  fileInput.value.click()
-}
-
-const handleFileUpload = async (eventOrFiles) => {
-  let files;
-  if (eventOrFiles instanceof DragEvent) {
-    files = eventOrFiles.dataTransfer.files;
-  } else if (eventOrFiles?.target?.files) {
-    files = eventOrFiles.target.files;
-  } else {
-    files = eventOrFiles; // direct file array
-  }
+  socket.on('nexus_log', (data) => {
+    if (data.type === 'thought' || data.type === 'action') {
+      const last = chatHistory.value[chatHistory.value.length - 1]
+      if (last.sender === 'nexus_thought') last.text = data.message || `Protocol: ${data.name}`
+      else chatHistory.value.push({ sender: 'nexus_thought', text: data.message || `Protocol: ${data.name}` })
+    } else if (data.type === 'complete') {
+      chatHistory.value.push({ sender: 'nexus', text: 'Objective achieved, Boss.' })
+      isWorking.value = false
+    }
+    scrollToBottom()
+  })
   
-  const file = files[0]
-  if (!file) return
-
-  isUploading.value = true
-  const formData = new FormData()
-  formData.append('file', file)
-
-  try {
-    const response = await fetch('/upload', {
-      method: 'POST',
-      body: formData
-    })
-    
-    const text = await response.text()
-    let data;
-    try {
-      data = JSON.parse(text)
-    } catch (e) {
-      throw new Error(`Invalid server response (not JSON): ${text.substring(0, 100)}`)
-    }
-
-    if (response.ok) {
-      addChatMessage(`📎 File uploaded: **${data.originalName}**\nPath: \`${data.path}\` (You can now use this file in your mission instructions)`, 'user')
-      sendNotification('Upload Success', { body: `File ${data.originalName} is now available.` })
-    } else {
-      addChatMessage(`❌ Upload failed: ${data.error}`, 'nexus_error')
-    }
-  } catch (error) {
-    addChatMessage(`❌ Upload error: ${error.message}`, 'nexus_error')
-  } finally {
-    isUploading.value = false
-    if (eventOrFiles?.target) eventOrFiles.target.value = '' // Reset input
-  }
-}
-
-const onDragOver = (e) => {
-  e.preventDefault()
-  isDragging.value = true
-}
-
-const onDragLeave = (e) => {
-  e.preventDefault()
-  isDragging.value = false
-}
-
-const onDrop = (e) => {
-  e.preventDefault()
-  isDragging.value = false
-  handleFileUpload(e)
-}
+  loadClients()
+})
 
 const chatContainer = ref(null)
-
-const notificationPermission = ref(Notification.permission)
-
-const requestNotificationPermission = async () => {
-  if (!('Notification' in window)) return
-  const result = await Notification.requestPermission()
-  notificationPermission.value = result
-}
-
-const sendNotification = async (title, options) => {
-  if (!('serviceWorker' in navigator)) {
-    if (Notification.permission === 'granted') new Notification(title, options)
-    return
-  }
-  
-  const registration = await navigator.serviceWorker.ready
-  if (registration && Notification.permission === 'granted') {
-    registration.showNotification(title, {
-       icon: '/pwa-192x192.png',
-       badge: '/favicon.svg',
-       ...options
-    })
-  }
-}
-
-onMounted(() => {
-  // requestNotificationPermission() // (Moved to button)
-
-  socket.on('nexus_log', (data) => {
-    logs.value.push(data)
-    
-    // Automatically display agent thoughts in the chat
-    if (data.type === 'thought') {
-      const lastMsg = chatHistory.value[chatHistory.value.length - 1]
-      if (lastMsg.sender === 'nexus_thought') {
-         lastMsg.text = data.message // Update existing thought
-      } else {
-         addChatMessage(data.message, 'nexus_thought')
-      }
-    } else if (data.type === 'action') {
-      const lastMsg = chatHistory.value[chatHistory.value.length - 1]
-      if (lastMsg.sender === 'nexus_thought') {
-         lastMsg.text += `<br><span class="tool-call">🛠️ Using tool: ${data.name}</span>`
-      } else {
-         addChatMessage(`<span class="tool-call">🛠️ Using tool: ${data.name}</span>`, 'nexus_thought')
-      }
-    }
-
-    if (data.type === 'error') {
-      endTask(true)
-      addChatMessage(`❌ Error: ${data.message}`, 'nexus_error')
-    } else if (data.type === 'complete') {
-      const finalMsg = logs.value.slice().reverse().find(l => l.type === 'result')?.message || 'Task completed.'
-      addChatMessage(finalMsg, 'nexus')
-      endTask(false)
-      sendNotification('Nexus OS Task Complete', { body: 'Finished processing your request.' })
-    } else if (data.type === 'input_requested') {
-      isWaitingForInput.value = true
-      isWorking.value = false
-      taskStatusText.value = 'Waiting for input...'
-      taskStatusColor.value = '#d29922'
-      addChatMessage(`⚠️ ${data.message}`, 'nexus_warning')
-      sendNotification('Nexus OS Requires Input', { body: data.message })
-    }
-  })
-
-  socket.on('outputs_list', (data) => {
-    generatedOutputs.value = data.files || []
-  })
-  
-  socket.emit('get_outputs')
-})
-
-const scrollToBottom = async (elementRef) => {
+const scrollToBottom = async () => {
   await nextTick()
-  if (elementRef.value) {
-    elementRef.value.scrollTop = elementRef.value.scrollHeight
-  }
+  if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight
 }
 
-const addChatMessage = (text, sender) => {
-  chatHistory.value.push({ text, sender })
-  scrollToBottom(chatContainer)
-}
-
-const formatMessage = (text) => {
-  if (!text) return ''
-  
-  let formatted = text
-  
-  // 1. Handle Images: ![alt](url) or [alt](url) where url ends in image extension
-  // Match standard markdown images and standard links that look like images
-  const imageRegex = /\[([^\]]+)\]\(([^)]+\.(?:png|jpg|jpeg|webp|gif))\)/gi
-  formatted = formatted.replace(imageRegex, (match, alt, url) => {
-    return `<div class="chat-image-container">
-              <img src="${url}" alt="${alt}" class="chat-image" onclick="window.open('${url}', '_blank')" />
-              <a href="${url}" download class="download-overlay">Download Image</a>
-            </div>`
-  })
-
-  // 2. Handle other files (Standard links)
-  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g
-  formatted = formatted.replace(linkRegex, (match, alt, url) => {
-    // If it was already replaced by the image regex, skip it (simple check: does it start with <div)
-    if (url.match(/\.(?:png|jpg|jpeg|webp|gif)$/i)) return match
-    return `<a href="${url}" target="_blank" class="chat-link" download="${alt}">📄 ${alt}</a>`
-  })
-
-  formatted = formatted.replace(/\n/g, '<br>')
-  return formatted
-}
+const formatMessage = (t) => t ? t.replace(/\n/g, '<br>') : ''
 
 const submitTask = () => {
-  const prompt = promptInput.value.trim()
-  if (!prompt || isWorking.value) return
-
-  addChatMessage(prompt, 'user')
+  const p = promptInput.value.trim()
+  if (!p || isWorking.value) return
+  
+  let prefix = selectedClientForChat.value ? `[Context: Client ${clients.value.find(c=>c.id === selectedClientForChat.value)?.name}] ` : ''
+  chatHistory.value.push({ sender: 'user', text: prefix + p })
+  
   promptInput.value = ''
-
-  if (isWaitingForInput.value) {
-    isWaitingForInput.value = false
-    isWorking.value = true
-    taskStatusText.value = 'Processing...'
-    taskStatusColor.value = '#58a6ff'
-    socket.emit('user_input', { prompt })
-  } else {
-    logs.value = []
-    isWorking.value = true
-    taskStatusText.value = 'Processing...'
-    taskStatusColor.value = '#58a6ff'
-    socket.emit('start_task', { prompt })
-  }
-}
-
-const endTask = (isError) => {
-  isWorking.value = false
-  isWaitingForInput.value = false
-  taskStatusText.value = isError ? 'Error' : 'Online'
-  taskStatusColor.value = isError ? '#ff7b72' : '#3fb950'
+  isWorking.value = true
+  socket.emit('start_task', { prompt: p, clientId: selectedClientForChat.value || null })
+  scrollToBottom()
 }
 </script>
 
 <template>
-  <div 
-    class="app-container"
-    @dragover="onDragOver"
-    @dragleave="onDragLeave"
-    @drop="onDrop"
-  >
-    <!-- Drag over overlay -->
-    <div v-if="isDragging" class="dropzone-overlay">
-      <div class="dropzone-content">
-        <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
-          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"></path>
-        </svg>
-        <p>Drop to upload to Nexus OS</p>
-      </div>
-    </div>
-
-    <!-- Animated Splash Screen -->
-    <transition name="fade">
-      <div v-if="showSplash" class="splash-screen">
-        <div class="splash-content">
-          <img src="/pwa-512x512.png" alt="Nexus OS Logo" class="splash-logo" />
-          <div class="splash-loader">
-            <div class="loader-bar"></div>
-          </div>
-          <p class="splash-text">Initializing Nexus Intelligence...</p>
+  <div class="app-container obsidian-ethereal">
+    
+    <!-- Ethereal Sidebar -->
+    <aside class="sidebar-hud">
+      <div class="sidebar-head">
+        <div class="logo-wrap">
+          <div class="logo-inner">N</div>
+          <span class="logo-txt">NexusOS</span>
         </div>
       </div>
-    </transition>
 
-    <header>
-      <div class="brand">
-        <img src="/pwa-192x192.png" alt="Logo" class="header-logo" />
-        <h1>Nexus OS</h1>
-        <div class="status">
-          <span class="status-dot" :style="{ backgroundColor: taskStatusColor, boxShadow: `0 0 8px ${taskStatusColor}` }"></span> 
-          {{ taskStatusText }}
-        </div>
-      </div>
-      <div class="header-actions">
-        <button class="icon-btn history-btn" @click="toggleHistory">
-          📜 History
+      <nav class="nav-stack">
+        <button 
+          v-for="item in navItems" 
+          :key="item.view"
+          class="nav-tab"
+          :class="{ active: activeView === item.view }"
+          @click="activeView = item.view; if(item.view === 'clients') loadClients(); if(item.view === 'tools') loadToolsDashboard(); if(item.view === 'settings') openSettings()"
+        >
+          <span class="nav-icon">{{ item.icon }}</span>
+          <span class="nav-label">{{ item.label }}</span>
         </button>
-        <button v-if="notificationPermission !== 'granted'" class="icon-btn notify-btn" @click="requestNotificationPermission">
-          🔔 Enable Alerts
-        </button>
-        <button v-if="generatedOutputs.length > 0" class="icon-btn" @click="showOutputs = !showOutputs">
-          📂 Files ({{ generatedOutputs.length }})
-        </button>
-      </div>
-    </header>
+      </nav>
 
-    <!-- Mission History Sidebar -->
-    <transition name="slide">
-      <div v-if="showHistory" class="history-sidebar">
-        <div class="sidebar-header">
-          <h3>Mission History</h3>
-          <button class="close-btn" @click="showHistory = false">✕</button>
-        </div>
-        <div class="sidebar-actions">
-          <button class="new-mission-btn" @click="startNewMission">+ Start New Mission</button>
-        </div>
-        <div class="session-list">
-          <div 
-            v-for="session in sessions" 
-            :key="session.id" 
-            class="session-item"
-            :class="{ active: sessionId === session.id }"
-            @click="switchSession(session.id)"
-          >
-            <div class="session-preview">{{ session.preview }}</div>
-            <div class="session-meta">{{ new Date(session.lastUpdated).toLocaleString() }}</div>
+      <div class="sidebar-foot">
+        <div class="profile-chip">
+          <div class="chip-avatar">AD</div>
+          <div class="chip-info">
+            <span class="u-name">Administrator</span>
+            <span class="u-status"><i class="pulse-dot"></i> Online</span>
           </div>
         </div>
       </div>
-    </transition>
+    </aside>
 
-    <!-- Overlay backdrop for sidebar -->
-    <div v-if="showHistory" class="sidebar-backdrop" @click="showHistory = false"></div>
-
-    <!-- Overlay for Files -->
-    <div v-if="showOutputs" class="outputs-overlay">
-      <div class="outputs-header">
-        <h3>Generated Files</h3>
-        <button class="close-btn" @click="showOutputs = false">✕</button>
-      </div>
-      <div class="outputs-list">
-        <a v-for="file in generatedOutputs" :key="file.name" :href="file.url" target="_blank" class="output-item" download>
-          📄 {{ file.name }}
-        </a>
-      </div>
-    </div>
-
-    <!-- Main Chat Area -->
-    <main class="chat-history" ref="chatContainer" @click="showOutputs = false">
-      <div class="chat-wrapper">
-        <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-bubble-container', msg.sender]">
-          <div v-if="msg.sender.startsWith('nexus')" class="avatar nexus-avatar">N</div>
-          <div :class="['chat-bubble', msg.sender]">
-            <span v-html="formatMessage(msg.text)"></span>
-          </div>
-          <div v-if="msg.sender === 'user'" class="avatar user-avatar">U</div>
+    <main class="main-viewport">
+      <div class="ethereal-glow"></div>
+      
+      <!-- Top Breadcrumb Bridge -->
+      <header class="view-header-bridge">
+        <div class="bridge-left">
+          <span class="b-root">Dashboard</span>
+          <span class="b-sep">/</span>
+          <span class="b-cur">{{ currentViewTitle }}</span>
         </div>
-        <div v-show="isWorking" class="chat-bubble-container nexus_thought">
-          <div class="avatar nexus-avatar">N</div>
-          <div class="chat-bubble nexus_thought typing-indicator">
-            Thinking<span>.</span><span>.</span><span>.</span>
+        <div class="bridge-right">
+          <span class="b-admin">admin@nexus.os</span>
+          <div class="telemetry-box" v-if="activeView === 'chat'">
+            <span class="t-label">SESSION</span>
+            <span class="t-val">ACTIVE</span>
           </div>
+          <button v-if="activeView === 'clients'" class="action-btn-pro" @click="isAddingClient = true">+ New Client Entity</button>
+          <button v-else class="action-btn-pro" @click="activeView = 'chat'">+ New Orchestration</button>
         </div>
+      </header>
+
+      <div class="viewport-canvas">
+        <transition name="portal-fade" mode="out-in">
+          <div :key="activeView" class="portal-root">
+            
+            <!-- Headings -->
+            <div class="portal-intro">
+              <h1>{{ currentViewTitle }}</h1>
+              <p class="intro-sub">Normal Text Architecture</p>
+              
+              <!-- Top-Right Metric HUD -->
+              <div class="metric-hud" v-if="activeView === 'clients'">
+                <span class="m-val">{{ clients.length }}</span>
+                <span class="m-label">Entities</span>
+              </div>
+              <div class="metric-hud" v-else-if="activeView === 'tools'">
+                <span class="m-val">{{ toolsData.length }}</span>
+                <span class="m-label">Capabilities</span>
+              </div>
+            </div>
+
+            <!-- Ethereal Portals (Grids) -->
+            <div v-if="activeView === 'clients' || activeView === 'tools'" class="ethereal-grid">
+              
+              <!-- List iteration logic -->
+              <div v-for="(item, idx) in (activeView === 'clients' ? clients : toolsData)" :key="item.id" class="ethereal-card">
+                <div class="e-card-head">
+                  <h3>{{ item.name }}</h3>
+                  <div class="capsule-stack">
+                    <div class="capsule idle">{{ activeView === 'clients' ? 'Idle' : (item.status === 'active' ? 'Active' : 'Offline') }}</div>
+                    
+                    <button v-if="activeView === 'tools'" class="capsule edit" @click="editTool(item)">Configure</button>
+                    <!-- Client Keys Config Button -->
+                    <button v-else class="capsule edit" @click="manageClientKeys(item)">Keys</button>
+                  </div>
+                </div>
+                
+                <div class="e-card-body">
+                  <p>{{ activeView === 'clients' ? item.email : item.description }}</p>
+                  <p v-if="activeView === 'clients'" class="e-subtxt">{{ item.company }}</p>
+                </div>
+                
+                <div class="e-card-foot">
+                  <span class="e-date">Updated Recently</span>
+                  <button v-if="activeView === 'clients'" @click="activeView = 'chat'; selectedClientForChat = item.id" class="e-link-btn">Init Mission Context →</button>
+                  <a v-else href="#" class="e-link" @click.prevent="testTool(item)">Run Test Diagnostic →</a>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Mission Control (Ethereal Chat) -->
+            <div v-if="activeView === 'chat'" class="ethereal-chat-portal">
+              
+              <div class="context-toolbar" v-if="clients.length > 0">
+                <span class="ctx-label">Execution Context:</span>
+                <select v-model="selectedClientForChat" class="pro-ctx-select">
+                  <option value="">System Default</option>
+                  <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select>
+              </div>
+
+              <div class="chat-viewport-pro" ref="chatContainer">
+                <div class="chat-stream-pro">
+                  <div v-for="(msg, idx) in chatHistory" :key="idx" class="pro-msg-row" :class="msg.sender">
+                    <div class="pro-bubble" :class="msg.sender">
+                      <div class="pro-meta">{{ msg.sender.startsWith('nexus') ? 'NEXUS.OS' : 'COMMAND' }}</div>
+                      <div class="pro-text" v-html="formatMessage(msg.text)"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="input-bridge-pro">
+                <div class="bridge-inner">
+                  <textarea v-model="promptInput" @keydown.enter.prevent="submitTask" placeholder="Enter high-level objective..."></textarea>
+                  <button class="pro-fire-btn" @click="submitTask" :disabled="isWorking">
+                    <span>🚀</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Settings (Ethereal Style) -->
+            <div v-if="activeView === 'settings'" class="settings-ethereal-wrap">
+              <div class="settings-card-pro">
+                <div v-for="e in configEntries" :key="e.key" class="pro-field">
+                  
+                  <template v-if="e.key === 'QUOTA_MODE'">
+                    <label>System Performance Tier</label>
+                    <div class="quota-group">
+                      <label class="q-opt" :class="{active: configEdits[e.key] === 'FREE'}">
+                        <input type="radio" value="FREE" v-model="configEdits[e.key]"> Free (Throttled)
+                      </label>
+                      <label class="q-opt" :class="{active: configEdits[e.key] === 'NORMAL'}">
+                        <input type="radio" value="NORMAL" v-model="configEdits[e.key]"> Normal (Standard)
+                      </label>
+                      <label class="q-opt" :class="{active: configEdits[e.key] === 'HIGH'}">
+                        <input type="radio" value="HIGH" v-model="configEdits[e.key]"> High (Premium Tier)
+                      </label>
+                    </div>
+                  </template>
+
+                  <template v-else>
+                    <label>{{ e.label }}</label>
+                    <div class="pro-input-wrap">
+                      <input :type="revealKeys[e.key] ? 'text' : 'password'" v-model="configEdits[e.key]" :placeholder="e.isSet ? '•••••••• (Configured)' : 'Unconfigured'">
+                      <button class="eye-toggle" @click.prevent="revealKeys[e.key] = !revealKeys[e.key]" title="Toggle Visibility">
+                        {{ revealKeys[e.key] ? '🙈' : '👁️' }}
+                      </button>
+                    </div>
+                  </template>
+
+                </div>
+                <button class="pro-save-btn" @click="saveConfig">Apply System Protocol</button>
+              </div>
+            </div>
+
+          </div>
+        </transition>
       </div>
     </main>
 
-    <!-- Input Area -->
-    <footer class="input-area">
-      <div class="input-container">
-        <input 
-          type="file" 
-          ref="fileInput" 
-          style="display: none" 
-          @change="handleFileUpload"
-        />
-        <button 
-          class="upload-btn" 
-          @click="triggerFileUpload" 
-          :disabled="isWorking || isUploading"
-          title="Upload file"
-        >
-          <svg v-if="!isUploading" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M16.5 6c-2.48 0-4.5 2.02-4.5 4.5v7c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5v-7c0-.55-.45-1-1-1s-1 .45-1 1v7h-1.5v-7c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v7c0 2.21-1.79 4-4 4s-4-1.79-4-4v-7c0-3.31 2.69-6 6-6s6 2.69 6 6v10.5h-1.5V10.5c0-2.48-2.02-4.5-4.5-4.5z"></path>
-          </svg>
-          <div v-else class="upload-loader"></div>
-        </button>
-        <textarea 
-          v-model="promptInput" 
-          @keydown.enter.prevent="submitTask"
-          :placeholder="isWaitingForInput ? 'Provide the requested info...' : 'Message Nexus OS...'"
-          :disabled="isWorking"
-          rows="1"
-        ></textarea>
-        <button @click="submitTask" :disabled="isWorking || !promptInput.trim()" class="send-btn">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
-          </svg>
-        </button>
+    <!-- Add Client Ethereal Modal -->
+    <transition name="modal-fade">
+      <div v-if="isAddingClient" class="ethereal-modal-overlay" @click.self="isAddingClient = false">
+        <div class="ethereal-modal-content">
+          <h3>Register Client Entity</h3>
+          <p class="m-sub">Initialize a new isolated operational context.</p>
+          
+          <div class="m-field">
+            <label>Entity Name</label>
+            <input v-model="newClient.name" placeholder="e.g. Acme Corp" class="pro-input">
+          </div>
+          <div class="m-field">
+            <label>Organization</label>
+            <input v-model="newClient.company" placeholder="e.g. Acme Enterprises" class="pro-input">
+          </div>
+          
+          <div class="modal-actions">
+            <button class="capsule edit" @click="isAddingClient = false">Abort</button>
+            <button class="capsule idle fill" @click="saveClient">Register Entity</button>
+          </div>
+        </div>
       </div>
-    </footer>
+    </transition>
+    
+    <!-- Client API Keys Modal -->
+    <transition name="modal-fade">
+      <div v-if="isManagingClientKeys && activeClient" class="ethereal-modal-overlay" @click.self="isManagingClientKeys = false">
+        <div class="ethereal-modal-content keys-modal">
+          <h3>Isolated Keys: {{ activeClient.name }}</h3>
+          <p class="m-sub">Configure dedicated API connections (Gemini, Meta, Brave, etc.) to isolate billing and margins per client.</p>
+          
+          <div class="scroll-keys">
+             <div v-for="k in clientKeysList" :key="k.key" class="m-field-compact">
+                <label>{{ k.label }}</label>
+                <input type="password" v-model="clientKeyEdits[k.key]" :placeholder="k.isSet ? '•••••••• (Linked)' : 'Unconfigured'" class="pro-input compact-input">
+             </div>
+          </div>
+          
+          <div class="modal-actions">
+            <button class="capsule edit" @click="isManagingClientKeys = false">Close</button>
+            <button class="capsule idle fill" @click="saveClientKeys">Save Keys</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Configure Tool Ethereal Modal -->
+    <transition name="modal-fade">
+      <div v-if="isEditingTool && activeTool" class="ethereal-modal-overlay" @click.self="isEditingTool = false">
+        <div class="ethereal-modal-content">
+          <h3>Configure Capability: {{ activeTool.name }}</h3>
+          <p class="m-sub">{{ activeTool.description }}</p>
+          
+          <div class="m-field">
+            <label>Provider Setup Status</label>
+            <div>
+              <span class="status-indicator-pro" :class="activeTool.status">
+                {{ activeTool.status === 'active' ? 'Operational' : 'Missing Credentials' }}
+              </span>
+            </div>
+            <p class="guide-txt">{{ activeTool.howToGet }} • Setup via {{ activeTool.addVia }}</p>
+          </div>
+
+          <div class="m-field">
+            <label>Custom Instructions / Operational Rules</label>
+            <textarea v-model="configEdits['TOOL_' + activeTool.id.toUpperCase() + '_RULES']" placeholder="e.g., Always format output strictly as JSON..." class="pro-textarea"></textarea>
+          </div>
+          
+          <div class="modal-actions">
+            <button class="capsule edit" @click="testTool(activeTool)">Initiate Diagnostic Test</button>
+            <button class="capsule idle fill" @click="updateToolConfig">Deploy Configuration</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+  </div>
+
+  <div v-if="configToast.show" class="ethereal-toast" :class="configToast.type">
+    {{ configToast.message }}
   </div>
 </template>
 
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@800;900&display=swap');
 
 :root {
-  --bg-color: #0b0f19;
-  --panel-bg: rgba(22, 27, 34, 0.8);
-  --border-color: rgba(255, 255, 255, 0.1);
-  --text-main: #e2e8f0;
-  --text-muted: #94a3b8;
-  --accent-primary: #58a6ff;
-  --user-bg: #1e3a8a;
-  --nexus-bg: #1e293b;
-  --input-bg: #0f172a;
+  /* Obsidian Ethereal Palette */
+  --eth-bg: #0d1117;
+  --eth-sidebar: #010409;
+  --eth-glass: rgba(13, 17, 23, 0.4);
+  --eth-border: rgba(99, 102, 241, 0.12);
+  --eth-glow: #221545;
+  
+  --p-midnight: #2c3e50;
+  --p-indigo: #6366f1;
+  --p-carrot: #f39c12;
+  --p-red: #e74c3c;
+  
+  --text-pure: #ffffff;
+  --text-dim: #94a3b8;
+  --text-muted: #484f58;
+  
+  --sidebar-w: 240px;
+  --header-h: 60px;
+  --glass-blur: blur(50px) saturate(240%);
+  --anim-fluid: all 0.5s cubic-bezier(0.19, 1, 0.22, 1);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
   font-family: 'Inter', sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-main);
-  overscroll-behavior-y: none;
-}
-
-.app-container {
-  height: 100vh;
-  height: 100dvh; /* For mobile browsers */
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-/* Splash Screen */
-.splash-screen {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg-color);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.splash-content {
-  text-align: center;
-}
-
-.splash-logo {
-  width: 180px;
-  height: 180px;
-  object-fit: contain;
-  margin-bottom: 2.5rem;
-  animation: logoPulse 2s infinite ease-in-out;
-  border-radius: 40px;
-}
-
-.splash-loader {
-  width: 240px;
-  height: 4px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 2px;
-  margin: 0 auto 1.5rem;
+  background-color: var(--eth-bg);
+  color: var(--text-pure);
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
-.loader-bar {
-  width: 0%;
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent-primary), #a371f7);
-  animation: loadProgress 2.5s ease-out forwards;
+.app-container { display: flex; height: 100vh; width: 100vw; }
+
+.sidebar-hud { width: var(--sidebar-w); background: var(--eth-sidebar); border-right: 1px solid var(--eth-border); display: flex; flex-direction: column; z-index: 1000; }
+.sidebar-head { height: var(--header-h); padding: 0 1.5rem; display: flex; align-items: center; }
+.logo-wrap { display: flex; align-items: center; gap: 0.85rem; }
+.logo-inner { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--p-indigo), var(--p-red)); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 0.9rem; font-family: 'Outfit', sans-serif; }
+.logo-txt { font-family: 'Outfit', sans-serif; font-weight: 900; font-size: 1.25rem; }
+.nav-stack { flex: 1; padding: 1.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.nav-tab { background: transparent; border: none; padding: 0.85rem 1rem; border-radius: 8px; color: var(--text-dim); cursor: pointer; display: flex; align-items: center; gap: 1rem; font-weight: 600; font-size: 0.9rem; transition: var(--anim-fluid); }
+.nav-tab:hover { background: rgba(255,255,255,0.02); color: white; }
+.nav-tab.active { background: rgba(99, 102, 241, 0.08); color: white; }
+.sidebar-foot { padding: 1.25rem; border-top: 1px solid var(--eth-border); }
+.profile-chip { display: flex; align-items: center; gap: 0.85rem; }
+.chip-avatar { width: 34px; height: 34px; border-radius: 50%; background: #1f2937; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 850; color: var(--p-indigo); border: 1px solid rgba(99,102,241,0.2); }
+.u-name { display: block; font-size: 0.85rem; font-weight: 750; }
+.u-status { font-size: 0.7rem; color: #10b981; font-weight: 600; display: flex; align-items: center; gap: 0.35rem; }
+.pulse-dot { width: 5px; height: 5px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; }
+
+.main-viewport { flex: 1; display: flex; flex-direction: column; background: var(--eth-bg); position: relative; overflow: hidden; }
+.ethereal-glow { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle at 12% 12%, var(--eth-glow) 0%, transparent 60%); opacity: 0.45; pointer-events: none; z-index: 1; }
+
+.view-header-bridge { height: var(--header-h); padding: 0 2.5rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--eth-border); z-index: 10; }
+.bridge-left { display: flex; gap: 0.75rem; font-size: 0.85rem; color: var(--text-dim); font-weight: 600; }
+.b-cur { color: white; }
+.bridge-right { display: flex; align-items: center; gap: 1.5rem; }
+.b-admin { font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+.telemetry-box { display: flex; align-items: center; gap: 0.5rem; background: rgba(16, 185, 129, 0.05); padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.15); }
+.t-label { font-size: 0.65rem; font-weight: 900; color: #10b981; opacity: 0.6; }
+.t-val { font-size: 0.7rem; font-weight: 900; color: #10b981; }
+
+.action-btn-pro { background: var(--p-indigo); color: white; border: none; padding: 0.6rem 1.25rem; border-radius: 8px; font-weight: 800; font-size: 0.85rem; cursor: pointer; transition: 0.3s; box-shadow: 0 8px 20px rgba(99, 102, 241, 0.2); }
+.action-btn-pro:hover { transform: translateY(-2px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.3); }
+
+.viewport-canvas { flex: 1; overflow-y: auto; padding: 3rem 4rem; z-index: 5; position: relative; }
+.portal-intro { margin-bottom: 3rem; position: relative; }
+.portal-intro h1 { font-family: 'Outfit', sans-serif; font-size: 2.2rem; font-weight: 900; margin-bottom: 0.5rem; letter-spacing: -1px; }
+.intro-sub { font-size: 1rem; color: var(--text-dim); }
+
+.metric-hud { position: absolute; right: 0; top: 0; background: var(--eth-glass); border: 1px solid var(--eth-border); padding: 1rem 1.75rem; border-radius: 12px; backdrop-filter: var(--glass-fx); display: flex; flex-direction: column; align-items: center; min-width: 90px; }
+.m-val { font-family: 'Outfit', sans-serif; font-size: 1.8rem; font-weight: 900; line-height: 1; }
+.m-label { font-size: 0.75rem; font-weight: 700; color: var(--text-dim); margin-top: 0.25rem; }
+
+.ethereal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1.5rem; }
+.ethereal-card { background: var(--eth-glass); border: 1px solid var(--eth-border); border-radius: 16px; padding: 2.5rem; backdrop-filter: var(--glass-fx); transition: var(--anim-fluid); display: flex; flex-direction: column; gap: 1.25rem; }
+.ethereal-card:hover { transform: translateY(-8px); border-color: rgba(99, 102, 241, 0.3); box-shadow: 0 40px 100px rgba(0,0,0,0.4); }
+
+.e-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.e-card-head h3 { font-size: 1.3rem; font-weight: 850; line-height: 1.2; }
+.capsule-stack { display: flex; gap: 0.5rem; }
+.capsule { padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.75rem; font-weight: 800; border: none; cursor: default; }
+.capsule.idle { background: rgba(139, 92, 246, 0.1); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.2); }
+.capsule.edit { background: rgba(255,255,255,0.03); color: var(--text-dim); border: 1px solid var(--eth-border); cursor: pointer; transition: 0.2s; }
+.capsule.edit:hover { background: rgba(255,255,255,0.08); color: white; }
+.capsule.idle.fill { background: var(--p-indigo); color: white; border-color: var(--p-indigo); cursor: pointer; }
+.capsule.idle.fill:hover { opacity: 0.9; }
+
+.e-card-body p { font-size: 1rem; line-height: 1.6; color: var(--text-dim); }
+.e-subtxt { font-size: 0.9rem; color: var(--text-muted); margin-top: 0.5rem; }
+
+.e-card-foot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; font-weight: 600; border-top: 1px solid var(--eth-border); padding-top: 1.25rem; }
+.e-date { font-size: 0.85rem; color: var(--text-muted); }
+.e-link { color: var(--p-indigo); text-decoration: none; font-size: 0.9rem; transition: 0.2s; }
+.e-link:hover { text-decoration: underline; }
+.e-link-btn { background: none; border: none; color: var(--p-indigo); cursor: pointer; font-size: 0.9rem; font-weight: 600; font-family: 'Inter', sans-serif;}
+.e-link-btn:hover { text-decoration: underline; }
+
+/* Mission Control Context Toolbar */
+.context-toolbar { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; background: rgba(99,102,241,0.05); padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid rgba(99,102,241,0.1); }
+.ctx-label { font-size: 0.8rem; color: var(--p-indigo); font-weight: 700; text-transform: uppercase; }
+.pro-ctx-select { background: #010409; border: 1px solid var(--eth-border); color: white; padding: 0.4rem 0.75rem; border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 0.85rem; outline: none; cursor: pointer;}
+.pro-ctx-select:focus { border-color: var(--p-indigo); }
+
+.ethereal-chat-portal { height: 70vh; display: flex; flex-direction: column; gap: 1rem; }
+.chat-viewport-pro { flex: 1; overflow-y: auto; padding-right: 1.5rem; }
+.chat-stream-pro { display: flex; flex-direction: column; gap: 2rem; }
+.pro-msg-row { display: flex; }
+.pro-msg-row.user { justify-content: flex-end; }
+.pro-bubble { max-width: 80%; padding: 1.5rem 2rem; border-radius: 12px; background: var(--eth-glass); border: 1px solid var(--eth-border); line-height: 1.7; font-size: 1.05rem; }
+.pro-bubble.nexus, .pro-bubble.nexus_thought { border-left: 3px solid var(--p-indigo); }
+.pro-bubble.user { border-right: 3px solid var(--p-indigo); background: rgba(99, 102, 241, 0.05); }
+.pro-meta { font-family: 'Outfit', sans-serif; font-size: 0.75rem; font-weight: 900; margin-bottom: 0.5rem; opacity: 0.5; color: var(--p-indigo); }
+
+.input-bridge-pro { background: var(--eth-sidebar); border: 1px solid var(--eth-border); border-radius: 16px; padding: 1rem 1.5rem; margin-top: 1rem; }
+.bridge-inner { display: flex; align-items: center; gap: 1.5rem; }
+textarea { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; resize: none; height: 24px; font-weight: 500; }
+.pro-fire-btn { width: 44px; height: 44px; border-radius: 10px; background: var(--p-indigo); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.3s; }
+.pro-fire-btn:hover { background: #4f46e5; transform: scale(1.05); }
+
+/* Settings */
+.settings-ethereal-wrap { max-width: 650px; }
+.settings-card-pro { background: var(--eth-glass); border: 1px solid var(--eth-border); border-radius: 20px; padding: 3rem; backdrop-filter: var(--glass-fx); }
+.pro-field { margin-bottom: 2rem; }
+.pro-field label { display: block; font-size: 0.85rem; font-weight: 800; color: var(--text-dim); margin-bottom: 0.85rem; }
+
+.pro-input-wrap { position: relative; display: flex; align-items: center; }
+.pro-input-wrap input { width: 100%; background: #010409; border: 1px solid var(--eth-border); border-radius: 10px; padding: 1rem 3rem 1rem 1.5rem; color: white; font-weight: 600; transition: 0.3s; }
+.pro-input-wrap input:focus { border-color: var(--p-indigo); }
+.eye-toggle { position: absolute; right: 1rem; background: none; border: none; font-size: 1.2rem; cursor: pointer; opacity: 0.6; transition: 0.2s; }
+.eye-toggle:hover { opacity: 1; }
+
+.quota-group { display: flex; gap: 1rem; background: #010409; padding: 0.5rem; border-radius: 10px; border: 1px solid var(--eth-border); }
+.q-opt { flex: 1; text-align: center; padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; font-weight: 700; color: var(--text-dim); cursor: pointer; transition: 0.3s; border: 1px solid transparent; }
+.q-opt input { display: none; }
+.q-opt.active { background: rgba(99,102,241,0.1); color: var(--p-indigo); border-color: rgba(99,102,241,0.3); }
+
+.pro-save-btn { width: 100%; padding: 1.25rem; border-radius: 12px; background: var(--p-indigo); color: white; border: none; font-weight: 900; cursor: pointer; transition: 0.3s; }
+
+/* Modals */
+.ethereal-modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.ethereal-modal-content { background: var(--eth-sidebar); border: 1px solid var(--p-indigo); border-radius: 16px; padding: 3rem; width: 90%; max-width: 500px; box-shadow: 0 40px 100px rgba(0,0,0,0.8); }
+.ethereal-modal-content h3 { font-family: 'Outfit', sans-serif; font-size: 1.6rem; font-weight: 900; margin-bottom: 0.25rem; }
+.m-sub { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 2rem; line-height: 1.4; }
+.m-field { margin-bottom: 1.5rem; }
+.m-field label { display: block; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.5rem; }
+.m-field-compact { margin-bottom: 0.75rem; }
+.m-field-compact label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.25rem; }
+.compact-input { padding: 0.6rem 1rem !important; font-size: 0.85rem; }
+.pro-input { width: 100%; background: #0d1117; border: 1px solid var(--eth-border); padding: 0.85rem 1.25rem; border-radius: 8px; color: white; outline: none; font-family: 'Inter', sans-serif;}
+.pro-input:focus { border-color: var(--p-indigo); }
+
+.keys-modal { max-height: 90vh; display: flex; flex-direction: column; }
+.scroll-keys { overflow-y: auto; flex: 1; padding-right: 1rem; margin-bottom: 1rem; }
+.scroll-keys::-webkit-scrollbar { width: 6px; }
+.scroll-keys::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.3); border-radius: 4px; }
+
+.pro-textarea { width: 100%; background: #0d1117; border: 1px solid var(--eth-border); padding: 0.85rem 1.25rem; border-radius: 8px; color: white; outline: none; font-family: 'Inter', sans-serif; resize: vertical; min-height: 80px; }
+.pro-textarea:focus { border-color: var(--p-indigo); }
+.status-indicator-pro { padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem; font-weight: 700; display: inline-block; margin-bottom: 0.5rem; }
+.status-indicator-pro.active { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
+.status-indicator-pro.missing { background: rgba(231, 76, 60, 0.1); color: var(--p-red); border: 1px solid rgba(231, 76, 60, 0.2); }
+.guide-txt { font-size: 0.75rem; color: var(--text-dim); line-height: 1.5; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 2.5rem; }
+
+.ethereal-toast { position: fixed; bottom: 3rem; right: 3rem; background: var(--eth-sidebar); border: 1px solid var(--p-indigo); color: white; padding: 1.25rem 2.5rem; border-radius: 12px; font-weight: 800; box-shadow: 0 20px 50px rgba(0,0,0,0.6); z-index: 10000; }
+
+@media (max-width: 768px) {
+  .sidebar-hud { display: none; }
+  .main-viewport { width: 100vw; }
+  .viewport-canvas { padding: 2rem; }
+  .ethereal-grid { grid-template-columns: 1fr; }
+  .metric-hud { position: static; margin-bottom: 2rem; width: 100%; }
+  .quota-group { flex-direction: column; }
 }
 
-.splash-text {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  font-weight: 500;
-}
-
-@keyframes logoPulse {
-  0% { transform: scale(1); filter: drop-shadow(0 0 0px var(--accent-primary)); }
-  50% { transform: scale(1.05); filter: drop-shadow(0 0 30px rgba(88, 166, 255, 0.4)); }
-  100% { transform: scale(1); filter: drop-shadow(0 0 0px var(--accent-primary)); }
-}
-
-@keyframes loadProgress {
-  0% { width: 0; }
-  100% { width: 100%; }
-}
-
-.fade-leave-active { transition: opacity 0.8s ease; }
-.fade-leave-to { opacity: 0; }
-
-/* Dropzone Overlay */
-.dropzone-overlay {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(88, 166, 255, 0.1);
-  backdrop-filter: blur(8px);
-  border: 2px dashed var(--accent-primary);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  animation: fadeIn 0.2s ease-out;
-}
-
-.dropzone-content {
-  text-align: center;
-  color: var(--accent-primary);
-}
-
-.dropzone-content p {
-  margin-top: 1rem;
-  font-weight: 600;
-  font-size: 1.2rem;
-}
-
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-.brand { display: flex; align-items: center; }
-
-.header-logo {
-  height: 32px;
-  width: 32px;
-  margin-right: 12px;
-  border-radius: 8px;
-  animation: miniPulse 4s infinite ease-in-out;
-}
-
-@keyframes miniPulse {
-  0%, 100% { transform: scale(1); filter: brightness(1); }
-  50% { transform: scale(1.1); filter: brightness(1.2) drop-shadow(0 0 5px var(--accent-primary)); }
-}
-
-/* Status */
-header {
-  padding: 1rem;
-  background: var(--panel-bg);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  z-index: 10;
-}
-
-.brand h1 {
-  font-family: 'Outfit', sans-serif;
-  font-size: 1.4rem;
-  background: linear-gradient(90deg, #58a6ff, #a371f7);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.status {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  margin-top: 4px;
-}
-
-.status-dot {
-  height: 8px; width: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-  transition: background-color 0.3s;
-}
-
-.icon-btn {
-  background: rgba(88, 166, 255, 0.15);
-  border: 1px solid rgba(88, 166, 255, 0.3);
-  color: var(--accent-primary);
-  padding: 0.5rem 0.8rem;
-  border-radius: 20px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-/* Outputs Overlay */
-.outputs-overlay {
-  position: absolute;
-  top: 70px; right: 10px;
-  width: 300px; max-width: 90vw;
-  background: var(--panel-bg);
-  backdrop-filter: blur(15px);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  max-height: 50vh;
-}
-
-.outputs-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.close-btn { background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; }
-
-.outputs-list {
-  padding: 1rem;
-  overflow-y: auto;
-  display: flex; flexDirection: column; gap: 0.5rem;
-}
-
-.output-item {
-  color: var(--text-main);
-  text-decoration: none;
-  padding: 0.8rem;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
-  font-size: 0.9rem;
-  display: flex; align-items: center;
-}
-
-/* Chat Area */
-.chat-history {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem 1rem;
-  scroll-behavior: smooth;
-  display: flex;
-  justify-content: center;
-}
-
-.chat-wrapper {
-  width: 100%;
-  max-width: 800px;
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
-}
-
-.chat-bubble-container {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.6rem;
-  width: 100%;
-}
-
-.chat-bubble-container.user { justify-content: flex-end; }
-.chat-bubble-container.nexus, .chat-bubble-container.nexus_thought, .chat-bubble-container.nexus_warning, .chat-bubble-container.nexus_error { justify-content: flex-start; }
-
-.avatar {
-  width: 30px; height: 30px;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 0.8rem; font-weight: bold; flex-shrink: 0;
-}
-.nexus-avatar { background: linear-gradient(135deg, #1e3a8a, #a371f7); color: white; }
-.user-avatar { background: #334155; color: white; }
-
-.chat-bubble {
-  max-width: 85%;
-  padding: 0.8rem 1.2rem;
-  border-radius: 18px;
-  font-size: 0.95rem;
-  line-height: 1.5;
-  word-wrap: break-word;
-  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.chat-bubble.user { background: var(--user-bg); border-bottom-right-radius: 4px; }
-.chat-bubble.nexus { background: var(--nexus-bg); border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.05); }
-.chat-bubble.nexus_thought { background: transparent; color: var(--text-muted); font-size: 0.85rem; padding: 0.5rem 0; border: none; }
-.chat-bubble.nexus_warning { background: rgba(210, 153, 34, 0.15); border: 1px solid #d29922; color: #ebd197; border-bottom-left-radius: 4px; }
-.chat-bubble.nexus_error { background: rgba(255, 123, 114, 0.15); border: 1px solid #ff7b72; color: #ff7b72; border-bottom-left-radius: 4px; }
-
-.tool-call { color: #a371f7; font-family: monospace; font-size: 0.8rem; }
-.chat-link { 
-  color: var(--accent-primary); 
-  text-decoration: none; 
-  background: rgba(88, 166, 255, 0.1);
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid rgba(88, 166, 255, 0.2);
-  display: inline-block;
-  margin-top: 5px;
-}
-
-.chat-image-container {
-  margin-top: 10px;
-  position: relative;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid var(--border-color);
-  background: #000;
-  max-width: 100%;
-}
-
-.chat-image {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-
-.chat-image:hover { opacity: 0.9; }
-
-.download-overlay {
-  position: absolute;
-  bottom: 8px; right: 8px;
-  background: rgba(0,0,0,0.7);
-  color: white;
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  text-decoration: none;
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255,255,255,0.2);
-}
-
-/* Input Area */
-.input-area {
-  padding: 1rem;
-  background: var(--bg-color);
-  display: flex;
-  justify-content: center;
-}
-
-.input-container {
-  width: 100%;
-  max-width: 800px;
-  display: flex;
-  background: var(--input-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 24px;
-  padding: 0.5rem 1rem;
-  align-items: center;
-  transition: border-color 0.2s;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-}
-
-.input-container:focus-within { border-color: var(--accent-primary); }
-
-textarea {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: var(--text-main);
-  font-family: inherit;
-  font-size: 1rem;
-  resize: none;
-  height: 40px;
-  line-height: 40px;
-  outline: none;
-}
-
-.send-btn {
-  background: var(--accent-primary);
-  border: none;
-  border-radius: 50%;
-  width: 36px; height: 36px;
-  display: flex; align-items: center; justify-content: center;
-  color: white;
-  cursor: pointer;
-  transition: transform 0.2s;
-}
-
-.send-btn:hover:not(:disabled) { transform: scale(1.05); }
-.send-btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
-
-.upload-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.2s;
-}
-
-.upload-btn:hover:not(:disabled) { color: var(--accent-primary); }
-.upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.upload-loader {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--text-muted);
-  border-top-color: var(--accent-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.typing-indicator span { animation: blink 1.4s infinite both; }
-.typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes blink { 0% { opacity: 0.2; } 20% { opacity: 1; } 100% { opacity: 0.2; } }
-
-/* History Sidebar */
-.history-sidebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 320px;
-  height: 100%;
-  background: var(--card-bg);
-  border-right: 1px solid var(--border-color);
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 10px 0 30px rgba(0,0,0,0.5);
-}
-
-.sidebar-header {
-  padding: 1.5rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.sidebar-actions {
-  padding: 1rem;
-}
-
-.new-mission-btn {
-  width: 100%;
-  padding: 0.8rem;
-  background: var(--accent-primary);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: opacity 0.2s;
-}
-
-.new-mission-btn:hover { opacity: 0.9; }
-
-.session-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
-}
-
-.session-item {
-  padding: 1rem;
-  margin-bottom: 0.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid transparent;
-  transition: all 0.2s;
-}
-
-.session-item:hover {
-  background: rgba(255,255,255,0.07);
-  border-color: var(--border-color);
-}
-
-.session-item.active {
-  background: rgba(88, 166, 255, 0.1);
-  border-color: var(--accent-primary);
-}
-
-.session-preview {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-main);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 0.25rem;
-}
-
-.session-meta {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.sidebar-backdrop {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(2px);
-  z-index: 999;
-}
-
-.slide-enter-active, .slide-leave-active {
-  transition: transform 0.3s ease;
-}
-
-.slide-enter-from, .slide-leave-to {
-  transform: translateX(-100%);
-}
+.portal-fade-enter-active, .portal-fade-leave-active { transition: all 0.4s ease; }
+.portal-fade-enter-from { opacity: 0; transform: translateY(15px); }
+.portal-fade-leave-to { opacity: 0; transform: translateY(-15px); }
+.modal-fade-enter-active, .modal-fade-leave-active { transition: opacity 0.3s cubic-bezier(0.19, 1, 0.22, 1); }
+.modal-fade-enter-from, .modal-fade-leave-to { opacity: 0; }
 </style>

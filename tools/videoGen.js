@@ -1,13 +1,19 @@
+const ConfigService = require('../core/config');
 const ffmpegPath = require('ffmpeg-static');
 const { spawnSync } = require('child_process');
 const path = require('path');
 const Replicate = require('replicate');
 
 class VideoGenTool {
-    constructor() {
-        this.replicate = process.env.REPLICATE_API_TOKEN 
-            ? new Replicate({ auth: process.env.REPLICATE_API_TOKEN })
-            : null;
+    constructor() {}
+
+    /**
+     * Get an initialized Replicate client with the latest API token.
+     */
+    async _getReplicate() {
+        const token = await ConfigService.get('REPLICATE_API_TOKEN');
+        if (!token) return null;
+        return new Replicate({ auth: token });
     }
 
     /**
@@ -42,8 +48,9 @@ class VideoGenTool {
      * AI GENERATIVE: Generate video from a text prompt using Replicate.
      */
     async generateFromPrompt(prompt, outputPath) {
-        if (!this.replicate) {
-            return { error: "REPLICATE_API_TOKEN not set in environment. Use local imageToVideo instead." };
+        const replicate = await this._getReplicate();
+        if (!replicate) {
+            return { error: "REPLICATE_API_TOKEN not set in Firestore. Use local imageToVideo instead." };
         }
 
         console.log(`[VideoGen] Generating video from prompt: "${prompt}"`);
@@ -64,7 +71,7 @@ class VideoGenTool {
             }
             
             console.log(`[VideoGen] Using model version: ${versionHash}`);
-            const output = await this.replicate.run(
+            const output = await replicate.run(
                 `anotherjesse/zeroscope-v2-xl:${versionHash}`,
                 { input: { prompt: prompt, num_frames: 24 } }
             );
@@ -96,7 +103,9 @@ class VideoGenTool {
         console.log(`[VideoGen] Initiating Google Veo generation: "${prompt}" ${imagePath ? '(Image-to-Video)' : '(Text-to-Video)'}`);
         try {
             const { GoogleGenAI } = require('@google/genai');
-            const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            const apiKey = await ConfigService.get('GEMINI_API_KEY');
+            if (!apiKey) throw new Error("GEMINI_API_KEY missing in Firestore");
+            const genAI = new GoogleGenAI({ apiKey });
             
             // In 2026, Veo 3.1 is the latest cinematic model
             const model = genAI.getGenerativeModel({ model: "veo-3.1-generate-001" });

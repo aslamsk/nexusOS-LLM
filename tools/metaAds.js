@@ -1,3 +1,5 @@
+const ConfigService = require('../core/config');
+const { db } = require('../core/firebase');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -8,11 +10,6 @@ const path = require('path');
  */
 class MetaAdsTool {
     constructor() {
-        this.accessToken = process.env.META_ACCESS_TOKEN;
-        this.adAccountId = process.env.META_AD_ACCOUNT_ID; // Format: act_<AD_ACCOUNT_ID>
-        if (this.adAccountId && !this.adAccountId.startsWith('act_')) {
-            this.adAccountId = 'act_' + this.adAccountId;
-        }
         this.apiVersion = 'v19.0';
     }
 
@@ -20,50 +17,37 @@ class MetaAdsTool {
      * Set and persist Meta credentials to the .env file.
      */
     async setCredentials(accessToken, adAccountId, pageId) {
-        console.log(`[MetaAds] Persisting new credentials to .env...`);
-        const envPath = path.join(process.cwd(), '.env');
-        let envContent = '';
-        if (fs.existsSync(envPath)) {
-            envContent = fs.readFileSync(envPath, 'utf8');
+        console.log(`[MetaAds] Persisting new credentials to Cloud Firestore...`);
+        
+        if (!db) return "Error: Firebase Firestore not initialized.";
+
+        const updates = {};
+        if (accessToken) updates['META_ACCESS_TOKEN'] = accessToken;
+        if (adAccountId) updates['META_AD_ACCOUNT_ID'] = adAccountId;
+        if (pageId) updates['META_PAGE_ID'] = pageId;
+
+        try {
+            await db.collection('configs').doc('default').set(updates, { merge: true });
+            ConfigService.refresh(); // Invalidate cache
+            return "Meta credentials successfully updated in Firestore.";
+        } catch (error) {
+            return `Error updating Firestore: ${error.message}`;
         }
-
-        const updates = {
-            'META_ACCESS_TOKEN': accessToken,
-            'META_AD_ACCOUNT_ID': adAccountId,
-            'META_PAGE_ID': pageId
-        };
-
-        for (const [key, value] of Object.entries(updates)) {
-            if (!value) continue;
-            const regex = new RegExp(`^${key}=.*`, 'm');
-            if (envContent.match(regex)) {
-                envContent = envContent.replace(regex, `${key}=${value}`);
-            } else {
-                envContent += `\n${key}=${value}`;
-            }
-        }
-
-        fs.writeFileSync(envPath, envContent.trim() + '\n');
-        // Reload into current process
-        require('dotenv').config();
-        this.accessToken = process.env.META_ACCESS_TOKEN;
-        return "Meta credentials successfully updated and persisted.";
     }
 
     /**
      * Helper to make API requests to Meta Graph
      */
     async _request(method, endpoint, data = {}) {
-        // Reload environment variables to catch dynamic updates in .env
-        require('dotenv').config();
-        this.accessToken = process.env.META_ACCESS_TOKEN;
-        this.adAccountId = process.env.META_AD_ACCOUNT_ID;
-        if (this.adAccountId && !this.adAccountId.startsWith('act_')) {
-            this.adAccountId = 'act_' + this.adAccountId;
+        const accessToken = await ConfigService.get('META_ACCESS_TOKEN');
+        let adAccountId = await ConfigService.get('META_AD_ACCOUNT_ID');
+
+        if (adAccountId && !adAccountId.startsWith('act_')) {
+            adAccountId = 'act_' + adAccountId;
         }
 
-        if (!this.accessToken || !this.adAccountId) {
-            return { error: "Meta API credentials missing. You MUST call askUserForInput to ask the user to provide their META_ACCESS_TOKEN and META_AD_ACCOUNT_ID" };
+        if (!accessToken || !adAccountId) {
+            return { error: "Meta API credentials missing in Firestore. Use 'metaSetCredentials' or update the 'configs/default' collection." };
         }
 
         const url = `https://graph.facebook.com/${this.apiVersion}/${endpoint}`;
@@ -175,11 +159,9 @@ class MetaAdsTool {
         console.log(`[MetaAds] Uploading image: ${imagePath}...`);
         const endpoint = `${this.adAccountId}/adimages`;
 
-        // Dynamic reload
-        require('dotenv').config();
-        const token = process.env.META_ACCESS_TOKEN;
+        const token = await ConfigService.get('META_ACCESS_TOKEN');
         if (!token) {
-            return { error: "Meta API token missing. You MUST call askUserForInput to ask the user to provide their META_ACCESS_TOKEN." };
+            return { error: "Meta API token missing in Firestore. Use 'metaSetCredentials' or update the 'configs/default' collection." };
         }
 
         // Use spawnSync for robust multipart/form-data upload of local file
@@ -215,9 +197,7 @@ class MetaAdsTool {
      * Create an Ad Creative
      */
     async createAdCreative(name, title, body, imageHash, pageId, cta = 'SHOP_NOW') {
-        // Fallback to .env for Page ID if not provided by LLM
-        require('dotenv').config();
-        const activePageId = pageId || process.env.META_PAGE_ID;
+        const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
 
         console.log(`[MetaAds] Creating ad creative: ${name} for Page ${activePageId} with CTA ${cta}...`);
         const endpoint = `${this.adAccountId}/adcreatives`;
@@ -254,7 +234,7 @@ class MetaAdsTool {
         console.log(`[MetaAds] Preparing organic ${isReel ? 'Reel' : 'video'} post to Page ${activePageId}...`);
         
         const pageToken = await this._getPageToken(activePageId);
-        const token = pageToken || this.accessToken;
+        const token = pageToken || await ConfigService.get('META_ACCESS_TOKEN');
 
         return new Promise((resolve) => {
             const boundary = `----NexusOSBoundary${Math.random().toString(16).substring(2)}`;
@@ -358,7 +338,7 @@ class MetaAdsTool {
         return await this._request('POST', endpoint, {
             message: message,
             link: link,
-            access_token: pageToken || this.accessToken // Override with Page Token if found
+            access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN') // Override with Page Token if found
         });
     }
 
@@ -379,7 +359,7 @@ class MetaAdsTool {
                 '-s',
                 '-X', 'POST',
                 `https://graph.facebook.com/${this.apiVersion}/${endpoint}`,
-                '-F', `access_token=${pageToken || this.accessToken}`,
+                '-F', `access_token=${pageToken || await ConfigService.get('META_ACCESS_TOKEN')}`,
                 '-F', `message=${message}`,
                 '-F', `source=@${imagePath}`
             ];
@@ -416,9 +396,10 @@ class MetaAdsTool {
      */
     async getComments(objectId) {
         console.log(`[MetaAds] Fetching comments for ${objectId}...`);
-        const pageToken = await this._getPageToken(process.env.META_PAGE_ID);
+        const activePageId = await ConfigService.get('META_PAGE_ID');
+        const pageToken = await this._getPageToken(activePageId);
         return await this._request('GET', `${objectId}/comments`, {
-            access_token: pageToken || this.accessToken
+            access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN')
         });
     }
 
@@ -427,10 +408,11 @@ class MetaAdsTool {
      */
     async replyToComment(commentId, message) {
         console.log(`[MetaAds] Replying to comment ${commentId}...`);
-        const pageToken = await this._getPageToken(process.env.META_PAGE_ID);
+        const activePageId = await ConfigService.get('META_PAGE_ID');
+        const pageToken = await this._getPageToken(activePageId);
         return await this._request('POST', `${commentId}/comments`, {
             message: message,
-            access_token: pageToken || this.accessToken
+            access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN')
         });
     }
 
@@ -438,8 +420,7 @@ class MetaAdsTool {
      * Get Page Engagement Insights
      */
     async getPageInsights(pageId) {
-        require('dotenv').config();
-        const activePageId = pageId || process.env.META_PAGE_ID;
+        const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
         console.log(`[MetaAds] Fetching insights for Page ${activePageId}...`);
         
         const pageToken = await this._getPageToken(activePageId);
@@ -448,7 +429,7 @@ class MetaAdsTool {
         return await this._request('GET', endpoint, {
             metric: 'page_impressions_unique,page_post_engagements,page_views_total',
             period: 'day',
-            access_token: pageToken || this.accessToken
+            access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN')
         });
     }
 }

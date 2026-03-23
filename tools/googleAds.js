@@ -1,30 +1,37 @@
+const ConfigService = require('../core/config');
 const { GoogleAdsApi } = require('google-ads-api');
 
 class GoogleAdsTool {
     constructor() {
         this.client = null;
-        this.customer = null;
     }
 
     async init() {
-        if (!process.env.GOOGLE_ADS_CLIENT_ID || !process.env.GOOGLE_ADS_CLIENT_SECRET || !process.env.GOOGLE_ADS_REFRESH_TOKEN || !process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
-            throw new Error("Google Ads credentials missing in environment (.env)");
+        const client_id = await ConfigService.get('GOOGLE_ADS_CLIENT_ID');
+        const client_secret = await ConfigService.get('GOOGLE_ADS_CLIENT_SECRET');
+        const developer_token = await ConfigService.get('GOOGLE_ADS_DEVELOPER_TOKEN');
+
+        if (!client_id || !client_secret || !developer_token) {
+            throw new Error("Google Ads credentials missing in Firestore (configs/default)");
         }
 
         if (!this.client) {
             this.client = new GoogleAdsApi({
-                client_id: process.env.GOOGLE_ADS_CLIENT_ID,
-                client_secret: process.env.GOOGLE_ADS_CLIENT_SECRET,
-                developer_token: process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+                client_id,
+                client_secret,
+                developer_token,
             });
         }
     }
 
     async getCustomer(customerId) {
         await this.init();
+        const refresh_token = await ConfigService.get('GOOGLE_ADS_REFRESH_TOKEN');
+        if (!refresh_token) throw new Error("GOOGLE_ADS_REFRESH_TOKEN missing in Firestore");
+        
         return this.client.Customer({
             customer_id: customerId,
-            refresh_token: process.env.GOOGLE_ADS_REFRESH_TOKEN,
+            refresh_token: refresh_token,
         });
     }
 

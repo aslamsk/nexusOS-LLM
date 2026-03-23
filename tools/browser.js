@@ -28,7 +28,7 @@ class BrowserTool {
             ];
 
             this.browser = await puppeteer.launch({
-                headless: 'new', // Use new headless mode by default for stability
+                headless: false, // Set to false to show the browser window to the user
                 ignoreHTTPSErrors: true,
                 args: isProd ? [
                     '--no-sandbox', 
@@ -86,7 +86,7 @@ class BrowserTool {
             switch (action) {
                 case 'open':
                     if (!args.url) return 'Error: action=open requires url';
-                    const navOptions = { waitUntil: 'networkidle2', timeout: 15000 };
+                    const navOptions = { waitUntil: 'domcontentloaded', timeout: 30000 };
                     try {
                         await this.page.goto(args.url, navOptions);
                     } catch (navError) {
@@ -196,6 +196,52 @@ class BrowserTool {
                     if (!args.savePath) return 'Error: action=screenshot requires savePath';
                     await this.page.screenshot({ path: args.savePath, fullPage: true });
                     return `Saved screenshot to ${args.savePath}`;
+
+                case 'annotateAndScreenshot':
+                    if (!args.savePath) return 'Error: action=annotateAndScreenshot requires savePath';
+                    // Inject Antigravity-style labels
+                    await this.page.evaluate(() => {
+                        const style = document.createElement('style');
+                        style.id = 'nx-agent-style';
+                        style.innerHTML = `
+                            .nx-agent-box { position: absolute; border: 2px solid rgba(231, 76, 60, 0.8); background: rgba(231, 76, 60, 0.1); pointer-events: none; z-index: 2147483647; }
+                            .nx-agent-label { position: absolute; background: #e74c3c; color: white; padding: 2px 6px; font-size: 12px; font-weight: bold; font-family: sans-serif; pointer-events: none; transform: translateY(-100%); z-index: 2147483647; border-radius: 4px; }
+                        `;
+                        document.head.appendChild(style);
+
+                        const interactables = Array.from(document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick]'));
+                        interactables.forEach((el, index) => {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                const box = document.createElement('div');
+                                box.className = 'nx-agent-box nx-agent-cleanup';
+                                box.style.left = window.scrollX + rect.left + 'px';
+                                box.style.top = window.scrollY + rect.top + 'px';
+                                box.style.width = rect.width + 'px';
+                                box.style.height = rect.height + 'px';
+                                
+                                const label = document.createElement('div');
+                                label.className = 'nx-agent-label nx-agent-cleanup';
+                                label.style.left = window.scrollX + rect.left + 'px';
+                                label.style.top = window.scrollY + rect.top + 'px';
+                                label.innerText = el.id ? el.id : ('IDX-' + index);
+                                if (!el.id) el.id = 'IDX-' + index;
+
+                                document.body.appendChild(box);
+                                document.body.appendChild(label);
+                            }
+                        });
+                    });
+
+                    // Wait a tick for render
+                    await new Promise(r => setTimeout(r, 500));
+                    await this.page.screenshot({ path: args.savePath, fullPage: false });
+
+                    // Cleanup overlays
+                    await this.page.evaluate(() => {
+                        document.querySelectorAll('.nx-agent-cleanup, #nx-agent-style').forEach(el => el.remove());
+                    });
+                    return `Saved annotated screenshot to ${args.savePath}`;
 
                 default:
                     return `Error: Unknown browser action '${action}'`;

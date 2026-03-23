@@ -19,6 +19,36 @@ class ImageGenTool {
     }
 
     /**
+     * Generates a new image from a text prompt using Imagen.
+     */
+    async generateImage(prompt, savePath) {
+        try {
+            console.log(`[ImageGen] Generating image with prompt: "${prompt}"...`);
+            const response = await this.ai.models.generateImages({
+                model: this.modelName,
+                prompt: prompt,
+                parameters: {
+                    sampleCount: 1,
+                    aspectRatio: "1:1",
+                    outputMimeType: "image/png"
+                }
+            });
+
+            let imageData = this._extractImageData(response);
+            if (!imageData) throw new Error("No images were generated.");
+
+            const dir = path.dirname(savePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            fs.writeFileSync(savePath, Buffer.from(imageData, 'base64'));
+            return `Success: Image saved to ${savePath}`;
+        } catch (error) {
+            console.error("[ImageGen Error]", error);
+            return `Error generating image: ${error.message}`;
+        }
+    }
+
+    /**
      * Refines/Improves an existing image using Imagen's Image-to-Image capability.
      */
     async improveImage(prompt, referenceImagePath, savePath) {

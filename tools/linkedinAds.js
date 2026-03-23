@@ -1,13 +1,13 @@
+const ConfigService = require('../core/config');
 const axios = require('axios');
 
 class LinkedInAdsTool {
-    constructor() {
-        this.accessToken = process.env.LINKEDIN_ACCESS_TOKEN;
-    }
+    constructor() {}
 
     async publishOrganicPost(urn, text) {
-        if (!this.accessToken) {
-            return { error: "LINKEDIN_ACCESS_TOKEN missing in environment (.env)" };
+        const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
+        if (!accessToken) {
+            return { error: "LINKEDIN_ACCESS_TOKEN missing in Firestore" };
         }
 
         console.log(`[LinkedIn] Publishing organic post for URN: ${urn}`);
@@ -27,7 +27,7 @@ class LinkedInAdsTool {
                 },
                 {
                     headers: {
-                        'Authorization': `Bearer ${this.accessToken}`,
+                        'Authorization': `Bearer ${accessToken}`,
                         'X-Restli-Protocol-Version': '2.0.0',
                         'Content-Type': 'application/json'
                     }
@@ -40,10 +40,11 @@ class LinkedInAdsTool {
     }
 
     async getMemberInfo() {
-        if (!this.accessToken) return { error: "Missing token" };
+        const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
+        if (!accessToken) return { error: "Missing token" };
         try {
             const response = await axios.get('https://api.linkedin.com/v2/me', {
-                headers: { 'Authorization': `Bearer ${this.accessToken}` }
+                headers: { 'Authorization': `Bearer ${accessToken}` }
             });
             return response.data;
         } catch (error) {
