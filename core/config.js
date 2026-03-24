@@ -33,16 +33,23 @@ class ConfigService {
             return this.clientOverrides[key];
         }
 
-        // 1. Check if we need to refresh cache
+        // 1. Ensure cache is populated for the requested company
         await this._ensureCache(companyId);
-
-        // 2. Try to get from Firestore cache
         const companyConfigs = this.cache.get(companyId);
         if (companyConfigs && companyConfigs[key]) {
             return companyConfigs[key];
         }
 
-        // 3. Fallback to process.env
+        // 2. Hierarchical Fallback: Check 'default' (Global Admin) if not already checked
+        if (companyId !== this.defaultCompanyId) {
+            await this._ensureCache(this.defaultCompanyId);
+            const defaultConfigs = this.cache.get(this.defaultCompanyId);
+            if (defaultConfigs && defaultConfigs[key]) {
+                return defaultConfigs[key];
+            }
+        }
+
+        // 3. Last Resort Fallback: process.env
         if (process.env[key]) {
             return process.env[key];
         }

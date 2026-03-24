@@ -66,6 +66,49 @@ class MemoryService {
             return [];
         }
     }
+
+    async saveRecoveryPattern(pattern) {
+        if (!db) return "Error: Firebase not initialized.";
+        try {
+            await db.collection('recovery_patterns').add({
+                ...pattern,
+                timestamp: new Date()
+            });
+            return "SUCCESS: Recovery pattern saved.";
+        } catch (e) {
+            return `Error saving recovery pattern: ${e.message}`;
+        }
+    }
+
+    async findRecoveryPatterns(query, limit = 5) {
+        if (!db) return [];
+        try {
+            const snapshot = await db.collection('recovery_patterns')
+                .orderBy('timestamp', 'desc')
+                .limit(25)
+                .get();
+
+            const normalizedQuery = String(query || '').toLowerCase();
+            const matches = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                const haystack = [
+                    data?.tool,
+                    data?.classification,
+                    data?.summary,
+                    data?.playbook,
+                    data?.resolution
+                ].join(' ').toLowerCase();
+                if (!normalizedQuery || haystack.includes(normalizedQuery)) {
+                    matches.push(data);
+                }
+            });
+            return matches.slice(0, limit);
+        } catch (e) {
+            console.error('[Memory] Recovery pattern lookup failed:', e.message);
+            return [];
+        }
+    }
 }
 
 module.exports = new MemoryService();

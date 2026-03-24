@@ -24,11 +24,20 @@ class BrowserTool {
             const commonArgs = [
                 '--ignore-certificate-errors',
                 '--ignore-urlfetcher-cert-requests',
-                '--disable-web-security'
+                '--disable-web-security',
+                '--disable-extensions',           // Kill 'Testand' and all other extensions
+                '--disable-default-apps',         // No default Chrome apps
+                '--disable-popup-blocking',       // Allow all popups during automation
+                '--disable-notifications',        // Block notification permission popups
+                '--no-first-run',                 // Skip first-run dialogs
+                '--no-default-browser-check',     // Skip default browser prompt
+                '--disable-infobars',             // Hide "Chrome is being controlled" bar
+                '--disable-blink-features=AutomationControlled', // Bypass bot detection
+                '--user-data-dir=/tmp/nexus-chrome-profile'      // Isolated profile (no personal extensions)
             ];
 
             this.browser = await puppeteer.launch({
-                headless: false, // Set to false to show the browser window to the user
+                headless: false,
                 ignoreHTTPSErrors: true,
                 args: isProd ? [
                     '--no-sandbox', 
@@ -75,6 +84,22 @@ class BrowserTool {
         }
     }
 
+    async _describePageState() {
+        if (!this.page || this.page.isClosed()) {
+            return { url: null, title: null, readyState: 'no-page' };
+        }
+        try {
+            return await this.page.evaluate(() => ({
+                url: window.location.href,
+                title: document.title,
+                readyState: document.readyState,
+                bodyTextPreview: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+            }));
+        } catch (error) {
+            return { url: null, title: null, readyState: `error: ${error.message}` };
+        }
+    }
+
     /**
      * Dispatcher for browser actions requested by the LLM
      */
@@ -86,14 +111,18 @@ class BrowserTool {
             switch (action) {
                 case 'open':
                     if (!args.url) return 'Error: action=open requires url';
-                    const navOptions = { waitUntil: 'domcontentloaded', timeout: 30000 };
+                    // Use networkidle2 for SPA support, with a longer timeout
+                    const navOptions = { waitUntil: 'networkidle2', timeout: 60000 };
                     try {
+                        console.log(`[Browser] Opening ${args.url} (waitUntil: networkidle2)...`);
                         await this.page.goto(args.url, navOptions);
                     } catch (navError) {
-                        console.log("Navigation error, recreating page: " + navError.message);
-                        this.page = await this.browser.newPage();
-                        await this.page.setViewport({ width: 1280, height: 800 });
-                        await this.page.goto(args.url, navOptions);
+                        console.log(`[Browser] networkidle2 timeout, falling back to load: ${navError.message}`);
+                        try {
+                            await this.page.goto(args.url, { waitUntil: 'load', timeout: 30000 });
+                        } catch (loadError) {
+                            return `Error: Navigation failed to ${args.url} after multiple attempts. ${loadError.message}`;
+                        }
                     }
                     return `Successfully opened ${args.url}. Page title: ${await this.page.title()}`;
 
@@ -101,27 +130,57 @@ class BrowserTool {
                     if (!args.selector) return 'Error: action=click requires selector';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
                     await this.page.click(args.selector);
-                    return `Successfully clicked selector: ${args.selector}`;
+                    return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'type':
                     if (!args.selector || !args.text) return 'Error: action=type requires selector and text';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
                     await this.page.type(args.selector, args.text);
-                    return `Successfully typed into selector: ${args.selector}`;
+                    return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, page: await this._describePageState() }, null, 2);
 
                 case 'keyPress':
                     if (!args.key) return 'Error: action=keyPress requires key (e.g., "Enter")';
                     await this.page.keyboard.press(args.key);
                     return `Successfully pressed key: ${args.key}`;
+                
+                case 'clickPixel':
+                    if (args.x === undefined || args.y === undefined) return 'Error: action=clickPixel requires x and y';
+                    await this.page.mouse.click(args.x, args.y);
+                    return JSON.stringify({ ok: true, action, x: args.x, y: args.y, page: await this._describePageState() }, null, 2);
+
+                case 'hover':
+                    if (args.selector) {
+                        await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                        await this.page.hover(args.selector);
+                        return `Successfully hovered over selector: ${args.selector}`;
+                    } else if (args.x !== undefined && args.y !== undefined) {
+                        await this.page.mouse.move(args.x, args.y);
+                        return `Successfully hovered at pixel (${args.x}, ${args.y})`;
+                    }
+                    return 'Error: action=hover requires selector OR x and y';
+
+                case 'scroll':
+                    if (args.direction === 'up') {
+                        await this.page.evaluate(() => window.scrollBy(0, -500));
+                        return `Scrolled up.`;
+                    } else if (args.direction === 'down') {
+                        await this.page.evaluate(() => window.scrollBy(0, 500));
+                        return `Scrolled down.`;
+                    } else if (args.selector) {
+                        await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                        await this.page.$eval(args.selector, el => el.scrollIntoView());
+                        return `Scrolled to selector: ${args.selector}`;
+                    }
+                    return 'Error: action=scroll requires direction ("up"/"down") OR selector';
 
 
                 case 'waitForNetworkIdle':
                     const timeout = args.timeout || 15000;
                     try {
                         await this.page.waitForNetworkIdle({ idleTime: 1000, timeout: timeout });
-                        return `Successfully waited for network to become idle (page has finished loading/updating).`;
+                        return JSON.stringify({ ok: true, action, timeout, idle: true, page: await this._describePageState() }, null, 2);
                     } catch (err) {
-                        return `Network did not become fully idle within ${timeout}ms, but proceeding anyway.`;
+                        return JSON.stringify({ ok: false, action, timeout, idle: false, classification: 'timeout', page: await this._describePageState(), error: err.message }, null, 2);
                     }
 
                 case 'clickText':
@@ -140,12 +199,67 @@ class BrowserTool {
                 case 'extract':
                     if (!args.selector) return 'Error: action=extract requires selector';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
-                    const text = await this.page.$eval(args.selector, el => el.innerText);
-                    return `Extracted text from ${args.selector}:\n${text}`;
+                    const textContent = await this.page.$eval(args.selector, el => el.innerText);
+                    return JSON.stringify({ ok: true, action, selector: args.selector, text: textContent, page: await this._describePageState() }, null, 2);
+
+                case 'getMarkdown':
+                    // Returns a structured Markdown representation of the page for LLM clarity
+                    return await this.page.evaluate(() => {
+                        function isVisible(el) {
+                            const style = window.getComputedStyle(el);
+                            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                        }
+
+                        let idCounter = 0;
+                        function processNode(node) {
+                            if (node.nodeType === Node.TEXT_NODE) {
+                                return node.textContent.trim();
+                            }
+                            if (node.nodeType !== Node.ELEMENT_NODE || !isVisible(node)) return "";
+
+                            const tag = node.tagName.toLowerCase();
+                            if (['script', 'style', 'noscript', 'svg'].includes(tag)) return "";
+
+                            let childrenText = Array.from(node.childNodes).map(processNode).filter(t => t).join(" ");
+                            
+                            // Assign/retrieve ID for interactables
+                            const isInteractive = ['a', 'button', 'input', 'select', 'textarea', 'label'].includes(tag) || 
+                                                 node.hasAttribute('role') || node.hasAttribute('onclick') || 
+                                                 (node.classList && node.classList.contains('v-label--clickable'));
+                            
+                            if (isInteractive) {
+                                if (!node.id) node.id = `nexus-autoid-${idCounter++}`;
+                                const typeStr = node.type ? ` (${node.type})` : "";
+                                return `\n[${childrenText || tag}${typeStr}](#${node.id})\n`;
+                            }
+
+                            if (/^h[1-6]$/.test(tag)) {
+                                return `\n${'#'.repeat(parseInt(tag[1]))} ${childrenText}\n`;
+                            }
+                            if (tag === 'p') return `\n${childrenText}\n`;
+                            if (tag === 'li') return `* ${childrenText}\n`;
+
+                            return childrenText;
+                        }
+
+                        const md = processNode(document.body);
+                        return md.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+                    });
 
                 case 'extractActiveElements':
-                    // Wait briefly for generic JS frameworks to settle
-                    await new Promise(r => setTimeout(r, 1000));
+                    // 1. Wait for page stability
+                    try {
+                        console.log("[Browser] Waiting for network idle before extraction...");
+                        await this.page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 });
+                    } catch (e) {
+                         console.log("[Browser] Network did not become idle, proceeding with extraction anyway.");
+                    }
+                    
+                    // 2. Wait for body to be present and have some content
+                    await this.page.waitForSelector('body', { timeout: 5000 });
+                    
+                    // 3. Briefly wait for any final JS rendering
+                    await new Promise(r => setTimeout(r, 1500));
 
                     return await this.page.evaluate(() => {
                         const interactables = Array.from(document.querySelectorAll('a, button, input, select, textarea, label, [role="button"], [role="link"], [role="menuitem"], [onclick], [tabindex]:not([tabindex="-1"]), span, div'));
@@ -156,8 +270,9 @@ class BrowserTool {
 
                         const parsedElements = visibleElements.map((el, index) => {
                             // Assign a unique ID if it doesn't have one to make targeting easy
-                            if (!el.id) el.id = `nx-autoid-${index}`;
+                            if (!el.id) el.id = `nexus-autoid-${index}`;
 
+                            const rect = el.getBoundingClientRect();
                             let textContent = el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '';
                             textContent = textContent.replace(/\s+/g, ' ').trim();
 
@@ -174,6 +289,12 @@ class BrowserTool {
                                 id: el.id,
                                 text: textContent.substring(0, 100), // Max 100 chars
                                 type: el.type || undefined,
+                                rect: {
+                                    x: Math.round(rect.left + window.scrollX),
+                                    y: Math.round(rect.top + window.scrollY),
+                                    w: Math.round(rect.width),
+                                    h: Math.round(rect.height)
+                                },
                                 _isInteractive: isInteractive
                             };
                         });
@@ -224,8 +345,8 @@ class BrowserTool {
                                 label.className = 'nx-agent-label nx-agent-cleanup';
                                 label.style.left = window.scrollX + rect.left + 'px';
                                 label.style.top = window.scrollY + rect.top + 'px';
-                                label.innerText = el.id ? el.id : ('IDX-' + index);
-                                if (!el.id) el.id = 'IDX-' + index;
+                                label.innerText = el.id ? el.id : ('nexus-autoid-' + index);
+                                if (!el.id) el.id = 'nexus-autoid-' + index;
 
                                 document.body.appendChild(box);
                                 document.body.appendChild(label);
@@ -247,11 +368,14 @@ class BrowserTool {
                     return `Error: Unknown browser action '${action}'`;
             }
         } catch (error) {
-            if (this.page) {
-                try { await this.page.close(); } catch (e) { }
-                this.page = null;
-            }
-            return `Browser action error: ${error.message}`;
+            const pageState = await this._describePageState();
+            return JSON.stringify({
+                ok: false,
+                action,
+                error: error.message,
+                classification: /timeout/i.test(error.message) ? 'timeout' : 'interaction_failure',
+                page: pageState
+            }, null, 2);
         }
     }
 }

@@ -30,13 +30,13 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.png', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'Nexus OS',
         short_name: 'NexusOS',
         description: 'Advanced AI Agent with Local Push Notifications',
-        theme_color: '#0d1117',
-        background_color: '#0d1117',
+        theme_color: '#0b0716',
+        background_color: '#0b0716',
         display: 'standalone',
         icons: [
           {

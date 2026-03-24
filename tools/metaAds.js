@@ -51,8 +51,8 @@ class MetaAdsTool {
         }
 
         const url = `https://graph.facebook.com/${this.apiVersion}/${endpoint}`;
-        const queryParams = new URLSearchParams({ access_token: this.accessToken, ...data }).toString();
-        const fullUrl = method === 'GET' ? `${url}?${queryParams}` : `${url}?access_token=${this.accessToken}`;
+        const queryParams = new URLSearchParams({ access_token: accessToken, ...data }).toString();
+        const fullUrl = method === 'GET' ? `${url}?${queryParams}` : `${url}?access_token=${accessToken}`;
 
         const options = {
             method: method,
@@ -153,9 +153,35 @@ class MetaAdsTool {
     }
 
     /**
+     * Helper to download remote media to a local temp file
+     */
+    async _resolveMedia(pathOrUrl) {
+        if (!pathOrUrl || !pathOrUrl.startsWith('http')) return pathOrUrl;
+        
+        console.log(`[MetaAds] Downloading remote media: ${pathOrUrl.substring(0, 50)}...`);
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        const tmppath = path.join(os.tmpdir(), `meta_dl_${Date.now()}.bin`);
+        
+        return new Promise((resolve, reject) => {
+            const lib = pathOrUrl.startsWith('https') ? require('https') : require('http');
+            lib.get(pathOrUrl, (res) => {
+                const file = fs.createWriteStream(tmppath);
+                res.pipe(file);
+                file.on('finish', () => { file.close(); resolve(tmppath); });
+            }).on('error', (err) => {
+                fs.unlink(tmppath, () => {});
+                reject(err);
+            });
+        });
+    }
+
+    /**
      * Upload an image to the AD Account library
      */
-    async uploadImage(imagePath) {
+    async uploadImage(imagePathRaw) {
+        const imagePath = await this._resolveMedia(imagePathRaw);
         console.log(`[MetaAds] Uploading image: ${imagePath}...`);
         const endpoint = `${this.adAccountId}/adimages`;
 
@@ -228,8 +254,9 @@ class MetaAdsTool {
     /**
      * Organic Video Post (FREE): Post a video to the Facebook Page feed
      */
-    async publishPageVideo(pageId, title, description, videoPath, isReel = false) {
+    async publishPageVideo(pageId, title, description, videoPathRaw, isReel = false) {
         require('dotenv').config();
+        const videoPath = await this._resolveMedia(videoPathRaw);
         const activePageId = pageId || process.env.META_PAGE_ID;
         console.log(`[MetaAds] Preparing organic ${isReel ? 'Reel' : 'video'} post to Page ${activePageId}...`);
         
@@ -345,8 +372,9 @@ class MetaAdsTool {
     /**
      * Organic Photo Post (FREE): Post a photo to the Facebook Page feed
      */
-    async publishPagePhoto(pageId, message, imagePath) {
+    async publishPagePhoto(pageId, message, imagePathRaw) {
         require('dotenv').config();
+        const imagePath = await this._resolveMedia(imagePathRaw);
         const activePageId = pageId || process.env.META_PAGE_ID;
         console.log(`[MetaAds] Preparing organic photo post to Page ${activePageId}...`);
         

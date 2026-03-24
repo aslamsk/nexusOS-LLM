@@ -72,15 +72,24 @@ class LLMService {
             },
             {
                 name: "browserAction",
-                description: "Perform an action using the browser sub-agent (opening links, clicking, extracting text).",
+                description: "Perform high-precision actions using the browser sub-agent (opening links, clicking, scrolling, hovering, extracting text). Supports both CSS selectors and (x, y) coordinates.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        action: { type: "STRING", description: "Action: 'open', 'click', 'type', 'extract', 'screenshot'" },
-                        url: { type: "STRING", description: "URL to open." },
-                        selector: { type: "STRING", description: "CSS selector." },
-                        text: { type: "STRING", description: "Text to type." },
-                        savePath: { type: "STRING", description: "Path to save screenshot." }
+                        action: { 
+                            type: "STRING", 
+                            enum: ["open", "click", "clickPixel", "clickText", "type", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle"], 
+                            description: "The action to perform. Use 'getMarkdown' for a hierarchical view of the page, 'extractActiveElements' for a list of interactive items with (x,y) coordinates, and 'clickPixel' to click by coordinates if CSS selectors fail." 
+                        },
+                        url: { type: "STRING", description: "URL to open (for 'open')." },
+                        selector: { type: "STRING", description: "CSS selector (for 'click', 'type', 'hover', 'scroll', 'extract')." },
+                        text: { type: "STRING", description: "Text to type (for 'type')." },
+                        key: { type: "STRING", description: "Key to press (for 'keyPress', e.g., 'Enter')." },
+                        x: { type: "NUMBER", description: "X coordinate (for 'clickPixel', 'hover')." },
+                        y: { type: "NUMBER", description: "Y coordinate (for 'clickPixel', 'hover')." },
+                        direction: { type: "STRING", enum: ["up", "down"], description: "Scroll direction (for 'scroll')." },
+                        savePath: { type: "STRING", description: "Path to save screenshot (for 'screenshot')." },
+                        timeout: { type: "NUMBER", description: "Custom timeout in ms." }
                     },
                     required: ["action"]
                 }
@@ -145,6 +154,77 @@ class LLMService {
                 }
             },
             {
+                name: "improveImage",
+                description: "Enhance or modify an existing image based on a prompt.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        prompt: { type: "STRING", description: "Description of enhancements." },
+                        imagePath: { type: "STRING", description: "Path to original image." },
+                        savePath: { type: "STRING", description: "Path to save improved image." }
+                    },
+                    required: ["prompt", "imagePath", "savePath"]
+                }
+            },
+            {
+                name: "n8nSearch",
+                description: "Search for available n8n workflows.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        query: { type: "STRING", description: "Search query." }
+                    },
+                    required: ["query"]
+                }
+            },
+            {
+                name: "getN8nWorkflow",
+                description: "Get details and execute an n8n workflow.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        path: { type: "STRING", description: "Path to workflow." }
+                    },
+                    required: ["path"]
+                }
+            },
+            {
+                name: "metaGetComments",
+                description: "Fetch comments from a specific Meta post or entity.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        objectId: { type: "STRING", description: "The ID of the post/object." }
+                    },
+                    required: ["objectId"]
+                }
+            },
+            {
+                name: "metaReplyToComment",
+                description: "Reply publicly to a specific comment on Meta.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        commentId: { type: "STRING", description: "The ID of the comment to reply to." },
+                        message: { type: "STRING", description: "The reply message." }
+                    },
+                    required: ["commentId", "message"]
+                }
+            },
+            {
+                name: "metaSetCredentials",
+                description: "Configure Meta API credentials dynamically.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        accessToken: { type: "STRING" },
+                        adAccountId: { type: "STRING" },
+                        pageId: { type: "STRING" }
+                    },
+                    required: ["accessToken", "adAccountId", "pageId"]
+                }
+            },
+            {
                 name: "generateVideo",
                 description: "Generate a video from a text prompt or animate an existing image.",
                 parameters: {
@@ -175,12 +255,23 @@ class LLMService {
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        action: { type: "STRING", description: "Action like 'publishOrganicPost', 'publishOrganicReel', 'createCampaign', etc." },
+                        action: { type: "STRING", description: "Action to perform: 'publishOrganicPost', 'publishOrganicReel', 'createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'getPageInsights', 'uploadImage', 'getAccountInfo'" },
                         pageId: { type: "STRING" },
                         message: { type: "STRING" },
                         link: { type: "STRING" },
                         videoPath: { type: "STRING" },
-                        imagePath: { type: "STRING" }
+                        imagePath: { type: "STRING" },
+                        name: { type: "STRING" },
+                        objective: { type: "STRING" },
+                        campaignId: { type: "STRING" },
+                        budget: { type: "NUMBER" },
+                        targeting: { type: "OBJECT" },
+                        title: { type: "STRING" },
+                        body: { type: "STRING" },
+                        cta: { type: "STRING" },
+                        adSetId: { type: "STRING" },
+                        creativeId: { type: "STRING" },
+                        boss_approved: { type: "BOOLEAN", description: "MANDATORY FOR PUBLISHING/SPENDING ACTIONS. If you are creating a campaign, ad, or publishing a post, you MUST first ask The Boss for approval. If you have NOT explicitly asked for and received permission for this specific payload, this must be false (or omitted) and the system will block you. If The Boss has already approved the preview, set this to true." }
                     },
                     required: ["action"]
                 }
@@ -390,8 +481,14 @@ class LLMService {
 
                     return { text: textContent, toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null };
                 } catch (error) {
-                    if (error.message.includes('429')) {
-                        console.log(`[LLM] 429 Rate Limit on ${keyName}.`);
+                    const isRetryable = error.message.includes('429') || 
+                                       error.message.includes('503') || 
+                                       error.message.includes('UNAVAILABLE') ||
+                                       error.message.includes('INTERNAL');
+
+                    if (isRetryable) {
+                        const errorType = error.message.includes('429') ? '429 Rate Limit' : '503/UNAVAILABLE';
+                        console.log(`[LLM] ${errorType} on ${keyName}.`);
                         if (retryCount < maxRetriesPerKey) {
                             console.log(`[LLM] Retrying ${keyName} in ${delay / 1000}s... (Attempt ${retryCount + 1}/${maxRetriesPerKey})`);
                             await new Promise(r => setTimeout(r, delay));

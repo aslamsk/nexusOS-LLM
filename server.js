@@ -8,10 +8,157 @@ const fs = require('fs');
 
 const { db } = require('./core/firebase');
 const ConfigService = require('./core/config');
+const PricingService = require('./core/pricing');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const APP_BOOTED_AT = new Date().toISOString();
+
+function buildDiagnostic(requiredKeys, has) {
+    const missingKeys = requiredKeys.filter((key) => !has(key));
+    return {
+        ready: missingKeys.length === 0,
+        missingKeys,
+        configuredKeys: requiredKeys.filter((key) => has(key))
+    };
+}
+
+function formatCurrencyValue(value, currency = 'USD') {
+    const amount = Number(value || 0);
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currency || 'USD',
+        maximumFractionDigits: 2
+    }).format(amount);
+}
+
+function sanitizePdfText(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)')
+        .replace(/[^\x20-\x7E]/g, ' ');
+}
+
+function buildInvoiceDocumentModel(invoice, client) {
+    const pricing = invoice.pricing || {};
+    const items = Array.isArray(pricing.items) ? pricing.items : [];
+    const currency = pricing.currency || 'USD';
+    return {
+        invoiceNumber: `INV-${String(invoice.id || '').slice(0, 8).toUpperCase()}`,
+        clientName: client?.name || client?.company || 'Client',
+        clientCompany: client?.company || '',
+        clientEmail: client?.email || '',
+        createdAt: invoice.createdAt?.toDate ? invoice.createdAt.toDate() : new Date(invoice.createdAt || Date.now()),
+        paidAt: invoice.paidAt?.toDate ? invoice.paidAt.toDate() : (invoice.paidAt ? new Date(invoice.paidAt) : null),
+        status: invoice.status || 'unpaid',
+        notes: invoice.notes || '',
+        paymentUrl: invoice.paymentUrl || '',
+        currency,
+        subtotal: Number(pricing.subtotal || 0),
+        taxAmount: Number(pricing.taxAmount || 0),
+        total: Number(pricing.total || 0),
+        items: items.map((item) => ({
+            description: item.description || item.serviceCode || 'Service',
+            quantity: Number(item.quantity || 1),
+            unitCost: Number(item.unitCost || item.baseCost || 0),
+            lineTotal: Number(item.lineTotal || item.total || 0)
+        }))
+    };
+}
+
+function buildInvoiceCsv(model) {
+    const rows = [
+        ['Invoice Number', model.invoiceNumber],
+        ['Client', model.clientName],
+        ['Company', model.clientCompany],
+        ['Email', model.clientEmail],
+        ['Status', model.status],
+        ['Created At', model.createdAt.toISOString()],
+        ['Paid At', model.paidAt ? model.paidAt.toISOString() : ''],
+        ['Currency', model.currency],
+        [],
+        ['Description', 'Quantity', 'Unit Cost', 'Line Total'],
+        ...model.items.map((item) => [item.description, item.quantity, item.unitCost, item.lineTotal]),
+        [],
+        ['Subtotal', model.subtotal],
+        ['Tax', model.taxAmount],
+        ['Total', model.total],
+        ['Payment URL', model.paymentUrl]
+    ];
+
+    return rows.map((row) => row.map((cell) => {
+        const value = String(cell ?? '');
+        return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    }).join(',')).join('\n');
+}
+
+function buildInvoicePdfBuffer(model) {
+    const lines = [
+        'Nexus OS Invoice',
+        model.invoiceNumber,
+        `Client: ${model.clientName}`,
+        model.clientCompany ? `Company: ${model.clientCompany}` : '',
+        model.clientEmail ? `Email: ${model.clientEmail}` : '',
+        `Status: ${model.status}`,
+        `Created: ${model.createdAt.toLocaleString()}`,
+        model.paidAt ? `Paid: ${model.paidAt.toLocaleString()}` : '',
+        '',
+        'Items',
+        ...model.items.map((item) => `${item.description} | Qty ${item.quantity} | ${formatCurrencyValue(item.lineTotal, model.currency)}`),
+        '',
+        `Subtotal: ${formatCurrencyValue(model.subtotal, model.currency)}`,
+        `Tax: ${formatCurrencyValue(model.taxAmount, model.currency)}`,
+        `Total: ${formatCurrencyValue(model.total, model.currency)}`,
+        model.paymentUrl ? `Payment: ${model.paymentUrl}` : ''
+    ].filter(Boolean);
+
+    const content = ['BT', '/F1 12 Tf', '50 790 Td'];
+    lines.forEach((line, index) => {
+        const prefix = index === 0 ? '' : '0 -18 Td ';
+        content.push(`${prefix}(${sanitizePdfText(line)}) Tj`);
+    });
+    content.push('ET');
+    const stream = content.join('\n');
+    const streamLength = Buffer.byteLength(stream, 'utf8');
+
+    const objects = [
+        '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+        '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+        '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
+        '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
+        `5 0 obj << /Length ${streamLength} >> stream\n${stream}\nendstream endobj`
+    ];
+
+    let pdf = '%PDF-1.4\n';
+    const offsets = [0];
+    for (const obj of objects) {
+        offsets.push(Buffer.byteLength(pdf, 'utf8'));
+        pdf += `${obj}\n`;
+    }
+    const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += '0000000000 65535 f \n';
+    for (let i = 1; i < offsets.length; i += 1) {
+        pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    return Buffer.from(pdf, 'utf8');
+}
+
+async function getInvoiceWithClient(invoiceId) {
+    const invoiceDoc = await db.collection('invoices').doc(invoiceId).get();
+    if (!invoiceDoc.exists) return null;
+    const invoice = { id: invoiceDoc.id, ...invoiceDoc.data() };
+    let client = null;
+    if (invoice.clientId) {
+        const clientDoc = await db.collection('clients').doc(invoice.clientId).get();
+        client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+    }
+    return { invoice, client, model: buildInvoiceDocumentModel(invoice, client) };
+}
 
 // Parse JSON bodies for API routes
 app.use(express.json());
@@ -213,10 +360,70 @@ app.get('/api/system-status', async (req, res) => {
             }
         ];
 
-        res.json({ integrations });
+        const diagnosticsById = {
+            gemini_keys: buildDiagnostic(['GEMINI_API_KEY'], has),
+            search: buildDiagnostic(['BRAVE_SEARCH_API_KEY'], has),
+            email: buildDiagnostic(['GMAIL_USER', 'GMAIL_APP_PASSWORD'], has),
+            whatsapp: buildDiagnostic(['META_ACCESS_TOKEN', 'WHATSAPP_PHONE_ID'], has),
+            memory: { ready: !!db, missingKeys: db ? [] : ['firebase-service-account.json'], configuredKeys: db ? ['firestore'] : [] },
+            squad: { ready: true, missingKeys: [], configuredKeys: ['built_in'] },
+            code_intel: { ready: true, missingKeys: [], configuredKeys: ['local_runtime'] },
+            meta_ads: buildDiagnostic(['META_ACCESS_TOKEN', 'META_AD_ACCOUNT_ID'], has),
+            google_ads: buildDiagnostic(['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN', 'GOOGLE_ADS_DEVELOPER_TOKEN'], has),
+            linkedin: buildDiagnostic(['LINKEDIN_ACCESS_TOKEN'], has)
+        };
+
+        if (!integrations.find((item) => item.id === 'google_ads')) {
+            integrations.push({
+                id: 'google_ads',
+                name: 'Google Ads',
+                icon: 'GA',
+                description: 'Campaign listing and creation for Google Ads accounts.',
+                status: diagnosticsById.google_ads.ready ? 'active' : 'missing',
+                keys: [
+                    { key: 'GOOGLE_ADS_CLIENT_ID', label: 'Client ID', isSet: has('GOOGLE_ADS_CLIENT_ID') },
+                    { key: 'GOOGLE_ADS_CLIENT_SECRET', label: 'Client Secret', isSet: has('GOOGLE_ADS_CLIENT_SECRET') },
+                    { key: 'GOOGLE_ADS_REFRESH_TOKEN', label: 'Refresh Token', isSet: has('GOOGLE_ADS_REFRESH_TOKEN') },
+                    { key: 'GOOGLE_ADS_DEVELOPER_TOKEN', label: 'Developer Token', isSet: has('GOOGLE_ADS_DEVELOPER_TOKEN') }
+                ],
+                howToGet: 'Google Ads API Center and Google Cloud Console',
+                addVia: 'Settings'
+            });
+        }
+
+        if (!integrations.find((item) => item.id === 'linkedin')) {
+            integrations.push({
+                id: 'linkedin',
+                name: 'LinkedIn Publishing',
+                icon: 'LI',
+                description: 'Organic posting to LinkedIn organization feeds.',
+                status: diagnosticsById.linkedin.ready ? 'active' : 'missing',
+                keys: [
+                    { key: 'LINKEDIN_ACCESS_TOKEN', label: 'Access Token', isSet: has('LINKEDIN_ACCESS_TOKEN') }
+                ],
+                howToGet: 'LinkedIn Developer Portal',
+                addVia: 'Settings'
+            });
+        }
+
+        const enrichedIntegrations = integrations.map((integration) => ({
+            ...integration,
+            diagnostics: diagnosticsById[integration.id] || { ready: integration.status === 'active', missingKeys: [], configuredKeys: [] }
+        }));
+
+        res.json({ integrations: enrichedIntegrations });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/health', async (req, res) => {
+    res.json({
+        status: 'ok',
+        bootedAt: APP_BOOTED_AT,
+        now: new Date().toISOString(),
+        firestore: !!db
+    });
 });
 
 // ─── CRM & Agency Portal API ───────────────────────────────────────────
@@ -235,12 +442,27 @@ app.get('/api/clients', async (req, res) => {
 app.post('/api/clients', async (req, res) => {
     try {
         if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
-        const { name, email, phone, company, notes } = req.body;
+        const { name, company, email, phone, notes, initialKeys } = req.body;
+        
+        // 1. Create the client entity
         const docRef = await db.collection('clients').add({
-            name, email, phone, company, notes: notes || '',
+            name, company, email: email || '', phone: phone || '', notes: notes || '',
             createdAt: new Date(),
             status: 'active'
         });
+
+        // 2. Provision ALL isolated keys provided during registration
+        if (initialKeys && typeof initialKeys === 'object') {
+            const cleanKeys = {};
+            for (const [k, v] of Object.entries(initialKeys)) {
+                if (v && v.trim() !== '') cleanKeys[k] = v.trim();
+            }
+            if (Object.keys(cleanKeys).length > 0) {
+                await db.collection('client_configs').doc(docRef.id).set(cleanKeys);
+                console.log(`[API] Client ${docRef.id} provisioned with ${Object.keys(cleanKeys).length} keys.`);
+            }
+        }
+
         res.json({ success: true, id: docRef.id });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -274,8 +496,224 @@ app.post('/api/projects', async (req, res) => {
     }
 });
 
+app.get('/api/pricing/catalog', (req, res) => {
+    res.json({ catalog: PricingService.getCatalog() });
+});
+
+app.get('/api/quotes', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        let query = db.collection('quotes').orderBy('createdAt', 'desc');
+        if (req.query.clientId) query = query.where('clientId', '==', req.query.clientId);
+        const snapshot = await query.get();
+        const quotes = [];
+        snapshot.forEach(doc => quotes.push({ id: doc.id, ...doc.data() }));
+        res.json({ quotes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/quotes', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const { clientId, items, profitMarginPct, taxPct, currency, notes } = req.body;
+        const pricing = PricingService.buildQuote({ items, profitMarginPct, taxPct, currency });
+        const docRef = await db.collection('quotes').add({
+            clientId,
+            notes: notes || '',
+            status: 'draft',
+            pricing,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+        res.json({ success: true, id: docRef.id, pricing });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/invoices', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        let query = db.collection('invoices').orderBy('createdAt', 'desc');
+        if (req.query.clientId) query = query.where('clientId', '==', req.query.clientId);
+        const snapshot = await query.get();
+        const invoices = [];
+        snapshot.forEach(doc => invoices.push({ id: doc.id, ...doc.data() }));
+        res.json({ invoices });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/invoices/from-quote/:id', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const quoteDoc = await db.collection('quotes').doc(req.params.id).get();
+        if (!quoteDoc.exists) return res.status(404).json({ error: 'Quote not found' });
+        const quote = quoteDoc.data();
+        const invoiceRef = await db.collection('invoices').add({
+            clientId: quote.clientId,
+            quoteId: req.params.id,
+            pricing: quote.pricing,
+            status: 'unpaid',
+            paymentUrl: `/pay/${req.params.id}`,
+            paidAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+        await db.collection('quotes').doc(req.params.id).set({ status: 'invoiced', updatedAt: new Date() }, { merge: true });
+        res.json({ success: true, id: invoiceRef.id });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/invoices/:id/pay', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        await db.collection('invoices').doc(req.params.id).set({
+            status: 'paid',
+            paidAt: new Date(),
+            updatedAt: new Date()
+        }, { merge: true });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/invoices/:id/export', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const bundle = await getInvoiceWithClient(req.params.id);
+        if (!bundle) return res.status(404).json({ error: 'Invoice not found' });
+
+        const format = String(req.query.format || 'pdf').toLowerCase();
+        const filenameBase = `invoice-${bundle.model.invoiceNumber.toLowerCase()}`;
+
+        if (format === 'csv' || format === 'excel') {
+            const csv = buildInvoiceCsv(bundle.model);
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.csv"`);
+            return res.send(csv);
+        }
+
+        const pdf = buildInvoicePdfBuffer(bundle.model);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
+        return res.send(pdf);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/invoices/:id/send', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const bundle = await getInvoiceWithClient(req.params.id);
+        if (!bundle) return res.status(404).json({ error: 'Invoice not found' });
+        if (!bundle.client?.email) return res.status(400).json({ error: 'Client email is not set' });
+
+        const gmailUser = await ConfigService.get('GMAIL_USER');
+        const gmailPassword = await ConfigService.get('GMAIL_APP_PASSWORD');
+        if (!gmailUser || !gmailPassword) {
+            return res.status(400).json({ error: 'Gmail credentials are not configured' });
+        }
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: gmailUser, pass: gmailPassword }
+        });
+
+        const model = bundle.model;
+        const pdf = buildInvoicePdfBuffer(model);
+        const csv = buildInvoiceCsv(model);
+        const subject = `Invoice ${model.invoiceNumber} from Nexus OS`;
+        const html = `
+            <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6">
+                <p>Dear ${model.clientName},</p>
+                <p>Please find attached your invoice <strong>${model.invoiceNumber}</strong> from Nexus OS.</p>
+                <p>Total due: <strong>${formatCurrencyValue(model.total, model.currency)}</strong></p>
+                ${model.paymentUrl ? `<p>You can review payment details here: <a href="${model.paymentUrl}">${model.paymentUrl}</a></p>` : ''}
+                <p>The attached documents include a professional PDF invoice and a spreadsheet-ready CSV report for your records.</p>
+                <p>Regards,<br/>Nexus OS Finance Desk</p>
+            </div>
+        `;
+
+        await transporter.sendMail({
+            from: gmailUser,
+            to: bundle.client.email,
+            subject,
+            html,
+            attachments: [
+                { filename: `invoice-${model.invoiceNumber.toLowerCase()}.pdf`, content: pdf, contentType: 'application/pdf' },
+                { filename: `invoice-${model.invoiceNumber.toLowerCase()}.csv`, content: csv, contentType: 'text/csv; charset=utf-8' }
+            ]
+        });
+
+        await db.collection('invoices').doc(req.params.id).set({
+            lastSentAt: new Date(),
+            lastSentTo: bundle.client.email,
+            updatedAt: new Date()
+        }, { merge: true });
+
+        res.json({ success: true, sentTo: bundle.client.email });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/clients/:id/budget', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const budgetDoc = await db.collection('client_budgets').doc(req.params.id).get();
+        const invoiceSnapshot = await db.collection('invoices').where('clientId', '==', req.params.id).get();
+        let spent = 0;
+        invoiceSnapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.status === 'paid') {
+                spent += Number(data.pricing?.total || 0);
+            }
+        });
+        const budget = budgetDoc.exists ? budgetDoc.data() : { allocated: 0, approvedOverage: 0 };
+        const remaining = Number((Number(budget.allocated || 0) + Number(budget.approvedOverage || 0) - spent).toFixed(2));
+        res.json({
+            budget: {
+                allocated: Number(budget.allocated || 0),
+                approvedOverage: Number(budget.approvedOverage || 0),
+                spent: Number(spent.toFixed(2)),
+                remaining,
+                requiresBossApproval: remaining < 0
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/clients/:id/budget', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const { allocated, approvedOverage } = req.body;
+        await db.collection('client_budgets').doc(req.params.id).set({
+            allocated: Number(allocated || 0),
+            approvedOverage: Number(approvedOverage || 0),
+            updatedAt: new Date()
+        }, { merge: true });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Per-Client API Keys Management ────────────────────────────────────
 const CLIENT_KEY_LABELS = {
+    GEMINI_API_KEY: 'Gemini API Key 1 (Primary)',
+    GEMINI_API_KEY_2: 'Gemini API Key 2 (Backup)',
+    GEMINI_API_KEY_3: 'Gemini API Key 3 (Backup)',
+    BRAVE_SEARCH_API_KEY: 'Brave Search API Key',
     META_ACCESS_TOKEN: 'Meta Access Token',
     META_AD_ACCOUNT_ID: 'Meta Ad Account ID',
     META_PAGE_ID: 'Meta Page ID',
@@ -290,6 +728,10 @@ const CLIENT_KEY_LABELS = {
     CUSTOM_API_KEY_1: 'Custom API Key 1',
     CUSTOM_API_KEY_2: 'Custom API Key 2',
 };
+
+app.get('/api/client-key-labels', (req, res) => {
+    res.json({ labels: CLIENT_KEY_LABELS });
+});
 
 app.get('/api/clients/:id/keys', async (req, res) => {
     try {
@@ -439,36 +881,164 @@ app.use('/outputs', (req, res, next) => {
     maxAge: '1d'
 }));
 
-// Explicit wildcard route for SPA client-side routing and fallback
-// Use a regex to bypass path-to-regexp syntax issues in Express 5
-app.get(/.*/, (req, res, next) => {
-    if (req.path === '/sessions') {
-        const files = fs.readdirSync(sessionsBaseDir);
-        const sessions = files.map(f => {
-            const content = JSON.parse(fs.readFileSync(path.join(sessionsBaseDir, f), 'utf8'));
-            return {
-                id: content.sessionId,
-                lastUpdated: content.lastUpdated,
-                preview: content.chatHistory?.[1]?.text?.substring(0, 50) || 'New Mission'
-            };
-        }).sort((a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated));
-        return res.send(sessions);
-    }
-    next();
+const sessionsBaseDir = path.join(__dirname, 'sessions');
+if (!fs.existsSync(sessionsBaseDir)) fs.mkdirSync(sessionsBaseDir, { recursive: true });
+
+app.get('/api/sessions', (req, res) => {
+    const files = fs.readdirSync(sessionsBaseDir);
+    const sessions = files.map(f => {
+        const content = JSON.parse(fs.readFileSync(path.join(sessionsBaseDir, f), 'utf8'));
+        return {
+            id: content.sessionId,
+            lastUpdated: content.lastUpdated,
+            preview: content.chatHistory?.[1]?.text?.substring(0, 80) || 'New Mission',
+            runSummary: content.runSummary || null
+        };
+    }).sort((a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated));
+    res.json({ sessions });
 });
 
 app.get(/.*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
-
-const sessionsBaseDir = path.join(__dirname, 'sessions');
-if (!fs.existsSync(sessionsBaseDir)) fs.mkdirSync(sessionsBaseDir, { recursive: true });
 
 io.on('connection', (socket) => {
     console.log('User connected to Web UI');
     let orchestrator = null;
     let sessionDir = null;
     let sessionId = null;
+    let latestHistory = [];
+    let latestLogs = [];
+    let jobQueue = [];
+    let currentJobId = null;
+    const MAX_JOB_ATTEMPTS = 3;
+    const BASE_RETRY_DELAY_MS = 15000;
+
+    const emitMissionState = () => {
+        if (!orchestrator) return;
+        const base = orchestrator.getMissionControlData();
+        const queueTotals = {
+            queued: jobQueue.filter(job => job.status === 'queued').length,
+            paused: jobQueue.filter(job => job.status === 'paused').length,
+            completed: jobQueue.filter(job => job.status === 'completed').length,
+            retrying: jobQueue.filter(job => job.status === 'retry_wait').length,
+            deadLetters: jobQueue.filter(job => job.status === 'dead_letter').length
+        };
+        socket.emit('mission_state', {
+            ...base,
+            queue: {
+                activeJobId: currentJobId,
+                jobs: jobQueue.slice(0, 20),
+                totals: queueTotals
+            },
+            usage: {
+                sessionEstimatedCostUsd: Number(jobQueue.reduce((sum, job) => sum + Number(job.estimatedCostUsd || 0), 0).toFixed(6)),
+                completedJobs: queueTotals.completed
+            }
+        });
+    };
+
+    const updateJobFromMission = () => {
+        if (!currentJobId || !orchestrator) return;
+        const job = jobQueue.find(item => item.id === currentJobId);
+        if (!job) return;
+        const mission = orchestrator.getMissionControlData();
+        const activeRun = mission.activeRun;
+        const lastCompletedRun = mission.recentRuns?.[0];
+
+        if (orchestrator.pendingApproval || orchestrator.isWaitingForInput) {
+            job.status = 'paused';
+        } else if (activeRun && !activeRun.finishedAt) {
+            job.status = 'running';
+        } else if (lastCompletedRun?.finishedAt) {
+            job.status = lastCompletedRun.status === 'stopped' ? 'cancelled' : lastCompletedRun.status;
+            job.finishedAt = lastCompletedRun.finishedAt;
+            job.steps = lastCompletedRun.steps;
+            job.toolCalls = lastCompletedRun.toolCalls;
+            job.llmCalls = lastCompletedRun.llmCalls;
+            job.estimatedCostUsd = lastCompletedRun.estimatedCostUsd;
+            currentJobId = null;
+        }
+    };
+
+    const saveSession = () => {
+        if (!sessionId || !orchestrator) return;
+        updateJobFromMission();
+        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
+        const state = {
+            sessionId,
+            sessionDir,
+            orchestratorState: orchestrator.getPersistentState(),
+            chatHistory: latestHistory,
+            logs: latestLogs,
+            runSummary: orchestrator.getMissionControlData(),
+            jobQueue,
+            currentJobId,
+            lastUpdated: new Date().toISOString()
+        };
+        fs.writeFileSync(sessionMetaFile, JSON.stringify(state, null, 2));
+    };
+
+    const processNextJob = async () => {
+        if (!orchestrator || orchestrator.isRunning || currentJobId) return;
+        const now = Date.now();
+        const retryReadyJob = jobQueue.find(job => job.status === 'retry_wait' && (!job.nextRunAt || new Date(job.nextRunAt).getTime() <= now));
+        if (retryReadyJob) {
+            retryReadyJob.status = 'queued';
+        }
+        const nextJob = jobQueue.find(job => job.status === 'queued');
+        if (!nextJob) {
+            emitMissionState();
+            return;
+        }
+
+        currentJobId = nextJob.id;
+        nextJob.status = 'running';
+        nextJob.startedAt = nextJob.startedAt || new Date().toISOString();
+        emitMissionState();
+
+        try {
+            if (nextJob.clientId) {
+                const doc = await db.collection('client_configs').doc(nextJob.clientId).get();
+                const clientConfigs = doc.exists ? doc.data() : {};
+                orchestrator.setClientContext(nextJob.clientId, clientConfigs);
+            } else {
+                orchestrator.setClientContext(null, {});
+            }
+
+            await orchestrator.execute(nextJob.prompt);
+        } catch (error) {
+            nextJob.attempts = (nextJob.attempts || 0) + 1;
+            nextJob.error = error.message;
+            if (nextJob.attempts < MAX_JOB_ATTEMPTS) {
+                const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, nextJob.attempts - 1);
+                nextJob.status = 'retry_wait';
+                nextJob.nextRunAt = new Date(Date.now() + delayMs).toISOString();
+                socket.emit('nexus_log', {
+                    type: 'thought',
+                    message: `Mission failed for the Boss and will retry automatically in ${Math.round(delayMs / 1000)}s. Attempt ${nextJob.attempts + 1}/${MAX_JOB_ATTEMPTS}.`
+                });
+            } else {
+                nextJob.status = 'dead_letter';
+                nextJob.finishedAt = new Date().toISOString();
+                socket.emit('nexus_log', { type: 'error', message: `Mission moved to dead-letter queue after ${MAX_JOB_ATTEMPTS} attempts: ${error.message}` });
+            }
+            currentJobId = null;
+        } finally {
+            updateJobFromMission();
+            emitMissionState();
+            updateOutputsList();
+            saveSession();
+            if (!currentJobId) {
+                const nextRetry = jobQueue
+                    .filter(job => job.status === 'retry_wait' && job.nextRunAt)
+                    .map(job => Math.max(0, new Date(job.nextRunAt).getTime() - Date.now()))
+                    .sort((a, b) => a - b)[0];
+                setTimeout(processNextJob, typeof nextRetry === 'number' ? Math.min(nextRetry, 1000) : 0);
+            }
+        }
+    };
 
     socket.on('join_session', (data) => {
         sessionId = data.sessionId || `session_${Date.now()}`;
@@ -479,6 +1049,8 @@ io.on('connection', (socket) => {
             console.log(`[Session] Resuming persistent session: ${sessionId}`);
             savedState = JSON.parse(fs.readFileSync(sessionMetaFile, 'utf8'));
             sessionDir = savedState.sessionDir;
+            jobQueue = savedState.jobQueue || [];
+            currentJobId = savedState.currentJobId || null;
         }
 
         if (!sessionDir) {
@@ -490,38 +1062,78 @@ io.on('connection', (socket) => {
 
         orchestrator = new NexusOrchestrator((logEvent) => {
             socket.emit('nexus_log', logEvent);
+            latestLogs.push({ ...logEvent, at: new Date().toISOString() });
+            latestLogs = latestLogs.slice(-200);
+            updateJobFromMission();
+            emitMissionState();
             // Auto-save on every log event to ensure persistence
             saveSession();
         }, sessionDir);
 
         if (savedState) {
             orchestrator.restorePersistentState(savedState.orchestratorState);
+            latestHistory = savedState.chatHistory || [];
+            latestLogs = savedState.logs || [];
             socket.emit('session_recovered', { 
                 sessionId, 
-                history: savedState.chatHistory || [],
-                logs: savedState.logs || []
+                history: latestHistory,
+                logs: latestLogs
             });
+            const activeJob = jobQueue.find(job => job.id === currentJobId);
+            if (activeJob && activeJob.status === 'running') {
+                activeJob.status = 'queued';
+                currentJobId = null;
+            }
+            emitMissionState();
         } else {
             socket.emit('session_created', { sessionId });
         }
         
         updateOutputsList();
+        processNextJob();
     });
 
-    const saveSession = () => {
-        if (!sessionId || !orchestrator) return;
-        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
-        // We'll need to capture the chat history and logs from the frontend or track them here.
-        // For now, let's at least save the orchestrator internal state.
-        const state = {
-            sessionId,
-            sessionDir,
-            orchestratorState: orchestrator.getPersistentState(),
-            // history and logs should be sent by client periodically or tracked by server
-            lastUpdated: new Date().toISOString()
-        };
-        fs.writeFileSync(sessionMetaFile, JSON.stringify(state, null, 2));
-    };
+    socket.on('stop_task', () => {
+        if (orchestrator) {
+            orchestrator.stop();
+            if (currentJobId) {
+                const activeJob = jobQueue.find(job => job.id === currentJobId);
+                if (activeJob) {
+                    activeJob.status = 'cancelled';
+                    activeJob.finishedAt = new Date().toISOString();
+                }
+                currentJobId = null;
+            }
+            emitMissionState();
+            saveSession();
+            processNextJob();
+        }
+    });
+
+    socket.on('start_new_session', () => {
+        if (orchestrator) orchestrator.stop();
+        
+        sessionId = `session_${Date.now()}`;
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        sessionDir = path.join(__dirname, 'outputs', `session_${timestamp}`);
+        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+
+        orchestrator = new NexusOrchestrator((logEvent) => {
+            socket.emit('nexus_log', logEvent);
+            latestLogs.push({ ...logEvent, at: new Date().toISOString() });
+            latestLogs = latestLogs.slice(-200);
+            socket.emit('mission_state', orchestrator.getMissionControlData());
+            saveSession();
+        }, sessionDir);
+
+        latestHistory = [];
+        latestLogs = [];
+        jobQueue = [];
+        currentJobId = null;
+        socket.emit('session_created', { sessionId });
+        emitMissionState();
+        updateOutputsList();
+    });
 
     socket.on('start_task', async (data) => {
         const { prompt, clientId } = data;
@@ -529,23 +1141,23 @@ io.on('connection', (socket) => {
             socket.emit('nexus_log', { type: 'error', message: 'Nexus Orchestrator not initialized. Please refresh or start a new mission.' });
             return;
         }
-        console.log(`Received task: ${prompt} | Client: ${clientId || 'None'}`);
-        try {
-            // Context Switching Phase
-            if (clientId) {
-                const doc = await db.collection('client_configs').doc(clientId).get();
-                const clientConfigs = doc.exists ? doc.data() : {};
-                orchestrator.setClientContext(clientId, clientConfigs);
-            } else {
-                orchestrator.setClientContext(null, {}); // Revert to global config
-            }
-
-            await orchestrator.execute(prompt);
-            updateOutputsList();
-            saveSession();
-        } catch (error) {
-            socket.emit('nexus_log', { type: 'error', message: `Orchestrator Error: ${error.message}` });
-        }
+        const job = {
+            id: `job_${Date.now()}`,
+            prompt,
+            clientId: clientId || null,
+            status: 'queued',
+            createdAt: new Date().toISOString(),
+            startedAt: null,
+            finishedAt: null,
+            estimatedCostUsd: 0,
+            attempts: 0,
+            nextRunAt: null
+        };
+        jobQueue.unshift(job);
+        socket.emit('nexus_log', { type: 'thought', message: `Mission queued for the Boss. Position: ${jobQueue.filter(item => item.status === 'queued').length}` });
+        emitMissionState();
+        saveSession();
+        processNextJob();
     });
 
     socket.on('user_input', async (data) => {
@@ -555,19 +1167,17 @@ io.on('connection', (socket) => {
             return;
         }
         try {
-            // Context Switching Phase
             if (clientId) {
                 const doc = await db.collection('client_configs').doc(clientId).get();
                 const clientConfigs = doc.exists ? doc.data() : {};
                 orchestrator.setClientContext(clientId, clientConfigs);
             }
-
-            await orchestrator.execute(prompt); // Use execute instead of resume to trigger the run loop with rules
-            // Wait, resume is used specifically for tool input.
-            // Let's keep resume but make sure resume handles context.
             await orchestrator.resume(prompt);
+            updateJobFromMission();
             updateOutputsList();
+            emitMissionState();
             saveSession();
+            processNextJob();
         } catch (error) {
             socket.emit('nexus_log', { type: 'error', message: `Orchestrator Error: ${error.message}` });
         }
@@ -576,13 +1186,40 @@ io.on('connection', (socket) => {
     socket.on('sync_history', (data) => {
         // Client sends full history for deep persistence
         if (!sessionId) return;
-        const sessionMetaFile = path.join(sessionsBaseDir, `${sessionId}.json`);
-        if (fs.existsSync(sessionMetaFile)) {
-            const state = JSON.parse(fs.readFileSync(sessionMetaFile, 'utf8'));
-            state.chatHistory = data.history;
-            state.logs = data.logs;
-            fs.writeFileSync(sessionMetaFile, JSON.stringify(state, null, 2));
-        }
+        latestHistory = data.history || latestHistory;
+        latestLogs = data.logs || latestLogs;
+        saveSession();
+    });
+
+    socket.on('requeue_job', (data) => {
+        const { jobId } = data || {};
+        const job = jobQueue.find(item => item.id === jobId);
+        if (!job) return;
+        if (!['dead_letter', 'cancelled', 'failed'].includes(job.status)) return;
+
+        job.status = 'queued';
+        job.error = null;
+        job.finishedAt = null;
+        job.nextRunAt = null;
+        job.attempts = 0;
+        socket.emit('nexus_log', { type: 'thought', message: `Boss re-queued mission ${jobId} for another attempt.` });
+        emitMissionState();
+        saveSession();
+        processNextJob();
+    });
+
+    socket.on('retry_now', (data) => {
+        const { jobId } = data || {};
+        const job = jobQueue.find(item => item.id === jobId);
+        if (!job) return;
+        if (job.status !== 'retry_wait') return;
+
+        job.status = 'queued';
+        job.nextRunAt = null;
+        socket.emit('nexus_log', { type: 'thought', message: `Boss forced immediate retry for mission ${jobId}.` });
+        emitMissionState();
+        saveSession();
+        processNextJob();
     });
 
     const updateOutputsList = () => {
