@@ -414,11 +414,11 @@ onBeforeUnmount(() => {
       <header class="topbar">
         <div><p class="eyebrow">{{ currentViewMeta.eyebrow }}</p><h1>{{ currentViewMeta.label }}</h1></div>
         <div class="action-row topbar-actions">
-          <button class="ghost" @click="isSidebarCollapsed = !isSidebarCollapsed">{{ isSidebarCollapsed ? 'Show Left' : 'Hide Left' }}</button>
-          <button class="ghost" @click="isRailCollapsed = !isRailCollapsed">{{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}</button>
-          <button v-if="!isRailCollapsed" class="ghost" @click="isSummaryVisible = !isSummaryVisible">{{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}</button>
-          <button class="ghost" @click="enableNotifications">Enable Alerts</button>
-          <button class="ghost" @click="toggleTheme">{{ theme === 'dark' ? 'Light Theme' : 'Dark Theme' }}</button>
+          <button class="ghost desktop-only" @click="isSidebarCollapsed = !isSidebarCollapsed">{{ isSidebarCollapsed ? 'Show Left' : 'Hide Left' }}</button>
+          <button class="ghost desktop-only" @click="isRailCollapsed = !isRailCollapsed">{{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}</button>
+          <button v-if="!isRailCollapsed" class="ghost desktop-only" @click="isSummaryVisible = !isSummaryVisible">{{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}</button>
+          <button class="ghost mobile-secondary" @click="enableNotifications">Alerts</button>
+          <button class="ghost mobile-secondary" @click="toggleTheme">{{ theme === 'dark' ? 'Light' : 'Dark' }}</button>
           <button class="ghost mobile-only" @click="isMobileNavOpen = !isMobileNavOpen">Menu</button>
           <button v-if="activeView === 'clients'" class="primary" @click="isAddingClient = true">Add Client</button>
           <button v-else class="primary" @click="startNewOrchestration">New Session</button>
@@ -1095,10 +1095,20 @@ button { border: none; cursor: pointer; }
 .toast { position: fixed; right: 22px; bottom: 22px; padding: 14px 18px; z-index: 30; }
 .hidden-input { display: none; }
 .mobile-only { display: none; }
+.mobile-secondary { display: inline-flex; }
+.desktop-only { display: inline-flex; }
 .fade-enter-active, .fade-leave-active { transition: opacity .16s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
 @media (max-width:1100px) {
+  body {
+    overflow: auto;
+  }
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
   .app-shell, .hero-grid, .chat-layout, .grid-two { grid-template-columns: 1fr; }
   .workspace {
     height: auto;
@@ -1112,6 +1122,7 @@ button { border: none; cursor: pointer; }
   .chat-stream,
   .rail {
     min-height: unset;
+    overflow: visible;
   }
   .sidebar {
     position: fixed;
@@ -1140,8 +1151,46 @@ button { border: none; cursor: pointer; }
 
 @media (max-width:720px) {
   .workspace { padding: 16px; }
+  .chat-layout {
+    display: block;
+    height: auto;
+    overflow: scroll;
+  }
+  .panel-chat {
+    display: block;
+    min-height: auto;
+    height: auto;
+    overflow: visible;
+    padding: 18px;
+  }
+  .panel-chat > * + * {
+    margin-top: 12px;
+  }
+  .panel-chat .panel-head {
+    display: grid;
+    gap: 12px;
+  }
+  .panel-chat .context-box {
+    width: 100%;
+  }
+  .panel-chat .context-box select {
+    width: 100%;
+  }
+  .stage-strip {
+    display: none;
+  }
+  .chat-stream {
+    min-height: 180px;
+    max-height: 38vh;
+    overflow: auto;
+    padding-right: 2px;
+  }
+  .rail {
+    display: none;
+  }
   .message-card { max-width: 100%; }
-  .topbar, .action-row, .panel-head, .run-head, .inline-input { flex-direction: column; align-items: flex-start; }
+  .topbar, .panel-head, .run-head, .inline-input { flex-direction: column; align-items: flex-start; }
+  .action-row { align-items: center; }
   .stage-strip { grid-template-columns: 1fr; }
   .hero-card,
   .metric-card,
@@ -1160,13 +1209,29 @@ button { border: none; cursor: pointer; }
   }
   .topbar-actions {
     width: 100%;
-    justify-content: stretch;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
   }
   .topbar-actions > * {
     width: 100%;
+    min-width: 0;
+    justify-content: center;
+    padding-inline: 10px;
+  }
+  .desktop-only {
+    display: none;
+  }
+  .mobile-secondary,
+  .mobile-only {
+    display: inline-flex;
+  }
+  .topbar .primary {
+    grid-column: 1 / -1;
   }
   .composer {
     position: static;
+    margin-top: 12px;
   }
   body {
     overflow: auto;
