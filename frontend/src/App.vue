@@ -198,7 +198,12 @@ async function markInvoicePaid(invoiceId) {
 }
 
 function downloadInvoice(invoiceId, format) {
-  window.open(`/api/invoices/${invoiceId}/export?format=${format}`, '_blank')
+  const link = document.createElement('a')
+  link.href = `/api/invoices/${invoiceId}/export?format=${format}`
+  link.download = ''
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 async function sendInvoice(invoiceId) {
