@@ -9,6 +9,9 @@ const fs = require('fs');
 const { db } = require('./core/firebase');
 const ConfigService = require('./core/config');
 const PricingService = require('./core/pricing');
+const MarketingService = require('./core/marketing');
+const MarketingPrompts = require('./core/marketingPrompts');
+const MarketingTemplates = require('./core/marketingTemplates');
 const nodemailer = require('nodemailer');
 
 const app = express();
@@ -500,6 +503,233 @@ app.get('/api/pricing/catalog', (req, res) => {
     res.json({ catalog: PricingService.getCatalog() });
 });
 
+app.get('/api/marketing/workflows', (req, res) => {
+    res.json({ workflows: MarketingService.getWorkflows(), promptPacks: MarketingPrompts.getAllPromptPacks() });
+});
+
+app.post('/api/marketing/brief', async (req, res) => {
+    try {
+        const { workflowId, target, clientId, notes, budget, channels } = req.body;
+        const workflow = MarketingService.getWorkflow(workflowId);
+        if (!workflow) return res.status(400).json({ error: 'Unknown marketing workflow' });
+
+        let client = null;
+        if (clientId && db) {
+            const clientDoc = await db.collection('clients').doc(clientId).get();
+            client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+        }
+
+        const brief = MarketingService.buildMissionBrief({
+            workflowId,
+            target,
+            clientName: client?.name || '',
+            notes,
+            budget,
+            channels
+        });
+
+        let savedId = null;
+        if (db) {
+            const docRef = await db.collection('marketing_briefs').add({
+                workflowId,
+                clientId: clientId || null,
+                target: target || '',
+                notes: notes || '',
+                budget: budget || '',
+                channels: Array.isArray(channels) ? channels : [],
+                brief,
+                createdAt: new Date()
+            });
+            savedId = docRef.id;
+        }
+
+        res.json({
+            success: true,
+            id: savedId,
+            workflow,
+            promptPack: MarketingPrompts.getPromptPack(workflowId),
+            brief
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/marketing/outputs', async (req, res) => {
+    try {
+        if (!db) return res.json({ outputs: [] });
+        let query = db.collection('marketing_outputs').orderBy('createdAt', 'desc');
+        if (req.query.clientId) query = query.where('clientId', '==', req.query.clientId);
+        const snapshot = await query.get();
+        const outputs = [];
+        snapshot.forEach((doc) => outputs.push({ id: doc.id, ...doc.data() }));
+        res.json({ outputs });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/marketing/briefs', async (req, res) => {
+    try {
+        if (!db) return res.json({ briefs: [] });
+        let query = db.collection('marketing_briefs').orderBy('createdAt', 'desc');
+        if (req.query.clientId) query = query.where('clientId', '==', req.query.clientId);
+        const snapshot = await query.get();
+        const briefs = [];
+        snapshot.forEach((doc) => briefs.push({ id: doc.id, ...doc.data() }));
+        res.json({ briefs });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/deliverable', async (req, res) => {
+    try {
+        const { workflowId, clientId, type, target, notes, brief } = req.body;
+        const workflow = MarketingService.getWorkflow(workflowId);
+        if (!workflow) return res.status(400).json({ error: 'Unknown marketing workflow' });
+        const promptPack = MarketingPrompts.getPromptPack(['audit', 'copy', 'ads', 'report'].includes(workflowId) ? workflowId : 'report');
+
+        let client = null;
+        if (clientId && db) {
+            const clientDoc = await db.collection('clients').doc(clientId).get();
+            client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+        }
+
+        const content = type === 'proposal'
+            ? MarketingTemplates.buildProposalMarkdown({
+                clientName: client?.name || '',
+                workflowLabel: workflow.label,
+                target,
+                notes
+            })
+            : MarketingTemplates.buildReportMarkdown({
+                clientName: client?.name || '',
+                workflowLabel: workflow.label,
+                target,
+                notes,
+                promptPack,
+                brief
+            });
+
+        const written = MarketingTemplates.writeMarketingFile({
+            outputsRoot: path.join(__dirname, 'outputs'),
+            clientId: clientId || 'system',
+            type,
+            baseName: `${type}-${workflow.label}-${client?.name || 'client'}`,
+            content
+        });
+        const pdfWritten = MarketingTemplates.writeMarketingPdf({
+            outputsRoot: path.join(__dirname, 'outputs'),
+            clientId: clientId || 'system',
+            baseName: `${type}-${workflow.label}-${client?.name || 'client'}`,
+            pdfBuffer: MarketingTemplates.buildMarketingPdfBuffer({
+                clientName: client?.name || '',
+                workflowLabel: workflow.label,
+                target,
+                notes,
+                brief,
+                type
+            })
+        });
+
+        const relativeUrl = `/outputs/marketing/${clientId || 'system'}/${written.filename}`;
+        const relativePdfUrl = `/outputs/marketing/${clientId || 'system'}/${pdfWritten.filename}`;
+        let savedId = null;
+        if (db) {
+            const ref = await db.collection('marketing_outputs').add({
+                clientId: clientId || null,
+                workflowId,
+                type,
+                target: target || '',
+                notes: notes || '',
+                fileName: written.filename,
+                pdfFileName: pdfWritten.filename,
+                url: relativeUrl,
+                pdfUrl: relativePdfUrl,
+                createdAt: new Date()
+            });
+            savedId = ref.id;
+        }
+
+        res.json({ success: true, id: savedId, url: relativeUrl, pdfUrl: relativePdfUrl, fileName: written.filename, pdfFileName: pdfWritten.filename });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/marketing/deliverable/:id/export', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const deliverableDoc = await db.collection('marketing_outputs').doc(req.params.id).get();
+        if (!deliverableDoc.exists) return res.status(404).json({ error: 'Deliverable not found' });
+        const deliverable = { id: deliverableDoc.id, ...deliverableDoc.data() };
+        const format = String(req.query.format || 'md').toLowerCase();
+        const fileName = format === 'pdf' ? (deliverable.pdfFileName || deliverable.fileName?.replace(/\.md$/i, '.pdf')) : deliverable.fileName;
+        const absolutePath = path.join(__dirname, 'outputs', 'marketing', deliverable.clientId || 'system', fileName);
+        if (!fs.existsSync(absolutePath)) return res.status(404).json({ error: 'Export file not found' });
+        res.download(absolutePath, fileName);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/deliverable/:id/send', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const deliverableDoc = await db.collection('marketing_outputs').doc(req.params.id).get();
+        if (!deliverableDoc.exists) return res.status(404).json({ error: 'Deliverable not found' });
+
+        const deliverable = { id: deliverableDoc.id, ...deliverableDoc.data() };
+        if (!deliverable.clientId) return res.status(400).json({ error: 'Deliverable is not linked to a client' });
+
+        const clientDoc = await db.collection('clients').doc(deliverable.clientId).get();
+        if (!clientDoc.exists) return res.status(404).json({ error: 'Client not found for deliverable' });
+        const client = { id: clientDoc.id, ...clientDoc.data() };
+        if (!client.email) return res.status(400).json({ error: 'Client email is missing' });
+
+        const gmailUser = await ConfigService.get('GMAIL_USER');
+        const gmailPassword = await ConfigService.get('GMAIL_APP_PASSWORD');
+        if (!gmailUser || !gmailPassword) return res.status(400).json({ error: 'Gmail credentials are not configured' });
+
+        const attachmentPath = path.join(__dirname, 'outputs', 'marketing', deliverable.clientId, deliverable.fileName);
+        const pdfAttachmentPath = path.join(__dirname, 'outputs', 'marketing', deliverable.clientId, deliverable.pdfFileName || deliverable.fileName.replace(/\.md$/i, '.pdf'));
+        if (!fs.existsSync(attachmentPath)) return res.status(404).json({ error: 'Deliverable file is missing on disk' });
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: gmailUser, pass: gmailPassword }
+        });
+
+        const formalType = deliverable.type === 'proposal' ? 'proposal' : 'report';
+        const subject = `Nexus OS ${formalType === 'proposal' ? 'Proposal' : 'Marketing Report'} for ${client.company || client.name}`;
+        const html = `
+            <div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.6">
+                <p>Dear ${client.name || 'Client'},</p>
+                <p>Please find attached your ${formalType} prepared by Nexus OS for the <strong>${deliverable.workflowId}</strong> workflow.</p>
+                <p>The attached file is formatted for direct client review and can also be carried into your quote, invoice, or implementation planning process.</p>
+                <p>If you would like, we can now convert the recommendations into live campaign execution, creative production, or development tasks.</p>
+                <p>Regards,<br>Nexus OS Agency Team</p>
+            </div>
+        `;
+
+        await transporter.sendMail({
+            from: gmailUser,
+            to: client.email,
+            subject,
+            html,
+            attachments: [
+                { filename: deliverable.fileName, path: attachmentPath },
+                ...(fs.existsSync(pdfAttachmentPath) ? [{ filename: path.basename(pdfAttachmentPath), path: pdfAttachmentPath }] : [])
+            ]
+        });
+
+        res.json({ success: true, sentTo: client.email });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/quotes', async (req, res) => {
     try {
         if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
@@ -630,6 +860,27 @@ app.post('/api/invoices/:id/send', async (req, res) => {
         const model = bundle.model;
         const pdf = buildInvoicePdfBuffer(model);
         const csv = buildInvoiceCsv(model);
+        const includeMarketing = req.body?.includeMarketing !== false;
+        const extraAttachments = [];
+        if (includeMarketing && bundle.invoice.clientId) {
+            const marketingSnapshot = await db.collection('marketing_outputs')
+                .where('clientId', '==', bundle.invoice.clientId)
+                .orderBy('createdAt', 'desc')
+                .limit(2)
+                .get();
+            marketingSnapshot.forEach((doc) => {
+                const data = doc.data();
+                if (data?.fileName) {
+                    const absolutePath = path.join(__dirname, 'outputs', 'marketing', bundle.invoice.clientId, data.fileName);
+                    if (fs.existsSync(absolutePath)) {
+                        extraAttachments.push({
+                            filename: data.fileName,
+                            path: absolutePath
+                        });
+                    }
+                }
+            });
+        }
         const subject = `Invoice ${model.invoiceNumber} from Nexus OS`;
         const html = `
             <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6">
@@ -638,6 +889,7 @@ app.post('/api/invoices/:id/send', async (req, res) => {
                 <p>Total due: <strong>${formatCurrencyValue(model.total, model.currency)}</strong></p>
                 ${model.paymentUrl ? `<p>You can review payment details here: <a href="${model.paymentUrl}">${model.paymentUrl}</a></p>` : ''}
                 <p>The attached documents include a professional PDF invoice and a spreadsheet-ready CSV report for your records.</p>
+                ${extraAttachments.length ? '<p>We have also attached the latest marketing proposal/report files prepared for your engagement.</p>' : ''}
                 <p>Regards,<br/>Nexus OS Finance Desk</p>
             </div>
         `;
@@ -649,7 +901,8 @@ app.post('/api/invoices/:id/send', async (req, res) => {
             html,
             attachments: [
                 { filename: `invoice-${model.invoiceNumber.toLowerCase()}.pdf`, content: pdf, contentType: 'application/pdf' },
-                { filename: `invoice-${model.invoiceNumber.toLowerCase()}.csv`, content: csv, contentType: 'text/csv; charset=utf-8' }
+                { filename: `invoice-${model.invoiceNumber.toLowerCase()}.csv`, content: csv, contentType: 'text/csv; charset=utf-8' },
+                ...extraAttachments
             ]
         });
 

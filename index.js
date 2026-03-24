@@ -20,6 +20,8 @@ const SquadSystem = require('./core/squad');
 const LLMService = require('./core/llm');
 const GovernanceService = require('./core/governance');
 const SelfHealingService = require('./core/selfHealing');
+const MarketingService = require('./core/marketing');
+const MarketingPrompts = require('./core/marketingPrompts');
 
 /**
  * Nexus OS Orchestrator
@@ -78,6 +80,7 @@ class NexusOrchestrator {
         this.auditTrail = [];
         this.pendingRepair = null;
         this.recoveryHistory = [];
+        this.currentMarketingWorkflow = null;
     }
 
     /**
@@ -115,12 +118,19 @@ class NexusOrchestrator {
         // Recall Long-Term Memories
         const memories = await MemoryService.recallRecent(5);
         const recoveryPatterns = await MemoryService.findRecoveryPatterns(userRequest, 3);
+        const detectedMarketingWorkflow = MarketingService.detectWorkflowFromText(userRequest);
+        this.currentMarketingWorkflow = detectedMarketingWorkflow ? detectedMarketingWorkflow.id : null;
         let memoryPrompt = "";
         if (memories.length > 0) {
             memoryPrompt = `\n\n### LONG-TERM MEMORY RECALL:\n${memories.map(m => `- ${m}`).join('\n')}\n\n`;
         }
         if (recoveryPatterns.length > 0) {
             memoryPrompt += `### RECOVERY PATTERN RECALL:\n${recoveryPatterns.map((p, idx) => `${idx + 1}. Tool: ${p.tool} | Failure: ${p.classification} | Successful response: ${p.resolution || p.playbook || p.summary}`).join('\n')}\n\n`;
+        }
+        if (detectedMarketingWorkflow) {
+            const packId = ['audit', 'copy', 'ads', 'report'].includes(detectedMarketingWorkflow.id) ? detectedMarketingWorkflow.id : 'report';
+            memoryPrompt += `${MarketingPrompts.buildPromptContext(packId, detectedMarketingWorkflow)}\n\n`;
+            memoryPrompt += `### MARKETING SPECIALISTS\n${detectedMarketingWorkflow.specialists.map((item) => `- ${item}`).join('\n')}\n\n`;
         }
 
         // Inject the active working directory into the prompt if specified
@@ -672,6 +682,7 @@ class NexusOrchestrator {
             lastUploadedFile: this.lastUploadedFile,
             stepCount: this.stepCount,
             currentClientId: this.currentClientId,
+            currentMarketingWorkflow: this.currentMarketingWorkflow,
             isWaitingForInput: this.isWaitingForInput,
             currentRun: this.currentRun,
             recentRuns: this.recentRuns,
@@ -691,6 +702,7 @@ class NexusOrchestrator {
         if (state.lastUploadedFile) this.lastUploadedFile = state.lastUploadedFile;
         if (state.stepCount !== undefined) this.stepCount = state.stepCount;
         if (state.currentClientId !== undefined) this.currentClientId = state.currentClientId;
+        if (state.currentMarketingWorkflow !== undefined) this.currentMarketingWorkflow = state.currentMarketingWorkflow;
         if (state.isWaitingForInput !== undefined) this.isWaitingForInput = state.isWaitingForInput;
         if (state.currentRun) this.currentRun = state.currentRun;
         if (state.recentRuns) this.recentRuns = state.recentRuns;

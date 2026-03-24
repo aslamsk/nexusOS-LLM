@@ -24,6 +24,11 @@ const systemHealth = ref({ status: 'unknown', firestore: false })
 const pricingCatalog = ref({})
 const quotes = ref([])
 const invoices = ref([])
+const marketingWorkflows = ref([])
+const marketingOutputs = ref([])
+const marketingBriefs = ref([])
+const marketingDraft = ref({ workflowId: 'audit', target: '', notes: '', budget: '', channels: [] })
+const generatedMarketingBrief = ref('')
 const selectedFinanceClient = ref('')
 const budgetSummary = ref({ allocated: 0, approvedOverage: 0, spent: 0, remaining: 0, requiresBossApproval: false })
 const quoteDraft = ref({
@@ -56,6 +61,7 @@ const navItems = [
   { view: 'chat', label: 'Mission Control', eyebrow: 'Live operations' },
   { view: 'clients', label: 'Clients', eyebrow: 'Contexts and keys' },
   { view: 'finance', label: 'Finance', eyebrow: 'Quotes and invoices' },
+  { view: 'marketing', label: 'Marketing', eyebrow: 'Workflows and briefs' },
   { view: 'tools', label: 'Capabilities', eyebrow: 'Provider readiness' },
   { view: 'settings', label: 'Settings', eyebrow: 'System configuration' }
 ]
@@ -75,6 +81,8 @@ const CLIENT_KEY_INFO = {
 const currentViewMeta = computed(() => navItems.find((item) => item.view === activeView.value) || navItems[0])
 const activeClientName = computed(() => clients.value.find((client) => client.id === selectedClientForChat.value)?.name || 'System Default')
 const activeIntegrationCount = computed(() => toolsData.value.filter((tool) => tool.status === 'active').length)
+const selectedMarketingWorkflow = computed(() => marketingWorkflows.value.find((workflow) => workflow.id === marketingDraft.value.workflowId) || null)
+const latestMarketingOutput = computed(() => marketingOutputs.value[0] || null)
 const latestRuns = computed(() => missionSummary.value.recentRuns.slice(0, 6))
 const latestSessions = computed(() => sessionCatalog.value.slice(0, 5))
 const recentAudit = computed(() => (missionSummary.value.auditTrail || []).slice(0, 6))
@@ -106,6 +114,20 @@ watch(chatHistory, () => {
     socket.emit('sync_history', { history: JSON.parse(JSON.stringify(chatHistory.value)), logs: JSON.parse(JSON.stringify(runtimeLogs.value)) })
   }, 500)
 }, { deep: true })
+
+watch(selectedFinanceClient, async (value) => {
+  if (!value) {
+    marketingOutputs.value = []
+    marketingBriefs.value = []
+    return
+  }
+  await Promise.allSettled([loadBudget(), loadQuotes(), loadInvoices(), loadMarketingBriefs(value), loadMarketingOutputs(value)])
+})
+
+watch(selectedClientForChat, async (value) => {
+  if (activeView.value !== 'marketing' || !value) return
+  await Promise.allSettled([loadMarketingBriefs(value), loadMarketingOutputs(value)])
+})
 
 function showToast(message, type = 'success') {
   configToast.value = { show: true, message, type }
@@ -159,6 +181,9 @@ async function loadSystemHealth() { systemHealth.value = await fetchJson('/api/h
 async function loadPricingCatalog() { pricingCatalog.value = (await fetchJson('/api/pricing/catalog')).catalog || {} }
 async function loadQuotes() { quotes.value = (await fetchJson(`/api/quotes${selectedFinanceClient.value ? `?clientId=${selectedFinanceClient.value}` : ''}`)).quotes || [] }
 async function loadInvoices() { invoices.value = (await fetchJson(`/api/invoices${selectedFinanceClient.value ? `?clientId=${selectedFinanceClient.value}` : ''}`)).invoices || [] }
+async function loadMarketingWorkflows() { marketingWorkflows.value = (await fetchJson('/api/marketing/workflows')).workflows || [] }
+async function loadMarketingOutputs(clientId = '') { marketingOutputs.value = (await fetchJson(`/api/marketing/outputs${clientId ? `?clientId=${clientId}` : ''}`)).outputs || [] }
+async function loadMarketingBriefs(clientId = '') { marketingBriefs.value = (await fetchJson(`/api/marketing/briefs${clientId ? `?clientId=${clientId}` : ''}`)).briefs || [] }
 async function loadBudget() {
   if (!selectedFinanceClient.value) return
   budgetSummary.value = (await fetchJson(`/api/clients/${selectedFinanceClient.value}/budget`)).budget
@@ -197,6 +222,98 @@ async function markInvoicePaid(invoiceId) {
   await Promise.all([loadInvoices(), loadBudget()])
 }
 
+async function generateMarketingBrief() {
+  const parsedChannels = Array.isArray(marketingDraft.value.channels)
+    ? marketingDraft.value.channels
+    : String(marketingDraft.value.channels || '').split(',').map((item) => item.trim()).filter(Boolean)
+  const data = await fetchJson('/api/marketing/brief', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...marketingDraft.value,
+      channels: parsedChannels,
+      clientId: selectedClientForChat.value || selectedFinanceClient.value || null
+    })
+  })
+  generatedMarketingBrief.value = data.brief
+  showToast('Marketing brief generated')
+}
+
+function launchMarketingBrief() {
+  if (!generatedMarketingBrief.value) return showToast('Generate a marketing brief first', 'error')
+  activeView.value = 'chat'
+  promptInput.value = generatedMarketingBrief.value
+}
+
+function launchMarketingPreset(client, workflowId = 'audit') {
+  activeView.value = 'marketing'
+  selectedClientForChat.value = client.id
+  selectedFinanceClient.value = client.id
+  marketingDraft.value.workflowId = workflowId
+  marketingDraft.value.target = client.company || client.name
+  marketingDraft.value.notes = client.notes || ''
+  generatedMarketingBrief.value = ''
+  loadMarketingWorkflows()
+  loadMarketingBriefs(client.id)
+  loadMarketingOutputs(client.id)
+}
+
+async function generateMarketingDeliverable(type) {
+  if (!generatedMarketingBrief.value) return showToast('Generate a marketing brief first', 'error')
+  const data = await fetchJson('/api/marketing/deliverable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflowId: marketingDraft.value.workflowId,
+      clientId: selectedClientForChat.value || selectedFinanceClient.value || null,
+      type,
+      target: marketingDraft.value.target,
+      notes: marketingDraft.value.notes,
+      brief: generatedMarketingBrief.value
+    })
+  })
+  showToast(`${type === 'proposal' ? 'Proposal' : 'Report'} generated`)
+  await Promise.all([
+    loadMarketingOutputs(selectedClientForChat.value || selectedFinanceClient.value || ''),
+    loadMarketingBriefs(selectedClientForChat.value || selectedFinanceClient.value || '')
+  ])
+  window.open(data.pdfUrl || data.url, '_blank')
+}
+
+function launchDeliverableToChat(item) {
+  activeView.value = 'chat'
+  promptInput.value = [
+    `Continue from this marketing ${item.type || 'deliverable'} for workflow "${item.workflowId}".`,
+    `Use the generated file at ${window.location.origin}${item.url}.`,
+    'Turn it into the next client-ready execution plan and use the current client context if available.'
+  ].join('\n')
+}
+
+async function sendMarketingDeliverable(item) {
+  const data = await fetchJson(`/api/marketing/deliverable/${item.id}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  })
+  showToast(`Marketing file sent to ${data.sentTo}`)
+}
+
+function openFinanceMarketing(type = 'proposal') {
+  activeView.value = 'marketing'
+  generatedMarketingBrief.value = ''
+  if (selectedFinanceClient.value) {
+    selectedClientForChat.value = selectedFinanceClient.value
+    const client = clients.value.find((item) => item.id === selectedFinanceClient.value)
+    if (client) {
+      marketingDraft.value.target = client.company || client.name
+      if (!marketingDraft.value.notes) marketingDraft.value.notes = client.notes || ''
+    }
+  }
+  marketingDraft.value.workflowId = type === 'proposal' ? 'proposal' : 'report'
+  loadMarketingWorkflows()
+  loadMarketingBriefs(selectedFinanceClient.value || '')
+  loadMarketingOutputs(selectedFinanceClient.value || '')
+}
+
 function downloadInvoice(invoiceId, format) {
   const link = document.createElement('a')
   link.href = `/api/invoices/${invoiceId}/export?format=${format}`
@@ -206,8 +323,17 @@ function downloadInvoice(invoiceId, format) {
   link.remove()
 }
 
+function downloadMarketingDeliverable(item, format = 'md') {
+  const link = document.createElement('a')
+  link.href = `/api/marketing/deliverable/${item.id}/export?format=${format}`
+  link.download = ''
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
 async function sendInvoice(invoiceId) {
-  const data = await fetchJson(`/api/invoices/${invoiceId}/send`, { method: 'POST' })
+  const data = await fetchJson(`/api/invoices/${invoiceId}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ includeMarketing: true }) })
   showToast(`Invoice sent to ${data.sentTo}`)
   await loadInvoices()
 }
@@ -305,6 +431,7 @@ function changeView(view) {
   isMobileNavOpen.value = false
   if (view === 'clients') loadClients()
   if (view === 'finance') { loadPricingCatalog(); loadQuotes(); loadInvoices(); if (selectedFinanceClient.value) loadBudget() }
+  if (view === 'marketing') { loadMarketingWorkflows(); loadMarketingBriefs(selectedClientForChat.value || selectedFinanceClient.value || ''); loadMarketingOutputs(selectedClientForChat.value || selectedFinanceClient.value || '') }
   if (view === 'tools') loadToolsDashboard()
   if (view === 'settings') openSettings()
 }
@@ -543,14 +670,14 @@ onBeforeUnmount(() => {
       <section v-else-if="activeView === 'clients'" class="grid-two">
         <div class="panel">
           <div class="panel-head"><div><span class="tiny-label">Client operations</span><h3>Accounts and isolated keys</h3></div><button class="ghost" @click="loadClients">Refresh</button></div>
-          <div class="card-grid"><div v-for="client in clients" :key="client.id" class="mini-card"><div class="run-head"><strong>{{ client.name }}</strong><span class="badge success">{{ client.status || 'active' }}</span></div><p class="muted">{{ client.company || 'No organization listed' }}</p><p class="muted">{{ client.email || 'No email set' }}</p><div class="action-row"><button class="ghost" @click="manageClientKeys(client)">Keys</button><button class="primary subtle" @click="activeView = 'chat'; selectedClientForChat = client.id">Use Context</button></div></div></div>
+          <div class="card-grid"><div v-for="client in clients" :key="client.id" class="mini-card"><div class="run-head"><strong>{{ client.name }}</strong><span class="badge success">{{ client.status || 'active' }}</span></div><p class="muted">{{ client.company || 'No organization listed' }}</p><p class="muted">{{ client.email || 'No email set' }}</p><div class="action-row"><button class="ghost" @click="manageClientKeys(client)">Keys</button><button class="ghost" @click="launchMarketingPreset(client)">Marketing</button><button class="primary subtle" @click="activeView = 'chat'; selectedClientForChat = client.id">Use Context</button></div></div></div>
         </div>
         <div class="panel"><div class="panel-head"><div><span class="tiny-label">Sessions</span><h3>Recent recoveries</h3></div></div><div v-if="latestSessions.length" class="stack-list"><div v-for="session in latestSessions" :key="session.id" class="stack-item"><strong>{{ session.preview }}</strong><p class="muted">{{ prettyDate(session.lastUpdated) }}</p></div></div><p v-else class="muted">Saved sessions will appear here.</p></div>
       </section>
 
       <section v-else-if="activeView === 'finance'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Finance</span><h3>Quote and invoice control</h3></div><div class="context-box"><label>Client</label><select v-model="selectedFinanceClient" @change="loadQuotes(); loadInvoices(); loadBudget()"><option value="">Select Client</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div></div>
+          <div class="panel-head"><div><span class="tiny-label">Finance</span><h3>Quote and invoice control</h3></div><div class="context-box"><label>Client</label><select v-model="selectedFinanceClient" @change="loadQuotes(); loadInvoices(); loadBudget(); loadMarketingBriefs(selectedFinanceClient); loadMarketingOutputs(selectedFinanceClient)"><option value="">Select Client</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div></div>
           <div class="card-grid">
             <div class="mini-card"><label>Service</label><select v-model="quoteDraft.items[0].serviceCode"><option v-for="(info, code) in pricingCatalog" :key="code" :value="code">{{ info.label }}</option></select></div>
             <div class="mini-card"><label>Quantity</label><input v-model="quoteDraft.items[0].quantity" type="number" min="1"></div>
@@ -575,9 +702,78 @@ onBeforeUnmount(() => {
           <p v-else class="muted">No quotes yet.</p>
         </div>
         <div class="panel">
+          <div class="panel-head"><div><span class="tiny-label">Marketing delivery</span><h3>Proposal and report bridge</h3></div></div>
+          <div class="stack-list">
+            <div class="stack-item">
+              <strong>Client-facing documents</strong>
+              <p class="muted">Generate professional proposals and reports from the selected client context, then route them into finance or mission execution.</p>
+              <div class="action-row"><button class="ghost" @click="openFinanceMarketing('proposal')">New Proposal</button><button class="ghost" @click="openFinanceMarketing('report')">New Report</button></div>
+            </div>
+            <div v-if="latestMarketingOutput" class="stack-item">
+              <strong>Latest marketing output</strong>
+              <p class="muted">{{ latestMarketingOutput.fileName }}</p>
+              <div class="action-row"><button class="ghost" @click="downloadMarketingDeliverable(latestMarketingOutput, 'pdf')">PDF</button><button class="ghost" @click="launchDeliverableToChat(latestMarketingOutput)">Use In Mission</button><button class="ghost" @click="sendMarketingDeliverable(latestMarketingOutput)">Send To Client</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
           <div class="panel-head"><div><span class="tiny-label">Invoices</span><h3>Payment status</h3></div></div>
           <div v-if="invoices.length" class="stack-list"><div v-for="invoice in invoices.slice(0, 6)" :key="invoice.id" class="stack-item"><div class="run-head"><strong>Invoice {{ invoice.id.slice(0, 8) }}</strong><span class="badge" :class="invoice.status === 'paid' ? 'success' : 'warning'">{{ invoice.status }}</span></div><p class="muted">{{ dualCurrency(invoice.pricing?.total || 0) }} · <a :href="invoice.paymentUrl" target="_blank" rel="noreferrer">Pay</a></p><div class="action-row"><button class="ghost" @click="downloadInvoice(invoice.id, 'pdf')">PDF</button><button class="ghost" @click="downloadInvoice(invoice.id, 'csv')">Excel</button><button class="ghost" @click="sendInvoice(invoice.id)">Send</button><button v-if="invoice.status !== 'paid'" class="ghost" @click="markInvoicePaid(invoice.id)">Mark Paid</button></div></div></div>
           <p v-else class="muted">No invoices yet.</p>
+        </div>
+      </section>
+
+      <section v-else-if="activeView === 'marketing'" class="grid-two">
+        <div class="panel">
+          <div class="panel-head"><div><span class="tiny-label">Marketing</span><h3>Nexus workflow builder</h3></div><button class="ghost" @click="loadMarketingWorkflows">Refresh</button></div>
+          <div v-if="selectedMarketingWorkflow" class="mini-card full">
+            <div class="run-head"><strong>{{ selectedMarketingWorkflow.label }}</strong><span class="badge">{{ selectedMarketingWorkflow.category }}</span></div>
+            <p class="muted">{{ selectedMarketingWorkflow.description }}</p>
+            <p class="muted">Expected output: {{ selectedMarketingWorkflow.output }}</p>
+          </div>
+          <div class="card-grid">
+            <div class="mini-card">
+              <label>Workflow</label>
+              <select v-model="marketingDraft.workflowId">
+                <option v-for="workflow in marketingWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.label }}</option>
+              </select>
+            </div>
+            <div class="mini-card">
+              <label>Target URL / Topic</label>
+              <input v-model="marketingDraft.target" placeholder="https://clientsite.com or offer/topic">
+            </div>
+            <div class="mini-card">
+              <label>Budget</label>
+              <input v-model="marketingDraft.budget" placeholder="$2,000 monthly or Rs. 1,50,000">
+            </div>
+            <div class="mini-card full">
+              <label>Channels</label>
+              <input v-model="marketingDraft.channels" placeholder="Meta Ads, Google Ads, Email, LinkedIn">
+              <p class="muted">Separate channels with commas.</p>
+            </div>
+            <div class="mini-card full">
+              <label>Notes</label>
+              <textarea v-model="marketingDraft.notes" placeholder="Goals, offer details, audience, constraints, deliverable expectations."></textarea>
+            </div>
+          </div>
+          <div class="action-row"><button class="primary" @click="generateMarketingBrief()">Generate Brief</button></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><span class="tiny-label">Generated brief</span><h3>Mission-ready prompt</h3></div></div>
+          <div class="mini-card">
+            <textarea v-model="generatedMarketingBrief" placeholder="Generated marketing workflow brief will appear here."></textarea>
+            <div class="action-row"><button class="ghost" @click="launchMarketingBrief">Send To Mission Control</button><button class="ghost" @click="generateMarketingDeliverable('report')">Generate Report</button><button class="ghost" @click="generateMarketingDeliverable('proposal')">Generate Proposal</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><span class="tiny-label">Brief memory</span><h3>Saved marketing briefs</h3></div></div>
+          <div v-if="marketingBriefs.length" class="stack-list"><div v-for="item in marketingBriefs.slice(0, 6)" :key="item.id" class="stack-item"><div class="run-head"><strong>{{ item.workflowId }}</strong><span>{{ prettyDate(item.createdAt?.seconds ? item.createdAt.seconds * 1000 : item.createdAt) }}</span></div><p class="muted">{{ item.target || 'No target specified' }}</p><div class="action-row"><button class="ghost" @click="generatedMarketingBrief = item.brief">Load Brief</button><button class="ghost" @click="promptInput = item.brief; activeView = 'chat'">Launch</button></div></div></div>
+          <p v-else class="muted">Saved workflow briefs will appear here.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><span class="tiny-label">Deliverables</span><h3>Generated marketing files</h3></div></div>
+          <div v-if="marketingOutputs.length" class="stack-list"><div v-for="item in marketingOutputs.slice(0, 8)" :key="item.id || item.url" class="stack-item"><div class="run-head"><strong>{{ item.type }}</strong><span>{{ item.workflowId }}</span></div><p class="muted">{{ item.fileName }}</p><div class="action-row"><a :href="item.url" target="_blank" rel="noreferrer" class="link-btn">Open</a><button class="ghost" @click="downloadMarketingDeliverable(item, 'pdf')">PDF</button><button class="ghost" @click="launchDeliverableToChat(item)">Use In Mission</button><button class="ghost" @click="sendMarketingDeliverable(item)">Send To Client</button></div></div></div>
+          <p v-else class="muted">No marketing deliverables generated yet.</p>
         </div>
       </section>
 
@@ -1119,10 +1315,38 @@ button { border: none; cursor: pointer; }
     height: auto;
     max-height: none;
   }
+  .panel-chat {
+    display: block;
+    min-height: auto;
+    overflow: visible;
+    padding: 18px;
+  }
+  .panel-chat > * + * {
+    margin-top: 12px;
+  }
+  .panel-chat .panel-head {
+    display: grid;
+    gap: 12px;
+  }
+  .panel-chat .context-box,
+  .panel-chat .context-box select {
+    width: 100%;
+  }
   .chat-stream,
   .rail {
     min-height: unset;
     overflow: visible;
+  }
+  .chat-stream {
+    min-height: 180px;
+    max-height: 38vh;
+    overflow: auto;
+  }
+  .rail {
+    display: none;
+  }
+  .stage-strip {
+    display: none;
   }
   .sidebar {
     position: fixed;
@@ -1141,6 +1365,7 @@ button { border: none; cursor: pointer; }
   .chat-layout {
     height: auto;
     overflow: visible;
+    display: block;
   }
   .hero-grid.compact-bar,
   .app-shell.railHidden .hero-grid.compact-bar {
