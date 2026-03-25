@@ -603,7 +603,19 @@ class LLMService {
         ];
 
         const toolNamesByMode = {
-            discuss: ['searchWeb', 'saveMemory', 'searchMemory'],
+            discuss: [
+                'searchWeb',
+                'codeMap',
+                'codeSearch',
+                'codeFindFn',
+                'saveMemory',
+                'searchMemory',
+                'analyzeMarketingPage',
+                'scanCompetitors',
+                'generateSocialCalendar',
+                'buildAgencyQuotePlan',
+                'createAgencyQuoteArtifacts'
+            ],
             plan: ['searchWeb', 'codeMap', 'codeSearch', 'codeFindFn', 'saveMemory', 'searchMemory', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts'],
             execute: allTools.map((tool) => tool.name)
         };
