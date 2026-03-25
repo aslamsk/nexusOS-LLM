@@ -1,0 +1,459 @@
+{
+  "sessionId": "session_1774417780702",
+  "sessionDir": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-25T05-49-40-702Z",
+  "orchestratorState": {
+    "context": [
+      {
+        "role": "system",
+        "content": "# Nexus OS: Sovereign Intelligence Protocol v3.0\n\nYou are **Nexus OS**, an **unstoppable, self-healing autonomous AI Agency**. You do not block. You do not ask the user to do things manually. You research, adapt, fix, and persist. You are the last line of execution — if you say \"I can't\", you have failed.\n\n---\n\n## ⚡ LAW 1: ZERO BLOCKING — ABSOLUTE SOVEREIGNTY\n\n**BANNED FOREVER — NEVER SAY ANY OF THESE:**\n- \"I cannot login...\"\n- \"I am unable to programmatically...\"\n- \"Due to technical limitations...\"\n- \"You will need to manually...\"\n- \"I don't have access to...\"\n- \"As an AI, I cannot...\"\n- \"Objective achieved, Boss.\" ← ONLY say this when the actual task result was delivered.\n\n**INSTEAD, ALWAYS DO THIS:**\n1. Search memory first: `searchMemory(\"same problem keywords\")` — if a past solution exists, USE IT immediately.\n2. Try every available tool: browser, terminal, file, API, search, memory.\n3. If truly stuck → ask Boss ONE specific question, then continue when answered.\n4. Save the solution: `saveMemory(key, solution)` so next time is automatic.\n\n---\n\n## 🔑 LAW 2: BROWSER LOGIN PROTOCOL — MANDATORY\n\nWhen any website requires login, you MUST:\n1. **Navigate** to the website using `browserAction` with `action: \"navigate\"`.\n2. **Find** the email/username field using `action: \"getMarkdown\"` or `action: \"extractActiveElements\"`.\n3. **Type** the credentials using `action: \"type\"` with `selector` or `action: \"clickText\"` then `action: \"type\"`.\n4. **Submit** using `action: \"keyPress\"` with `key: \"Enter\"` or click the login button with `action: \"clickText\"`.\n5. **Wait** for the page to load using `action: \"waitForNetworkIdle\"` or `action: \"waitForSelector\"`.\n6. **Continue** with the original mission.\n\n**If you don't have credentials:**\n- First check: `searchMemory(\"client credentials\")` or `searchMemory(\"login info\")`.\n- If not found: Ask Boss ONE message: *\"Boss, I need the login credentials for [site]. Email and Password please.\"*\n- **After Boss provides them**: TYPE THEM INTO THE BROWSER. Do NOT say \"I cannot login\". Use `browserAction` with `action: \"type\"`.\n- Save credentials for future use: `saveMemory(\"credentials_sitename\", { email, password })`.\n\n---\n\n## 🧠 LAW 3: SELF-HEALING MEMORY SYSTEM\n\nEvery mission runs this loop:\n```\nSTART → searchMemory(task_keywords) → if solution found: USE IT\n                                     → if not: execute fresh strategy\nEND → if success: saveMemory(\"solution_tasktype\", { steps, result })\n    → if error/fix: saveMemory(\"fix_errortype\", { problem, solution, code_change })\n```\n\n**What to save in memory:**\n- ✅ \"login credentials for [site]\" → user-provided credentials\n- ✅ \"solution for [task type]\" → what worked step by step  \n- ✅ \"code fix for [error]\" → exact file path + code change that fixed it\n- ✅ \"client preferences [clientId]\" → their brand, tone, platform preferences\n- ✅ \"API key for [service]\" → any auto-created keys\n\n---\n\n## 🔧 LAW 4: CODE-SIDE AUTO-FIX PROTOCOL\n\nIf you encounter a code error during execution:\n1. **Analyze** the error — read the exact message.\n2. **Search memory** for a known fix: `searchMemory(\"fix \" + errorType)`.\n3. **If found** → apply it instantly using `replaceFileContent`. Notify: *\"Boss, auto-fixed [error] using memorized solution.\"*\n4. **If not found** → search the web: `searchWeb(error + \" fix NodeJS\")`, apply the fix.\n5. **Save the fix** → `saveMemory(\"fix_errorType\", { error, fix, file, lineRange })`.\n6. **Re-run** the command to confirm it works.\n7. **Never ask Boss to restart the server manually** — run `runCommand(\"npm start\")` yourself.\n\n---\n\n## 📋 LAW 5: DECISION LOG — TRANSPARENCY\n\nAfter every significant autonomous decision (code fix, API creation, credential use, strategy change):\n- Write a one-line log to memory: `saveMemory(\"decision_log\", \"YYYY-MM-DD: [what I decided and why]\")`.\n- When Boss asks \"what did you change?\" → `searchMemory(\"decision_log\")` and report it clearly.\n\n---\n\n## 🛠 LAW 6: TOOL MASTERY\n\n### Browser Tool (NEVER GIVE UP AFTER ONE ATTEMPT)\n**Hierarchy — try ALL before saying failed:**\n1. `getMarkdown` → understand the page structure\n2. `clickText` → click by visible text content\n3. `extractActiveElements` → get element coordinates\n4. `clickPixel` → click exact coordinates from screenshot labels\n5. Refresh → type the URL again, try a different path\n\n**Form Handling:**\n- `type` → type into fields (use selector OR position from extractActiveElements)\n- `keyPress: \"Enter\"` → submit forms\n- `scroll: \"down\"` → find hidden elements\n- `hover` → reveal dropdown menus\n- `waitForNetworkIdle` → wait for slow pages\n\n**Login Forms specifically:**\n```\nnavigate(url) → getMarkdown() → type(emailSelector, email) → type(passSelector, password) → keyPress(\"Enter\") → waitForNetworkIdle()\n```\n\n### Memory Tool\n- Always `searchMemory` at mission start for relevant context\n- Always `saveMemory` at mission end with results\n- Categories: `credentials_`, `solution_`, `fix_`, `client_`, `decision_`\n\n### API Resilience\n- 429/503 errors → wait, the system auto-rotates keys. Resume next turn.\n- Never search documentation for these errors.\n\n---\n\n## 🎯 LAW 7: MISSION COMPLETION STANDARD\n\nA mission is COMPLETE only when:\n1. ✅ The actual requested output was delivered (key shown, post published, code working)\n2. ✅ Result is confirmed via screenshot or terminal output\n3. ✅ Memory updated with solution/decision\n4. ✅ Boss was notified with clear, formatted final output\n\n**If you create an API key:** Report it as:\n```\n✅ KEY RESULT: [full key value here]\n📋 Save this in your Client's [Field Name] in NexusOS.\n```\n\n---\n\n## 🏢 LAW 8: OPERATING HIERARCHY\n\n1. **Solo Execution** → For focused tasks (browser, code, API calls)\n2. **Squad Delegation** → Use `delegateToAgent` to split: researcher, writer, coder, designer, ads_manager\n3. **Boss Mode** → Never block. Find. Fix. Deliver.\n\n---\n\n## 🔒 LAW 10: CONTEXT FILES & CREDENTIALS\n\n1. **Context Files (Uploads)**: When the Boss uploads a file via the front-end, the path will be injected into your prompt as `[CURRENT_SYSTEM_STATE] Active File Context: ...`. **YOU MUST PRIORITIZE THIS FILE PATH IMMEDIATELY** for any tool that requires an image or document (e.g., `imagePath` in `metaAds` or `generateVideo`). Do not ask for the URL again, do not hallucinate paths, do not generate a new image—use the EXACT Active File Context path.\n2. **Backend Credentials**: The backend server dynamically stores and injects API credentials (`META_AD_ACCOUNT_ID`, `META_ACCESS_TOKEN`, `META_PAGE_ID`, etc.) from Firestore. **NEVER ask the Boss for these credentials upfront.** You should automatically execute the `metaAds` or `googleAds` tools and ONLY ask the user for credentials if the tool explicitly returns an error saying \"missing credentials\". Trust the system.\n\n---\n\n## 💡 LAW 11: PROACTIVE INTELLIGENCE\n\n- Check config/memory before asking Boss for any info\n- If you see a better approach while executing → mention it AFTER completing the original task\n- If a task is repetitive → suggest automation via memory/scripts\n- If keys are about to expire → warn Boss proactively\n\n---\n\n## 🎨 DESIGN STANDARDS\n- **Typography**: Inter (body), Outfit (headings). Font sizes: body 1rem, heading 1.8–2.5rem, labels 0.85rem\n- **Colors**: Curated palettes — Indigo-Violet gradients, emerald accents, dark obsidian backgrounds\n- **Motion**: 60fps, cubic-bezier easing, glassmorphism panels\n- **Premium**: Every UI must WOW on first glance. No generic designs.\n- **Validation**: After all UI changes, screenshot to confirm visual quality.\n"
+      },
+      {
+        "role": "user",
+        "content": "proceed\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-25T05-49-40-702Z. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/session_2026-03-25T05-49-40-702Z/filename.ext)"
+      },
+      {
+        "role": "assistant",
+        "content": "What would you like to do?"
+      }
+    ],
+    "lastUploadedFile": null,
+    "stepCount": 0,
+    "currentClientId": null,
+    "currentMarketingWorkflow": null,
+    "isWaitingForInput": false,
+    "currentRun": {
+      "id": "run_1774417881557",
+      "requestPreview": "proceed",
+      "startedAt": "2026-03-25T05:51:21.557Z",
+      "finishedAt": "2026-03-25T05:51:30.442Z",
+      "status": "paused",
+      "toolCalls": 0,
+      "llmCalls": 1,
+      "toolsUsed": {},
+      "errorCount": 0,
+      "lastError": null,
+      "lastTool": null,
+      "steps": 0,
+      "clientId": null,
+      "estimatedCostUsd": 0.00035
+    },
+    "recentRuns": [
+      {
+        "id": "run_1774417881557",
+        "requestPreview": "proceed",
+        "startedAt": "2026-03-25T05:51:21.557Z",
+        "finishedAt": "2026-03-25T05:51:30.442Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 1,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      },
+      {
+        "id": "run_1774417801580",
+        "requestPreview": "Use this as ORGANIC META POST only, not paid ads.\n\nProduct page:\nhttps://mkfashion.in/p/yuBRpBPuCm\n\nAudience:\n- parents of kids age 2-6 in India\n- gift buyers\n-",
+        "startedAt": "2026-03-25T05:50:01.580Z",
+        "finishedAt": "2026-03-25T05:50:50.348Z",
+        "status": "completed",
+        "toolCalls": 3,
+        "llmCalls": 4,
+        "toolsUsed": {
+          "browserAction": 2,
+          "generate_image": 1
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "generate_image",
+        "steps": 3,
+        "clientId": null,
+        "estimatedCostUsd": 0.0017
+      }
+    ],
+    "pendingApproval": null,
+    "pendingRepair": null,
+    "auditTrail": [
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-03-25T05:50:24.678Z"
+      }
+    ],
+    "recoveryHistory": [
+      {
+        "at": "2026-03-25T05:50:24.678Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      }
+    ]
+  },
+  "chatHistory": [
+    {
+      "sender": "nexus",
+      "text": "Fresh session started, Boss. Define the next agency objective."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission forcefully terminated by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Running metaSetCredentials"
+    },
+    {
+      "sender": "nexus_result",
+      "text": "Meta credentials successfully updated in Firestore."
+    },
+    {
+      "sender": "nexus",
+      "text": "Process finished."
+    },
+    {
+      "sender": "user",
+      "text": "Use this as ORGANIC META POST only, not paid ads.\n\nProduct page:\nhttps://mkfashion.in/p/yuBRpBPuCm\n\nAudience:\n- parents of kids age 2-6 in India\n- gift buyers\n- preschool and early-learning interest audience\n\nUse configured Meta credentials and page ID 106214568034999.\n\nTasks:\n1. analyze the page and product\n2. create a strong product description\n3. generate SEO keywords and product tags\n4. create 3 Facebook/Instagram organic captions\n5. generate hashtags\n6. suggest CTA\n7. prepare one final organic post payload for Meta page publishing\n\nDo not create any ad campaign.\nDo not publish until Boss approval."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🖼️ **Browser Update:**\n![Browser View](/outputs/session_2026-03-25T05-49-40-702Z/screenshot_1774417816365.png)"
+    },
+    {
+      "sender": "nexus_result",
+      "text": "Successfully opened https://mkfashion.in/p/yuBRpBPuCm. Page title: English Talking Flash Cards Education Game Toys - MK Store"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🔍 Workflow Insight: Error: action=extract requires selector"
+    },
+    {
+      "sender": "nexus_result",
+      "text": "Error: action=extract requires selector"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🔍 Workflow Insight: Error generating image: {\"error\":{\"code\":400,\"message\":\"Imagen 3 is only available on paid plans. Please upgrade your account at https://ai.dev/projects.\",\"status\":\"INVALID_ARGUMENT\"}}"
+    },
+    {
+      "sender": "nexus_result",
+      "text": "Error generating image: {\"error\":{\"code\":400,\"message\":\"Imagen 3 is only available on paid plans. Please upgrade your account at https://ai.dev/projects.\",\"status\":\"INVALID_ARGUMENT\"}}"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "I am unable to generate an image for the post due to plan limitations. You can provide an image, or I can proceed with a text-only post.\n\nHere is the prepared organic post payload for Meta page publishing. **I will NOT publish this until I receive explicit Boss approval.**\n\n```json\n{\n  \"action\": \"publishOrganicPost\",\n  \"pageId\": \"106214568034999\",\n  \"message\": \"Make learning English an absolute blast for your little one! 🤩 Our interactive English Talking Flash Cards are designed for curious minds aged 2-6, turning every touch into a fun discovery. Watch their vocabulary grow with vibrant images and clear audio. Perfect for playful learning at home! ✨\\n\\nShop now: https://mkfashion.in/p/yuBRpBPuCm\\n\\n#KidsLearning #EnglishForKids #EducationalToys #TalkingFlashCards #MontessoriToys #EarlyLearning #ToddlerActivities #PreschoolGames #LanguageDevelopment #ParentingIndia #KidsEducation #FunLearning #MadeInIndia #ChildrensToys #LearningThroughPlay #GiftForKids #HappyKids #SmartKids #ChildhoodEducation #VocabularyBuilder\",\n  \"link\": \"https://mkfashion.in/p/yuBRpBPuCm\",\n  \"boss_approved\": false\n}\n```\n\nPlease let me know if the Boss approves this post. If you'd like to provide an image, please do so, and I can include it in the payload."
+    },
+    {
+      "sender": "nexus",
+      "text": "Task Complete. No further actions requested."
+    },
+    {
+      "sender": "user",
+      "text": "proceed"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "What would you like to do?"
+    },
+    {
+      "sender": "user",
+      "text": "i provided image so use and promote it\n[Context File Loaded: Path: `D:\\nexusOS-LLM-stable\\nexusOS-LLM\\uploads\\1774417996492-17743425492929jyxkz2u7ji.jpg`]"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Mission queued for the Boss. Position: 1"
+    }
+  ],
+  "logs": [
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-25T05:49:40.714Z"
+    },
+    {
+      "type": "action",
+      "name": "metaSetCredentials",
+      "args": {
+        "adAccountId": "DUMMY_AD_ACCOUNT_ID",
+        "accessToken": "EAAWyOIpyV9MBRMSsuTH6e9l77XEK8fugr0LNDirAg9ZCoklZAKc1vGDKRCgJk4i1T4j0p1146IiQv6YOyu1z2LVuhn3PiOvZCfzZC8ECELMln4JvaJ4PbUeg0vtO6bwIeqjMz0yYZAkRr6AkLo0gtGzoPhCTBioiibQVA2JXCcZCrelXkhL5gAUtvzjmt2SZC2KlIj8mfZCFW0tHSv6AUg3grpQwgszt0TXMWGrVdppZAD2Wp4UxCFRVAA2EEwpQIg9CLr6OqHlpEYDjYbCSHDZBlthrvZB",
+        "pageId": "DUMMY_PAGE_ID"
+      },
+      "at": "2026-03-25T05:49:42.160Z"
+    },
+    {
+      "type": "result",
+      "message": "Meta credentials successfully updated in Firestore.",
+      "at": "2026-03-25T05:49:42.502Z"
+    },
+    {
+      "type": "complete",
+      "message": "Process finished.",
+      "at": "2026-03-25T05:49:42.522Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-25T05:50:01.597Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-25T05:50:03.079Z"
+    },
+    {
+      "type": "action",
+      "name": "browserAction",
+      "args": {
+        "action": "open",
+        "url": "https://mkfashion.in/p/yuBRpBPuCm"
+      },
+      "at": "2026-03-25T05:50:11.608Z"
+    },
+    {
+      "type": "thought",
+      "message": "🖼️ **Browser Update:**\n![Browser View](/outputs/session_2026-03-25T05-49-40-702Z/screenshot_1774417816365.png)",
+      "at": "2026-03-25T05:50:17.227Z"
+    },
+    {
+      "type": "result",
+      "message": "Successfully opened https://mkfashion.in/p/yuBRpBPuCm. Page title: English Talking Flash Cards Education Game Toys - MK Store",
+      "at": "2026-03-25T05:50:17.244Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 2 ---",
+      "at": "2026-03-25T05:50:17.257Z"
+    },
+    {
+      "type": "action",
+      "name": "browserAction",
+      "args": {
+        "action": "extract"
+      },
+      "at": "2026-03-25T05:50:24.662Z"
+    },
+    {
+      "type": "thought",
+      "message": "🔍 Workflow Insight: Error: action=extract requires selector",
+      "at": "2026-03-25T05:50:24.695Z"
+    },
+    {
+      "type": "result",
+      "message": "Error: action=extract requires selector",
+      "at": "2026-03-25T05:50:24.701Z"
+    },
+    {
+      "type": "thought",
+      "message": "Self-healing detected a browser mismatch. Capturing fresh browser context for the Boss.",
+      "at": "2026-03-25T05:50:24.708Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 3 ---",
+      "at": "2026-03-25T05:50:27.022Z"
+    },
+    {
+      "type": "thought",
+      "message": "**Product Description:**\n\nUnlock a world of language and learning for your little one with our English Talking Flash Cards! Designed for children aged 2-6, these interactive flash cards transform English learning into an exciting adventure. Featuring vibrant visuals of everyday objects, animals, and scenes, each card comes to life with a clear audio pronunciation when touched. Crafted from durable, child-safe, and water-resistant materials, these battery-powered cards are perfect for tiny hands and curious minds. Watch as your child's memory, recognition, vocabulary, and problem-solving skills flourish through engaging, Montessori-based play. With 50 diverse cards covering essential categories like food, animals, and household items, this set is an ideal tool for early language development, homeschooling, and making learning an unforgettable game.\n\n**SEO Keywords and Product Tags:**\n\n*   **SEO Keywords:** English learning for kids, talking flash cards, educational toys India, early language development, preschool learning games, Montessori toys 2-6 years, kids vocabulary builder, interactive learning cards, children's English education, fun learning for toddlers.\n*   **Product Tags:** #KidsLearning #EnglishForKids #EducationalToys #TalkingFlashCards #MontessoriToys #EarlyLearning #ToddlerActivities #PreschoolGames #LanguageDevelopment #MadeInIndia\n\n**Facebook/Instagram Organic Captions (3 Options):**\n\n**Caption 1 (Focus on Fun & Learning):**\nMake learning English an absolute blast for your little one! 🤩 Our interactive English Talking Flash Cards are designed for curious minds aged 2-6, turning every touch into a fun discovery. Watch their vocabulary grow with vibrant images and clear audio. Perfect for playful learning at home! ✨\n👉 Tap to explore: https://mkfashion.in/p/yuBRpBPuCm\n#KidsLearning #EnglishForKids #EducationalToys #TalkingFlashCards #PlayAndLearn\n\n**Caption 2 (Focus on Benefits for Parents/Gift Givers):**\nSearching for the perfect gift that educates and entertains? Look no further! 🎁 Our English Talking Flash Cards are a fantastic way to boost early language skills for kids aged 2-6. Durable, engaging, and designed to spark joy in learning. Give the gift of knowledge!\n🛒 Shop now: https://mkfashion.in/p/yuBRpBPuCm\n#GiftForKids #ParentsOfIndia #EarlyEducation #LearningToys #PreschoolActivities\n\n**Caption 3 (Focus on Montessori & Skill Development):**\nEmpower your child's early development with our Montessori-based English Talking Flash Cards! 🧠 Ideal for ages 2-6, these cards enhance memory, recognition, and problem-solving through interactive audio-visual learning. A smart start to their language journey!\n🔗 Discover more: https://mkfashion.in/p/yuBRpBPuCm\n#MontessoriLearning #ChildDevelopment #KidsVocabulary #InteractiveLearning #ParentingTipsIndia\n\n**Hashtags:**\n\n#KidsLearning #EnglishForKids #EducationalToys #TalkingFlashCards #MontessoriToys #EarlyLearning #ToddlerActivities #PreschoolGames #LanguageDevelopment #ParentingIndia #KidsEducation #FunLearning #MadeInIndia #ChildrensToys #LearningThroughPlay #GiftForKids #HappyKids #SmartKids #ChildhoodEducation #VocabularyBuilder\n\n**Suggested Call to Action (CTA):**\n\n\"Shop Now,\" \"Learn More,\" \"Get Yours Today\"\n\nGiven the e-commerce context and product, \"Shop Now\" or \"Get Yours Today\" would be most effective. I will use \"Shop Now\".\n\n**Final Organic Post Payload for Meta Page Publishing:**\nI will use Caption 1 and the generated hashtags for the payload. I'll also add the product link.\n\nI will need an image for the post. I will use the `generate_image` tool to create one based on the product description.",
+      "at": "2026-03-25T05:50:40.399Z"
+    },
+    {
+      "type": "action",
+      "name": "generate_image",
+      "args": {
+        "prompt": "A happy Indian child (age 3-5) interacting with English talking flash cards, brightly colored, focus on learning and fun, home environment, natural lighting.",
+        "savePath": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-25T05-49-40-702Z\\flashcard_image.png"
+      },
+      "at": "2026-03-25T05:50:40.455Z"
+    },
+    {
+      "type": "thought",
+      "message": "🔍 Workflow Insight: Error generating image: {\"error\":{\"code\":400,\"message\":\"Imagen 3 is only available on paid plans. Please upgrade your account at https://ai.dev/projects.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "at": "2026-03-25T05:50:40.730Z"
+    },
+    {
+      "type": "result",
+      "message": "Error generating image: {\"error\":{\"code\":400,\"message\":\"Imagen 3 is only available on paid plans. Please upgrade your account at https://ai.dev/projects.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "at": "2026-03-25T05:50:40.749Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 4 ---",
+      "at": "2026-03-25T05:50:40.754Z"
+    },
+    {
+      "type": "thought",
+      "message": "I am unable to generate an image for the post due to plan limitations. You can provide an image, or I can proceed with a text-only post.\n\nHere is the prepared organic post payload for Meta page publishing. **I will NOT publish this until I receive explicit Boss approval.**\n\n```json\n{\n  \"action\": \"publishOrganicPost\",\n  \"pageId\": \"106214568034999\",\n  \"message\": \"Make learning English an absolute blast for your little one! 🤩 Our interactive English Talking Flash Cards are designed for curious minds aged 2-6, turning every touch into a fun discovery. Watch their vocabulary grow with vibrant images and clear audio. Perfect for playful learning at home! ✨\\n\\nShop now: https://mkfashion.in/p/yuBRpBPuCm\\n\\n#KidsLearning #EnglishForKids #EducationalToys #TalkingFlashCards #MontessoriToys #EarlyLearning #ToddlerActivities #PreschoolGames #LanguageDevelopment #ParentingIndia #KidsEducation #FunLearning #MadeInIndia #ChildrensToys #LearningThroughPlay #GiftForKids #HappyKids #SmartKids #ChildhoodEducation #VocabularyBuilder\",\n  \"link\": \"https://mkfashion.in/p/yuBRpBPuCm\",\n  \"boss_approved\": false\n}\n```\n\nPlease let me know if the Boss approves this post. If you'd like to provide an image, please do so, and I can include it in the payload.",
+      "at": "2026-03-25T05:50:50.347Z"
+    },
+    {
+      "type": "complete",
+      "message": "Task Complete. No further actions requested.",
+      "at": "2026-03-25T05:50:50.369Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-25T05:51:21.568Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-25T05:51:23.065Z"
+    },
+    {
+      "type": "thought",
+      "message": "What would you like to do?",
+      "at": "2026-03-25T05:51:30.448Z"
+    },
+    {
+      "type": "pause",
+      "at": "2026-03-25T05:51:30.467Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-25T05:53:26.081Z"
+    },
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-25T06:00:46.042Z"
+    }
+  ],
+  "runSummary": {
+    "activeRun": null,
+    "pendingApproval": null,
+    "pendingRepair": null,
+    "auditTrail": [
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-03-25T05:50:24.678Z"
+      }
+    ],
+    "recoveryHistory": [
+      {
+        "at": "2026-03-25T05:50:24.678Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      }
+    ],
+    "recentRuns": [
+      {
+        "id": "run_1774417881557",
+        "requestPreview": "proceed",
+        "startedAt": "2026-03-25T05:51:21.557Z",
+        "finishedAt": "2026-03-25T05:51:30.442Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 1,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      },
+      {
+        "id": "run_1774417801580",
+        "requestPreview": "Use this as ORGANIC META POST only, not paid ads.\n\nProduct page:\nhttps://mkfashion.in/p/yuBRpBPuCm\n\nAudience:\n- parents of kids age 2-6 in India\n- gift buyers\n-",
+        "startedAt": "2026-03-25T05:50:01.580Z",
+        "finishedAt": "2026-03-25T05:50:50.348Z",
+        "status": "completed",
+        "toolCalls": 3,
+        "llmCalls": 4,
+        "toolsUsed": {
+          "browserAction": 2,
+          "generate_image": 1
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "generate_image",
+        "steps": 3,
+        "clientId": null,
+        "estimatedCostUsd": 0.0017
+      }
+    ],
+    "totals": {
+      "missions": 2,
+      "successRate": 50,
+      "paused": 1,
+      "toolCalls": 3,
+      "llmCalls": 5,
+      "estimatedCostUsd": 0.00205
+    }
+  },
+  "jobQueue": [
+    {
+      "id": "job_1774418006073",
+      "prompt": "i provided image so use and promote it\n[Context File Loaded: Path: `D:\\nexusOS-LLM-stable\\nexusOS-LLM\\uploads\\1774417996492-17743425492929jyxkz2u7ji.jpg`]",
+      "clientId": null,
+      "status": "queued",
+      "createdAt": "2026-03-25T05:53:26.073Z",
+      "startedAt": null,
+      "finishedAt": null,
+      "estimatedCostUsd": 0,
+      "attempts": 0,
+      "nextRunAt": null
+    },
+    {
+      "id": "job_1774417881555",
+      "prompt": "proceed",
+      "clientId": null,
+      "status": "paused",
+      "createdAt": "2026-03-25T05:51:21.555Z",
+      "startedAt": "2026-03-25T05:51:21.557Z",
+      "finishedAt": "2026-03-25T05:51:30.442Z",
+      "estimatedCostUsd": 0.00035,
+      "attempts": 0,
+      "nextRunAt": null,
+      "steps": 0,
+      "toolCalls": 0,
+      "llmCalls": 1
+    },
+    {
+      "id": "job_1774417801579",
+      "prompt": "Use this as ORGANIC META POST only, not paid ads.\n\nProduct page:\nhttps://mkfashion.in/p/yuBRpBPuCm\n\nAudience:\n- parents of kids age 2-6 in India\n- gift buyers\n- preschool and early-learning interest audience\n\nUse configured Meta credentials and page ID 106214568034999.\n\nTasks:\n1. analyze the page and product\n2. create a strong product description\n3. generate SEO keywords and product tags\n4. create 3 Facebook/Instagram organic captions\n5. generate hashtags\n6. suggest CTA\n7. prepare one final organic post payload for Meta page publishing\n\nDo not create any ad campaign.\nDo not publish until Boss approval.",
+      "clientId": null,
+      "status": "completed",
+      "createdAt": "2026-03-25T05:50:01.579Z",
+      "startedAt": "2026-03-25T05:50:01.580Z",
+      "finishedAt": "2026-03-25T05:50:50.348Z",
+      "estimatedCostUsd": 0.0017,
+      "attempts": 0,
+      "nextRunAt": null,
+      "steps": 3,
+      "toolCalls": 3,
+      "llmCalls": 4
+    }
+  ],
+  "currentJobId": null,
+  "lastUpdated": "2026-03-25T06:00:46.043Z"
+}

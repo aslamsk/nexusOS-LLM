@@ -1,5 +1,6 @@
 const ConfigService = require('./config');
 const { GoogleGenAI } = require('@google/genai');
+const axios = require('axios');
 
 /**
  * Nexus OS: LLM Subsystem
@@ -19,11 +20,113 @@ class LLMService {
         return new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
     }
 
+    _getOpenAITools() {
+        return this.getToolDefinitions().map((tool) => ({
+            type: 'function',
+            function: {
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters
+            }
+        }));
+    }
+
+    _formatMessagesForOpenAI(messages) {
+        const formatted = [];
+        let lastToolCallId = null;
+        let toolCallCounter = 0;
+
+        for (const msg of messages) {
+            if (msg.role === 'system') {
+                formatted.push({ role: 'system', content: msg.content });
+                continue;
+            }
+
+            if (msg.role === 'assistant') {
+                if (msg.toolCall) {
+                    const toolCallId = `tool_call_${++toolCallCounter}`;
+                    lastToolCallId = toolCallId;
+                    formatted.push({
+                        role: 'assistant',
+                        content: msg.content || '',
+                        tool_calls: [{
+                            id: toolCallId,
+                            type: 'function',
+                            function: {
+                                name: msg.toolCall.name,
+                                arguments: JSON.stringify(msg.toolCall.args || {})
+                            }
+                        }]
+                    });
+                } else {
+                    formatted.push({ role: 'assistant', content: msg.content || '' });
+                }
+                continue;
+            }
+
+            if (msg.role === 'tool') {
+                formatted.push({
+                    role: 'tool',
+                    tool_call_id: lastToolCallId || `tool_call_${toolCallCounter || 1}`,
+                    content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+                });
+                continue;
+            }
+
+            formatted.push({ role: 'user', content: msg.content });
+        }
+
+        return formatted;
+    }
+
+    async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute' }) {
+        if (!apiKey || !model) return null;
+
+        const response = await axios.post(`${baseUrl}/chat/completions`, {
+            model,
+            messages: this._formatMessagesForOpenAI(messages),
+            tools: this.getToolDefinitions(mode).map((tool) => ({
+                type: 'function',
+                function: {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters
+                }
+            })),
+            tool_choice: 'auto',
+            temperature: 0.2
+        }, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                ...headers
+            }
+        });
+
+        const choice = response.data?.choices?.[0]?.message || {};
+        const toolCall = choice.tool_calls?.[0];
+        let parsedArgs = {};
+        if (toolCall?.function?.arguments) {
+            try {
+                parsedArgs = JSON.parse(toolCall.function.arguments);
+            } catch (error) {
+                parsedArgs = {};
+            }
+        }
+
+        return {
+            text: choice.content || '',
+            toolCall: toolCall ? { name: toolCall.function.name, args: parsedArgs } : null,
+            provider: providerName,
+            model: response.data?.model || model
+        };
+    }
+
     /**
      * Define the tools available to the LLM.
      */
-    getToolDefinitions() {
-        return [
+    getToolDefinitions(mode = 'execute') {
+        const allTools = [
             {
                 name: "readFile",
                 description: "Read the contents of a file.",
@@ -352,6 +455,106 @@ class LLMService {
                 }
             },
             {
+                name: "analyzeMarketingPage",
+                description: "Generate a structured marketing page analysis from a target URL/topic, notes, and channels.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        target: { type: "STRING", description: "Website URL, landing page URL, or target topic." },
+                        notes: { type: "STRING", description: "Extra context, goals, or constraints." },
+                        channels: { type: "ARRAY", items: { type: "STRING" }, description: "Relevant channels like Meta Ads, Google Ads, Email, LinkedIn." }
+                    },
+                    required: ["target"]
+                }
+            },
+            {
+                name: "scanCompetitors",
+                description: "Build a structured competitor scan using supplied competitor names or domains.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        target: { type: "STRING", description: "Primary brand, domain, or offer being compared." },
+                        competitors: { type: "ARRAY", items: { type: "STRING" }, description: "Competitor names or domains." },
+                        notes: { type: "STRING", description: "Extra comparison notes or market framing." }
+                    },
+                    required: ["target"]
+                }
+            },
+            {
+                name: "generateSocialCalendar",
+                description: "Generate a structured multi-week social calendar for a campaign, brand, or offer.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        target: { type: "STRING", description: "Brand, offer, campaign, or target topic." },
+                        channels: { type: "ARRAY", items: { type: "STRING" }, description: "Channels to plan for." },
+                        weeks: { type: "NUMBER", description: "Number of weeks. Defaults to 4." },
+                        theme: { type: "STRING", description: "Campaign theme or launch theme." },
+                        notes: { type: "STRING", description: "Constraints, goals, or audience notes." }
+                    },
+                    required: ["target"]
+                }
+            },
+            {
+                name: "buildAgencyQuotePlan",
+                description: "Build a commercial agency quote plan for recurring creative and ads work, including AI/model cost estimates after free-tier usage.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        campaignName: { type: "STRING" },
+                        bannerCount: { type: "NUMBER" },
+                        carouselCount: { type: "NUMBER" },
+                        videoCount: { type: "NUMBER" },
+                        contentDeliverables: { type: "NUMBER" },
+                        tagPackages: { type: "NUMBER" },
+                        reportCount: { type: "NUMBER" },
+                        auditCount: { type: "NUMBER" },
+                        metaAdsWeeks: { type: "NUMBER" },
+                        googleAdsWeeks: { type: "NUMBER" },
+                        linkedinAdsWeeks: { type: "NUMBER" },
+                        websiteProject: { type: "BOOLEAN" },
+                        websitePages: { type: "NUMBER" },
+                        adSpendMonthly: { type: "NUMBER" },
+                        profitMarginPct: { type: "NUMBER" },
+                        taxPct: { type: "NUMBER" },
+                        currency: { type: "STRING" },
+                        includeStrategyRetainer: { type: "BOOLEAN" },
+                        notes: { type: "STRING" }
+                    }
+                }
+            },
+            {
+                name: "createAgencyQuoteArtifacts",
+                description: "Generate client-ready commercial quote artifacts (PDF, CSV, Markdown) for an agency plan inside the current task output folder.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        campaignName: { type: "STRING" },
+                        bannerCount: { type: "NUMBER" },
+                        carouselCount: { type: "NUMBER" },
+                        videoCount: { type: "NUMBER" },
+                        contentDeliverables: { type: "NUMBER" },
+                        tagPackages: { type: "NUMBER" },
+                        reportCount: { type: "NUMBER" },
+                        auditCount: { type: "NUMBER" },
+                        metaAdsWeeks: { type: "NUMBER" },
+                        googleAdsWeeks: { type: "NUMBER" },
+                        linkedinAdsWeeks: { type: "NUMBER" },
+                        websiteProject: { type: "BOOLEAN" },
+                        websitePages: { type: "NUMBER" },
+                        adSpendMonthly: { type: "NUMBER" },
+                        profitMarginPct: { type: "NUMBER" },
+                        taxPct: { type: "NUMBER" },
+                        currency: { type: "STRING" },
+                        includeStrategyRetainer: { type: "BOOLEAN" },
+                        notes: { type: "STRING" },
+                        clientName: { type: "STRING" },
+                        clientCompany: { type: "STRING" },
+                        clientEmail: { type: "STRING" }
+                    }
+                }
+            },
+            {
                 name: "saveMemory",
                 description: "Store a fact or learned information for use across future sessions.",
                 parameters: {
@@ -398,13 +601,23 @@ class LLMService {
                 }
             }
         ];
+
+        const toolNamesByMode = {
+            discuss: ['searchWeb', 'saveMemory', 'searchMemory'],
+            plan: ['searchWeb', 'codeMap', 'codeSearch', 'codeFindFn', 'saveMemory', 'searchMemory', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts'],
+            execute: allTools.map((tool) => tool.name)
+        };
+
+        const allowed = new Set(toolNamesByMode[mode] || toolNamesByMode.execute);
+        return allTools.filter((tool) => allowed.has(tool.name));
     }
 
     /**
      * Send conversation history to the LLM and get the next response.
      */
-    async generateResponse(messages) {
+    async generateResponse(messages, options = {}) {
         try {
+            const mode = String(options.mode || 'execute').toLowerCase();
             const formattedContents = messages.map(msg => {
                 if (msg.role === 'system') {
                     return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
@@ -441,6 +654,60 @@ class LLMService {
                 formattedContents.shift();
             }
 
+            const fallbackProviders = [
+                {
+                    name: 'OpenRouter',
+                    baseUrl: 'https://openrouter.ai/api/v1',
+                    apiKey: await ConfigService.get('OPENROUTER_API_TOKEN'),
+                    model: await ConfigService.get('OPENROUTER_MODEL') || 'openrouter/free',
+                    headers: {
+                        'HTTP-Referer': 'https://nexus-os.local',
+                        'X-Title': 'Nexus OS'
+                    }
+                },
+                {
+                    name: 'Groq',
+                    baseUrl: 'https://api.groq.com/openai/v1',
+                    apiKey: await ConfigService.get('GROQ_API_KEY'),
+                    model: await ConfigService.get('GROQ_MODEL') || 'llama-3.1-8b-instant'
+                },
+                {
+                    name: 'NVIDIA',
+                    baseUrl: 'https://integrate.api.nvidia.com/v1',
+                    apiKey: await ConfigService.get('NVIDIA_NIM_API_KEY'),
+                    model: await ConfigService.get('NVIDIA_MODEL') || 'meta/llama-3.1-8b-instruct'
+                }
+            ];
+
+            const orderedProviders = mode === 'execute'
+                ? fallbackProviders
+                : [...fallbackProviders.filter((provider) => provider.apiKey), {
+                    name: 'Gemini',
+                    baseUrl: null,
+                    apiKey: null,
+                    model: this.modelName
+                }];
+
+            for (const provider of orderedProviders) {
+                if (provider.name === 'Gemini') break;
+                if (!provider.apiKey) continue;
+                try {
+                    console.log(`[LLM] Falling back to ${provider.name} using model ${provider.model}...`);
+                    const fallbackResponse = await this._generateWithOpenAICompatible({
+                        providerName: provider.name,
+                        baseUrl: provider.baseUrl,
+                        apiKey: provider.apiKey,
+                        model: provider.model,
+                        headers: provider.headers,
+                        messages,
+                        mode
+                    });
+                    if (fallbackResponse) return fallbackResponse;
+                } catch (error) {
+                    console.error(`[LLM ${provider.name} Fallback Error]`, error.response?.data || error.message);
+                }
+            }
+
             const keys = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'];
             let currentKeyIdx = 0;
             let retryCount = 0;
@@ -452,7 +719,7 @@ class LLMService {
                 const ai = await this._getClient(keyName);
                 
                 if (!ai) {
-                    currentKeyIdx++; // Skip missing keys
+                    currentKeyIdx++;
                     continue;
                 }
 
@@ -462,29 +729,32 @@ class LLMService {
                         systemInstruction: systemInstruction,
                         contents: formattedContents,
                         config: {
-                            tools: [{ functionDeclarations: this.getToolDefinitions() }],
+                            tools: [{ functionDeclarations: this.getToolDefinitions(mode) }],
                             generationConfig: { temperature: 0.2 }
                         }
                     });
 
                     const functionCall = response.functionCalls?.[0];
                     let textContent = '';
-                    
-                    // Safely get text if available, avoiding SDK warnings for function-call-only responses
                     try {
                         if (response.candidates?.[0]?.content?.parts?.some(p => p.text)) {
                             textContent = response.text;
                         }
                     } catch (e) {
-                        textContent = ''; // Fallback for pure function calls
+                        textContent = '';
                     }
 
-                    return { text: textContent, toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null };
+                    return {
+                        text: textContent,
+                        toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null,
+                        provider: 'Gemini',
+                        model: this.modelName
+                    };
                 } catch (error) {
-                    const isRetryable = error.message.includes('429') || 
-                                       error.message.includes('503') || 
-                                       error.message.includes('UNAVAILABLE') ||
-                                       error.message.includes('INTERNAL');
+                    const isRetryable = error.message.includes('429') ||
+                        error.message.includes('503') ||
+                        error.message.includes('UNAVAILABLE') ||
+                        error.message.includes('INTERNAL');
 
                     if (isRetryable) {
                         const errorType = error.message.includes('429') ? '429 Rate Limit' : '503/UNAVAILABLE';
@@ -495,20 +765,19 @@ class LLMService {
                             retryCount++;
                             delay *= 2;
                             continue;
-                        } else {
-                            console.log(`[LLM] Rotating to backup Gemini API key...`);
-                            currentKeyIdx++;
-                            retryCount = 0;
-                            delay = 2000;
-                            continue;
                         }
+                        console.log(`[LLM] Rotating to backup Gemini API key...`);
+                        currentKeyIdx++;
+                        retryCount = 0;
+                        delay = 2000;
+                        continue;
                     }
                     console.error("[LLM API Error]", error.message);
                     return { text: `Error calling LLM: ${error.message}`, toolCall: null };
                 }
             }
 
-            const quotaMsg = "Nexus OS has exhausted all 3 configured Gemini API keys. Please get a fresh free API key at aistudio.google.com and add it as Gemini API Key 1 or 2 in Settings.";
+            const quotaMsg = "Nexus OS has exhausted Gemini and no configured fallback provider succeeded. Add a fresh Gemini key or configure OpenRouter, Groq, or NVIDIA fallback settings.";
             console.error(`[LLM Max Retries] ${quotaMsg}`);
             return { text: `MISSION BREACH: API Quota Exhausted. ${quotaMsg}`, toolCall: null };
 

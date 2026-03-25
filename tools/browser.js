@@ -106,7 +106,12 @@ class BrowserTool {
     async executeAction(args) {
         await this.init(args.isMobile, args.mobileDevice);
 
-        const action = args.action;
+        const rawAction = String(args.action || '').trim();
+        const action = rawAction === 'navigate'
+            ? 'open'
+            : rawAction === 'waitForSelector'
+                ? 'extract'
+                : (!rawAction && args.url ? 'open' : rawAction);
         try {
             switch (action) {
                 case 'open':

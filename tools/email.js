@@ -10,7 +10,7 @@ class EmailTool {
     /**
      * Send an email.
      */
-    async sendEmail(to, subject, body) {
+    async sendEmail(to, subject, body, attachments = []) {
         console.log(`[Email] Sending to ${to}: "${subject}"`);
         const user = await ConfigService.get('GMAIL_USER');
         const pass = await ConfigService.get('GMAIL_APP_PASSWORD');
@@ -28,7 +28,8 @@ class EmailTool {
                 to,
                 subject,
                 text: body,
-                html: body.replace(/\n/g, '<br>')
+                html: body.replace(/\n/g, '<br>'),
+                attachments: Array.isArray(attachments) ? attachments : []
             });
             return `SUCCESS: Email sent to ${to}. MessageID: ${info.messageId}`;
         } catch (e) {

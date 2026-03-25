@@ -204,9 +204,12 @@ class GovernanceService {
     }
 
     isApprovalResponse(input) {
-        const normalized = String(input || '').trim().toLowerCase();
+        const normalized = String(input || '')
+            .replace(/^\s*\[[^\]]+\]\s*/g, '')
+            .trim()
+            .toLowerCase();
         if (!normalized) return null;
-        if (/^(yes|y|approve|approved|go ahead|proceed|send it|ship it)\b/.test(normalized)) return true;
+        if (/^(yes|y|approve|approved|boss approved|go ahead|proceed|continue|continue please|continue with it|do it|do that|publish it|publish now|please publish|send it|ship it|ok publish|okay publish|go live|launch it|run it)\b/.test(normalized)) return true;
         if (/^(no|n|reject|cancel|stop|do not|don't)\b/.test(normalized)) return false;
         return null;
     }

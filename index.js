@@ -15,6 +15,7 @@ const SearchTool = require('./tools/search');
 const CodeAwarenessTool = require('./tools/codeAwareness');
 const EmailTool = require('./tools/email');
 const WhatsAppTool = require('./tools/whatsapp');
+const MarketingUtilsTool = require('./tools/marketingUtils');
 const MemoryService = require('./core/memory');
 const SquadSystem = require('./core/squad');
 const LLMService = require('./core/llm');
@@ -22,6 +23,12 @@ const GovernanceService = require('./core/governance');
 const SelfHealingService = require('./core/selfHealing');
 const MarketingService = require('./core/marketing');
 const MarketingPrompts = require('./core/marketingPrompts');
+const GoalInterpreter = require('./core/goalInterpreter');
+const UsageTracker = require('./core/usageTracker');
+const MissionMode = require('./core/missionMode');
+const AgencyQuotePlanner = require('./core/agencyQuotePlanner');
+const CommercialDocs = require('./core/commercialDocs');
+const { db } = require('./core/firebase');
 
 /**
  * Nexus OS Orchestrator
@@ -60,6 +67,9 @@ class NexusOrchestrator {
             readEmail: EmailTool.readInbox.bind(EmailTool),
             sendWhatsApp: WhatsAppTool.sendMessage.bind(WhatsAppTool),
             sendWhatsAppMedia: WhatsAppTool.sendMedia.bind(WhatsAppTool),
+            analyzeMarketingPage: MarketingUtilsTool.analyzePage.bind(MarketingUtilsTool),
+            scanCompetitors: MarketingUtilsTool.scanCompetitors.bind(MarketingUtilsTool),
+            generateSocialCalendar: MarketingUtilsTool.generateSocialCalendar.bind(MarketingUtilsTool),
             saveMemory: MemoryService.saveMemory.bind(MemoryService),
             searchMemory: MemoryService.searchMemory.bind(MemoryService),
             delegateToAgent: SquadSystem.delegate.bind(SquadSystem)
@@ -81,6 +91,10 @@ class NexusOrchestrator {
         this.pendingRepair = null;
         this.recoveryHistory = [];
         this.currentMarketingWorkflow = null;
+        this.pendingRequirement = null;
+        this.currentSessionId = null;
+        this.currentMissionMode = 'discuss';
+        this.manualMissionMode = null;
     }
 
     /**
@@ -119,8 +133,12 @@ class NexusOrchestrator {
         const memories = await MemoryService.recallRecent(5);
         const recoveryPatterns = await MemoryService.findRecoveryPatterns(userRequest, 3);
         const detectedMarketingWorkflow = MarketingService.detectWorkflowFromText(userRequest);
+        const detectedGoal = GoalInterpreter.interpretGoal(userRequest);
+        const detectedCommercialQuote = this._detectCommercialQuoteRequest(userRequest);
+        this.currentMissionMode = MissionMode.detectMissionMode(userRequest, this.manualMissionMode);
         this.currentMarketingWorkflow = detectedMarketingWorkflow ? detectedMarketingWorkflow.id : null;
         let memoryPrompt = "";
+        memoryPrompt += MissionMode.buildModePrompt(this.currentMissionMode);
         if (memories.length > 0) {
             memoryPrompt = `\n\n### LONG-TERM MEMORY RECALL:\n${memories.map(m => `- ${m}`).join('\n')}\n\n`;
         }
@@ -131,7 +149,44 @@ class NexusOrchestrator {
             const packId = ['audit', 'copy', 'ads', 'report'].includes(detectedMarketingWorkflow.id) ? detectedMarketingWorkflow.id : 'report';
             memoryPrompt += `${MarketingPrompts.buildPromptContext(packId, detectedMarketingWorkflow)}\n\n`;
             memoryPrompt += `### MARKETING SPECIALISTS\n${detectedMarketingWorkflow.specialists.map((item) => `- ${item}`).join('\n')}\n\n`;
+            if (detectedMarketingWorkflow.id === 'audit') {
+                memoryPrompt += `${MarketingPrompts.buildAuditBundleContext({
+                    workflow: detectedMarketingWorkflow,
+                    target: '',
+                    clientName: '',
+                    notes: '',
+                    budget: '',
+                    channels: []
+                })}\n\n`;
+            }
         }
+        if (detectedGoal) {
+            memoryPrompt += `### GOAL INTERPRETER\n${GoalInterpreter.buildExecutionBrief(detectedGoal)}\n\n`;
+            this.onUpdate({
+                type: 'thought',
+                message: `Goal detected: ${detectedGoal.targetValue} ${detectedGoal.metricLabel} via ${detectedGoal.channels.join(', ')}. Nexus is expanding the Boss request into an execution plan.`
+            });
+        }
+        if (detectedCommercialQuote) {
+            const quoteDefaults = this._extractCommercialQuoteDefaults(userRequest);
+            memoryPrompt += `### COMMERCIAL QUOTE INTERPRETER
+COMMERCIAL QUOTE REQUEST DETECTED.
+- Do not use web search or browser research unless the Boss explicitly asks for benchmarking.
+- Use agency quote planning directly.
+- Build a commercial quote for recurring work using the commercial quote tools.
+- Include AI/model cost after free-tier exhaustion, agency profit, and export-ready documents.
+- Prefer generating PDF/CSV/Markdown quote artifacts in the current task folder.
+- If client identity is missing, use a generic client label and continue.
+Suggested defaults:
+${JSON.stringify(quoteDefaults, null, 2)}
+
+`;
+            this.onUpdate({
+                type: 'thought',
+                message: 'Commercial quote request detected. Nexus is switching to direct finance planning instead of search.'
+            });
+        }
+        this.onUpdate({ type: 'thought', message: `Mission mode: ${this.currentMissionMode.toUpperCase()}. Nexus will keep cost and tool usage aligned to this stage.` });
 
         // Inject the active working directory into the prompt if specified
         let augmentedRequest = memoryPrompt + userRequest;
@@ -150,6 +205,9 @@ class NexusOrchestrator {
         this.stepCount = 0;
 
         try {
+            if (detectedCommercialQuote && await this._handleCommercialQuoteShortcut(userRequest)) {
+                return;
+            }
             await this._runLoop(userRequest);
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
@@ -170,6 +228,10 @@ class NexusOrchestrator {
         }
         if (this.pendingRepair) {
             await this._handleRepairResponse(userInput);
+            return;
+        }
+        if (this.pendingRequirement) {
+            await this._handleRequirementResponse(userInput);
             return;
         }
         this.isRunning = true;
@@ -200,6 +262,243 @@ class NexusOrchestrator {
         this.isWaitingForInput = false;
         this._finishRun('stopped');
         this.onUpdate({ type: 'error', message: 'Mission forcefully terminated by the Boss.' });
+    }
+
+    _formatToolResult(result) {
+        if (typeof result === 'string') return result;
+        if (result === null || result === undefined) return String(result);
+        try {
+            return JSON.stringify(result, null, 2);
+        } catch (error) {
+            return String(result);
+        }
+    }
+
+    _getActiveMediaPath(args = {}) {
+        return args.imagePath || args.videoPath || args.filePath || this.lastUploadedFile || null;
+    }
+
+    async _recordMediaUsage(provider, model, usageTier = 'paid', estimatedCostUsd = 0) {
+        if (!this.currentRun) return;
+        const usageEvent = await UsageTracker.recordMediaUsage({
+            provider,
+            model,
+            clientId: this.currentClientId || null,
+            sessionId: this.currentSessionId || null,
+            runId: this.currentRun.id,
+            requestPreview: this.currentRun.requestPreview,
+            usageTier,
+            estimatedCostUsd
+        });
+        const usageKey = `${usageEvent.provider}::${usageEvent.model}`;
+        const currentEntry = this.currentRun.providerUsage?.[usageKey] || {
+            provider: usageEvent.provider,
+            model: usageEvent.model,
+            calls: 0,
+            freeCalls: 0,
+            paidCalls: 0,
+            estimatedCostUsd: 0
+        };
+        currentEntry.calls += 1;
+        currentEntry.freeCalls += usageEvent.usageTier === 'free' ? 1 : 0;
+        currentEntry.paidCalls += usageEvent.usageTier === 'paid' ? 1 : 0;
+        currentEntry.estimatedCostUsd = Number((currentEntry.estimatedCostUsd + Number(usageEvent.estimatedCostUsd || 0)).toFixed(6));
+        this.currentRun.providerUsage = this.currentRun.providerUsage || {};
+        this.currentRun.providerUsage[usageKey] = currentEntry;
+    }
+
+    _detectCommercialQuoteRequest(text) {
+        const value = String(text || '').toLowerCase();
+        return /\b(quote|quotation|commercial quote|invoice)\b/.test(value) &&
+            /\b(meta ads?|google ads?|linkedin ads?|banner|creative|month|weeks?)\b/.test(value);
+    }
+
+    _extractCommercialQuoteDefaults(text) {
+        const value = String(text || '');
+        const numberFrom = (regex, fallback) => Number(value.match(regex)?.[1] || fallback);
+        const bannerCount =
+            numberFrom(/(\d+)\s*banners?/i, 0) ||
+            numberFrom(/banners?\s*(?:design(?:ing)?\s*)?(?:for|x)?\s*(\d+)\s*ads?/i, 0) ||
+            numberFrom(/(\d+)\s*ads?/i, 0) ||
+            1;
+        const monthCount = /(?:one|1)\s*month/i.test(value) ? 1 : numberFrom(/(\d+)\s*months?/i, 0);
+        const inferredWeeks = monthCount > 0 ? monthCount * 4 : numberFrom(/(\d+)\s*weeks?/i, 0);
+        const wantsAds = /meta|facebook|instagram|google ads?|linkedin|paid ads?|digital marketing|promotion|promot/i.test(value);
+        return {
+            campaignName: 'Agency growth package',
+            bannerCount,
+            carouselCount: numberFrom(/(\d+)\s*carousel/i, 0),
+            videoCount: numberFrom(/(\d+)\s*video/i, 0),
+            contentDeliverables: /content|caption|description|copy/i.test(value) ? Math.max(1, numberFrom(/(\d+)\s*(?:content|caption|description|cop(?:y|ies))/i, 1)) : 0,
+            tagPackages: /tags?|keywords?|hashtags?/i.test(value) ? Math.max(1, numberFrom(/(\d+)\s*(?:tag|keyword|hashtag)/i, 1)) : 0,
+            reportCount: /report/i.test(value) ? 1 : 0,
+            auditCount: /audit/i.test(value) ? 1 : 0,
+            metaAdsWeeks: /meta|facebook|instagram|digital marketing|paid ads?|promotion|promot/i.test(value) ? (inferredWeeks || 4) : 0,
+            googleAdsWeeks: /google/i.test(value) ? (inferredWeeks || 4) : 0,
+            linkedinAdsWeeks: /linkedin/i.test(value) ? (inferredWeeks || 4) : 0,
+            websiteProject: /website|landing page|web development/i.test(value),
+            websitePages: /website|landing page|web development/i.test(value) ? numberFrom(/(\d+)\s*pages?/i, 1) : 1,
+            adSpendMonthly: numberFrom(/(?:ad spend|budget)[^\d]*(\d+(?:\.\d+)?)/i, 0),
+            profitMarginPct: 35,
+            taxPct: 0,
+            currency: /(?:rs\.|inr|₹)/i.test(value) ? 'INR' : 'USD',
+            includeStrategyRetainer: true,
+            notes: `${value}${wantsAds && /client wish|client choice|as per client wish/i.test(value) ? '\nAd spend is excluded and will be decided by the client.' : ''}`
+        };
+    }
+
+    async _createAgencyQuoteArtifacts(args = {}) {
+        const plan = AgencyQuotePlanner.buildPlan(args);
+        const model = CommercialDocs.buildQuoteDocumentModel(plan, {
+            clientName: args.clientName || (this.currentClientId ? `Client ${this.currentClientId}` : 'Client'),
+            clientCompany: args.clientCompany || '',
+            clientEmail: args.clientEmail || '',
+            notes: args.notes || ''
+        });
+        const baseName = `agency-quote-${Date.now()}`;
+        const mdName = `${baseName}.md`;
+        const csvName = `${baseName}.csv`;
+        const pdfName = `${baseName}.pdf`;
+        const mdPath = path.join(this.taskDir, mdName);
+        const csvPath = path.join(this.taskDir, csvName);
+        const pdfPath = path.join(this.taskDir, pdfName);
+        const markdown = [
+            '# Nexus OS Agency Quote',
+            '',
+            `Quote Number: ${model.quoteNumber}`,
+            `Client: ${model.clientName}`,
+            model.clientCompany ? `Company: ${model.clientCompany}` : '',
+            model.clientEmail ? `Email: ${model.clientEmail}` : '',
+            `Created: ${model.createdAt.toLocaleString()}`,
+            `Valid Until: ${model.validUntil.toLocaleDateString()}`,
+            '',
+            '## Scope',
+            ...model.items.map((item) => `- ${item.description} | Qty ${item.quantity} | ${item.lineTotal} ${model.currency}`),
+            '',
+            '## Commercial Summary',
+            `- Base Cost: ${model.baseCost} ${model.currency}`,
+            `- Agency Profit (${model.profitMarginPct}%): ${model.profitAmount} ${model.currency}`,
+            `- Tax (${model.taxPct}%): ${model.taxAmount} ${model.currency}`,
+            `- Total: ${model.total} ${model.currency}`,
+            '',
+            '## Assumptions',
+            ...plan.assumptions.map((line) => `- ${line}`),
+            model.notes ? '' : '',
+            model.notes ? `## Notes\n${model.notes}` : ''
+        ].filter(Boolean).join('\n');
+        fs.writeFileSync(mdPath, markdown, 'utf8');
+        fs.writeFileSync(csvPath, CommercialDocs.buildQuoteCsv(model), 'utf8');
+        fs.writeFileSync(pdfPath, CommercialDocs.buildQuotePdfBuffer(model));
+        const folderName = path.basename(this.taskDir);
+        return {
+            ok: true,
+            title: plan.title,
+            pricing: plan.pricing,
+            aiOps: plan.aiOps,
+            assumptions: plan.assumptions,
+            files: {
+                markdown: `/outputs/${folderName}/${mdName}`,
+                csv: `/outputs/${folderName}/${csvName}`,
+                pdf: `/outputs/${folderName}/${pdfName}`
+            }
+        };
+    }
+
+    async _handleCommercialQuoteShortcut(userRequest) {
+        if (!this._detectCommercialQuoteRequest(userRequest)) return false;
+
+        const args = this._extractCommercialQuoteDefaults(userRequest);
+        this.currentMissionMode = 'plan';
+        this.onUpdate({
+            type: 'thought',
+            message: 'Commercial quote request confirmed. Nexus is using the agency quote planner directly instead of generic discussion/search flow.'
+        });
+
+        const toolCall = { name: 'createAgencyQuoteArtifacts', args };
+        this.context.push({ role: 'assistant', content: '', toolCall });
+        this.onUpdate({ type: 'action', name: toolCall.name, args: toolCall.args });
+        this.onUpdate({
+            type: 'thought',
+            message: 'Execution engine: Nexus OS commercial quote planner with agency pricing and document generation.'
+        });
+
+        const result = await this._createAgencyQuoteArtifacts(args);
+        this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
+        this.context.push({ role: 'tool', name: toolCall.name, content: result });
+
+        const pricing = result.pricing || {};
+        const summary = [
+            `Commercial quote prepared for **${result.title}**.`,
+            '',
+            'Download files:',
+            `- [Download PDF Quote](${result.files.pdf})`,
+            `- [Download CSV Quote](${result.files.csv})`,
+            `- [Download Markdown Quote](${result.files.markdown})`,
+            '',
+            `Quoted total: ${pricing.currency || 'USD'} ${Number(pricing.total || 0).toFixed(2)}`,
+            `Base cost: ${pricing.currency || 'USD'} ${Number(pricing.baseCost || 0).toFixed(2)}`,
+            `Agency profit: ${pricing.currency || 'USD'} ${Number(pricing.profitAmount || 0).toFixed(2)}`,
+            pricing.passthroughCost ? `Passthrough cost: ${pricing.currency || 'USD'} ${Number(pricing.passthroughCost || 0).toFixed(2)}` : 'Passthrough cost: excluded'
+        ].join('\n');
+
+        this.onUpdate({ type: 'complete', message: summary });
+        this.context.push({ role: 'assistant', content: summary });
+        this._finishRun('completed');
+        return true;
+    }
+
+    async _toPublicMediaUrl(mediaPath) {
+        if (!mediaPath) return null;
+        if (/^https?:\/\//i.test(mediaPath)) return mediaPath;
+
+        const normalized = path.resolve(mediaPath).replace(/\\/g, '/');
+        const appBaseUrl = (await require('./core/config').get('APP_BASE_URL')) || process.env.APP_BASE_URL || 'http://localhost:3000';
+        const uploadsRoot = path.join(__dirname, 'uploads').replace(/\\/g, '/');
+        const outputsRoot = path.join(__dirname, 'outputs').replace(/\\/g, '/');
+
+        if (normalized.startsWith(uploadsRoot)) {
+            const fileName = path.basename(normalized);
+            return `${appBaseUrl.replace(/\/$/, '')}/uploads/${encodeURIComponent(fileName)}`;
+        }
+
+        if (normalized.startsWith(outputsRoot)) {
+            const relativePath = normalized.slice(outputsRoot.length).replace(/^\/+/, '');
+            return `${appBaseUrl.replace(/\/$/, '')}/outputs/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+        }
+
+        return null;
+    }
+
+    async _describeExecutionEngine(toolCall) {
+        const { name, args = {} } = toolCall || {};
+        if (!name) return null;
+
+        if (name === 'generate_image' || name === 'improveImage') {
+            return 'Execution engine: Google Imagen 4 (`imagen-4.0-generate-001`).';
+        }
+
+        if (name === 'generateVideo') {
+            if (args.prompt) {
+                return 'Execution engine: Google Veo 3.1 first, then Replicate, then Gemini+FFmpeg fallback if needed.';
+            }
+            return 'Execution engine: local FFmpeg image-to-video fallback.';
+        }
+
+        if (name === 'openRouterChat') {
+            const configuredModel = args.model || await require('./core/config').get('OPENROUTER_MODEL') || 'openrouter/free';
+            return `Execution engine: OpenRouter using model \`${configuredModel}\`.`;
+        }
+
+        if (name === 'metaAds') return 'Execution engine: Meta Graph API.';
+        if (name === 'googleAdsCreateCampaign' || name === 'googleAdsListCampaigns') return 'Execution engine: Google Ads API.';
+        if (name === 'linkedinPublishPost') return 'Execution engine: LinkedIn API.';
+        if (name === 'sendEmail' || name === 'readEmail') return 'Execution engine: Gmail SMTP/IMAP.';
+        if (name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') return 'Execution engine: WhatsApp Cloud API.';
+        if (name === 'browserAction') return 'Execution engine: Browser sub-agent (Puppeteer).';
+        if (name === 'searchWeb') return 'Execution engine: Brave Search API.';
+        if (name === 'buildAgencyQuotePlan' || name === 'createAgencyQuoteArtifacts') return 'Execution engine: Nexus OS commercial quote planner with agency pricing and document generation.';
+
+        return null;
     }
 
     async _runLoop(originalRequest) {
@@ -245,7 +544,46 @@ class NexusOrchestrator {
 
             // Ask LLM what to do next
             if (this.currentRun) this.currentRun.llmCalls += 1;
-            const response = await this.llmService.generateResponse(this.context);
+            const response = await this.llmService.generateResponse(this.context, { mode: this.currentMissionMode });
+            if (this.currentRun) {
+                const previousProvider = this.currentRun.lastLlmProvider;
+                if (response.provider) this.currentRun.lastLlmProvider = response.provider;
+                if (response.model) this.currentRun.lastLlmModel = response.model;
+                if (previousProvider && response.provider && previousProvider !== response.provider) {
+                    this.currentRun.providerSwitches = this.currentRun.providerSwitches || [];
+                    this.currentRun.providerSwitches.push({
+                        at: new Date().toISOString(),
+                        from: previousProvider,
+                        to: response.provider,
+                        model: response.model || null
+                    });
+                }
+                if (response.provider || response.model) {
+                    const usageEvent = await UsageTracker.recordLlmUsage({
+                        provider: response.provider,
+                        model: response.model,
+                        clientId: this.currentClientId || null,
+                        sessionId: this.currentSessionId || null,
+                        runId: this.currentRun.id,
+                        requestPreview: this.currentRun.requestPreview
+                    });
+                    const usageKey = `${usageEvent.provider}::${usageEvent.model}`;
+                    const currentEntry = this.currentRun.providerUsage?.[usageKey] || {
+                        provider: usageEvent.provider,
+                        model: usageEvent.model,
+                        calls: 0,
+                        freeCalls: 0,
+                        paidCalls: 0,
+                        estimatedCostUsd: 0
+                    };
+                    currentEntry.calls += 1;
+                    currentEntry.freeCalls += usageEvent.usageTier === 'free' ? 1 : 0;
+                    currentEntry.paidCalls += usageEvent.usageTier === 'paid' ? 1 : 0;
+                    currentEntry.estimatedCostUsd = Number((currentEntry.estimatedCostUsd + Number(usageEvent.estimatedCostUsd || 0)).toFixed(6));
+                    this.currentRun.providerUsage = this.currentRun.providerUsage || {};
+                    this.currentRun.providerUsage[usageKey] = currentEntry;
+                }
+            }
 
             if (response.text) {
                 if (response.text.startsWith('MISSION BREACH:')) {
@@ -262,6 +600,10 @@ class NexusOrchestrator {
                     name: response.toolCall.name,
                     args: response.toolCall.args
                 });
+                const engineNote = await this._describeExecutionEngine(response.toolCall);
+                if (engineNote) {
+                    this.onUpdate({ type: 'thought', message: engineNote });
+                }
 
                 // Keep history updated with the call
                 this.context.push({
@@ -279,7 +621,7 @@ class NexusOrchestrator {
 
                 // Execute the tool
                 let result = await this.dispatchTool(response.toolCall);
-                let resultString = String(result);
+                let resultString = this._formatToolResult(result);
 
                 // AUTO-RECOVERY: If a browser interaction fails, automatically scan for elements
                 if (response.toolCall.name === 'browserAction' && 
@@ -289,7 +631,7 @@ class NexusOrchestrator {
                     this.onUpdate({ type: 'thought', message: `⚠️ Action failed. Initiating autonomous 'Auto-Scan' for recovery...` });
                     const recoveryScan = await this.tools.browserAction({ action: 'extractActiveElements' });
                     result = `Original Action Failed: ${resultString}\n\n[AUTO-RECOVERY SCAN DATA]:\n${recoveryScan}\n\nTip: Use the nexus-autoid-X or scan the Markdown to find the correct element for your next attempt.`;
-                    resultString = String(result);
+                    resultString = this._formatToolResult(result);
                 }
 
                 // PROACTIVE FEEDBACK: If tool result is an error, broadcast it as a thought immediately
@@ -304,6 +646,11 @@ class NexusOrchestrator {
                 // Add result back to context
                 this.context.push({ role: 'tool', name: response.toolCall.name, content: result });
 
+                if (await this._handleToolRequirement(response.toolCall, resultString)) {
+                    this.isWaitingForInput = true;
+                    this._finishRun('paused');
+                    return;
+                }
                 await this._applySelfHealing(response.toolCall, resultString);
                 if (this.pendingRepair) {
                     this.isWaitingForInput = true;
@@ -360,6 +707,53 @@ class NexusOrchestrator {
             this.currentRun.toolsUsed[name] = (this.currentRun.toolsUsed[name] || 0) + 1;
         }
         try {
+            const executionOnlyTools = new Set(['generate_image', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia']);
+            const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']);
+            if (!options.skipGovernance && this.currentMissionMode !== 'execute' && executionOnlyTools.has(name)) {
+                const engineHint = await this._describeExecutionEngine(toolCall);
+                this.pendingApproval = {
+                    requestedAt: new Date().toISOString(),
+                    toolCall,
+                    reason: `Plan is ready. Nexus wants to move from ${this.currentMissionMode.toUpperCase()} to EXECUTE before using ${name}.`,
+                    preview: `Approve EXECUTE mode to continue with ${name}.`,
+                    details: {
+                        requestedMode: 'execute',
+                        currentMode: this.currentMissionMode,
+                        tool: name,
+                        estimatedTools: [name],
+                        likelyEngine: engineHint,
+                        estimatedCostBand: ['generateVideo', 'metaAds'].includes(name) ? 'medium-high' : 'low-medium'
+                    }
+                };
+                this.onUpdate({
+                    type: 'approval_requested',
+                    message: `Plan ready. Approve EXECUTE mode to continue with ${name}. Reply YES to continue or NO to keep planning.`
+                });
+                this.isWaitingForInput = true;
+                return `APPROVAL REQUIRED: Nexus is ready to execute. Approve EXECUTE mode to continue with ${name}.`;
+            }
+            if (!options.skipGovernance && this.currentMissionMode === 'discuss' && planningTools.has(name)) {
+                this.pendingApproval = {
+                    requestedAt: new Date().toISOString(),
+                    toolCall,
+                    reason: 'Nexus wants to move from DISCUSS to PLAN before doing live research or structured planning actions.',
+                    preview: `Approve PLAN mode to continue with ${name}.`,
+                    details: {
+                        requestedMode: 'plan',
+                        currentMode: this.currentMissionMode,
+                        tool: name,
+                        estimatedTools: [name],
+                        likelyEngine: await this._describeExecutionEngine(toolCall),
+                        estimatedCostBand: 'low'
+                    }
+                };
+                this.onUpdate({
+                    type: 'approval_requested',
+                    message: `Discussion is complete. Approve PLAN mode to continue with ${name}. Reply YES to continue or NO to stay in discussion.`
+                });
+                this.isWaitingForInput = true;
+                return `APPROVAL REQUIRED: Nexus is ready to move into PLAN mode for ${name}.`;
+            }
             const governance = GovernanceService.evaluate(toolCall);
             if (!options.skipGovernance && governance.requiresApproval && args?.boss_approved !== true) {
                 this.pendingApproval = {
@@ -412,8 +806,20 @@ class NexusOrchestrator {
                         this.onUpdate({ type: 'thought', message: `🖼️ **Browser Update:**\n![Browser View](${publicUrl})` });
                     }
                     return browserResult;
-                case 'generate_image': return await ImageGenTool.generateImage(args.prompt, args.savePath);
-                case 'improveImage': return await ImageGenTool.improveImage(args.prompt, args.imagePath, args.savePath);
+                case 'generate_image': {
+                    const result = await ImageGenTool.generateImage(args.prompt, args.savePath);
+                    if (!String(result).toLowerCase().startsWith('error')) {
+                        await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
+                    }
+                    return result;
+                }
+                case 'improveImage': {
+                    const result = await ImageGenTool.improveImage(args.prompt, args.imagePath, args.savePath);
+                    if (!String(result).toLowerCase().startsWith('error')) {
+                        await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
+                    }
+                    return result;
+                }
                 case 'n8nSearch': return await this.tools.n8nSearch(args.query);
                 case 'getN8nWorkflow': return await this.tools.getN8nWorkflow(args.path);
                 case 'metaAds': {
@@ -430,7 +836,11 @@ class NexusOrchestrator {
                         case 'createAdSet': return await this.tools.metaAds.createAdSet(args.campaignId, args.name, args.budget || 1000, args.targeting);
                         case 'createAdCreative': return await this.tools.metaAds.createAdCreative(args.name, args.title, args.body, args.imageHash || args.imageUrl, args.pageId, args.cta);
                         case 'createAd': return await this.tools.metaAds.createAd(args.adSetId, args.creativeId, args.name);
-                        case 'publishOrganicPost': return await this.tools.metaAds.publishPagePost(args.pageId, args.message, args.link);
+                        case 'publishOrganicPost':
+                            if (args.imagePath || this.lastUploadedFile) {
+                                return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath || this.lastUploadedFile);
+                            }
+                            return await this.tools.metaAds.publishPagePost(args.pageId, args.message, args.link);
                         case 'publishOrganicPhoto': return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath);
                         case 'publishOrganicVideo': return await this.tools.metaAds.publishPageVideo(args.pageId, args.title, args.description, args.videoPath);
                         case 'publishOrganicReel': return await this.tools.metaAds.publishPageReel(args.pageId, args.description, args.videoPath);
@@ -444,20 +854,38 @@ class NexusOrchestrator {
                     if (args.prompt) {
                         // 1. Attempt High-Fidelity Google Veo (Ad Quality)
                         const veoResult = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath, args.imagePath);
-                        if (!veoResult.error) return `SUCCESS: Ad-quality Veo created at ${args.outputPath}`;
+                        if (!veoResult.error) {
+                            await this._recordMediaUsage('Gemini', 'veo-3.1-generate-001', 'paid', 0.02);
+                            return `SUCCESS: Ad-quality Veo created at ${args.outputPath}`;
+                        }
                         
                         // 2. Fallback to Replicate if Veo fails and token exists
                         if (process.env.REPLICATE_API_TOKEN) {
                             const repResult = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                            if (!repResult.error) return `SUCCESS: Generative Video created at ${args.outputPath}`;
+                            if (!repResult.error) {
+                                await this._recordMediaUsage('Replicate', 'anotherjesse/zeroscope-v2-xl', 'paid', 0.01);
+                                return `SUCCESS: Generative Video created at ${args.outputPath}`;
+                            }
                         }
 
                         // 3. Last fallback: Gemini Image + Manual FFmpeg (Free Mode)
                         const freeResult = await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
-                        return freeResult.error ? `Error: ${freeResult.error}` : `SUCCESS: Free Video created at ${args.outputPath}`;
+                        if (!freeResult.error) {
+                            await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001 + ffmpeg', 'free', 0);
+                            return `SUCCESS: Free Video created at ${args.outputPath}`;
+                        }
+                        return `Error: ${freeResult.error}`;
                     }
                     const localResult = await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
-                    return localResult.error ? `Error: ${localResult.error}` : `SUCCESS: Video created at ${args.outputPath}`;
+                    if (!localResult.error) {
+                        await this._recordMediaUsage('Local', 'ffmpeg image-to-video', 'free', 0);
+                        return `SUCCESS: Video created at ${args.outputPath}`;
+                    }
+                    return `Error: ${localResult.error}`;
+                case 'buildAgencyQuotePlan':
+                    return AgencyQuotePlanner.buildPlan(args);
+                case 'createAgencyQuoteArtifacts':
+                    return await this._createAgencyQuoteArtifacts(args);
                 case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
                 case 'googleAdsListCampaigns': return await this.tools.googleAds.listCampaigns(args.customerId);
                 case 'googleAdsCreateCampaign': return await this.tools.googleAds.createCampaign(args.customerId, args.campaignData);
@@ -470,10 +898,30 @@ class NexusOrchestrator {
                 case 'codeMap': return await this.tools.codeMap(args.absolutePath, args.maxDepth);
                 case 'codeSearch': return await this.tools.codeSearch(args.absolutePath, args.query);
                 case 'codeFindFn': return await this.tools.codeFindFn(args.absolutePath, args.functionName);
-                case 'sendEmail': return await this.tools.sendEmail(args.to, args.subject, args.body);
+                case 'sendEmail': {
+                    const activeMediaPath = this._getActiveMediaPath(args);
+                    const attachments = Array.isArray(args.attachments) ? args.attachments : [];
+                    const normalizedAttachments = attachments.length
+                        ? attachments
+                        : activeMediaPath ? [{ path: activeMediaPath }] : [];
+                    return await this.tools.sendEmail(args.to, args.subject, args.body, normalizedAttachments);
+                }
                 case 'readEmail': return await this.tools.readEmail(args.limit);
                 case 'sendWhatsApp': return await this.tools.sendWhatsApp(args.phone, args.text);
-                case 'sendWhatsAppMedia': return await this.tools.sendWhatsAppMedia(args.phone, args.mediaUrl, args.caption);
+                case 'sendWhatsAppMedia': {
+                    const activeMediaPath = this._getActiveMediaPath(args);
+                    const mediaUrl = args.mediaUrl || await this._toPublicMediaUrl(activeMediaPath);
+                    if (!mediaUrl) {
+                        return {
+                            error: 'WhatsApp media requires a public media URL or an uploaded file in the active context.',
+                            hint: 'Attach a file first or provide a mediaUrl so Nexus can continue with media sending.'
+                        };
+                    }
+                    return await this.tools.sendWhatsAppMedia(args.phone, mediaUrl, args.caption);
+                }
+                case 'analyzeMarketingPage': return await this.tools.analyzeMarketingPage(args);
+                case 'scanCompetitors': return await this.tools.scanCompetitors(args);
+                case 'generateSocialCalendar': return await this.tools.generateSocialCalendar(args);
                 case 'saveMemory': return await this.tools.saveMemory(args.content, args.category);
                 case 'searchMemory': return await this.tools.searchMemory(args.query);
                 case 'delegateToAgent': return await this.tools.delegateToAgent(args.agentType, args.task);
@@ -514,13 +962,17 @@ class NexusOrchestrator {
                 ...pending.toolCall,
                 args: { ...(pending.toolCall.args || {}), boss_approved: true }
             };
+            if (pending.details?.requestedMode) {
+                this.currentMissionMode = String(pending.details.requestedMode).toLowerCase();
+                this.onUpdate({ type: 'thought', message: `Boss approved ${this.currentMissionMode.toUpperCase()} mode. Nexus is continuing.` });
+            }
             this._recordAudit('approval_granted', { tool: approvedCall.name, preview: pending.preview });
             this.context.push({ role: 'user', content: `Approval granted by user: ${userInput}` });
             this.context.push({ role: 'assistant', content: '', toolCall: approvedCall });
             this.onUpdate({ type: 'action', name: approvedCall.name, args: approvedCall.args });
             this.pendingApproval = null;
             const result = await this._dispatchTool(approvedCall, { skipGovernance: true });
-            this.onUpdate({ type: 'result', message: String(result).slice(0, 5000) });
+            this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
             this.context.push({ role: 'tool', name: approvedCall.name, content: result });
             await this._runLoop(null);
         } finally {
@@ -614,6 +1066,121 @@ class NexusOrchestrator {
         await this.resume(`Boss approved repair mode. Repair the issue safely and continue.`);
     }
 
+    _detectMissingKeys(resultString) {
+        const text = String(resultString || '');
+        const directKeys = Array.from(new Set((text.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) || []).filter((key) => key.includes('_'))));
+        if (directKeys.length) return directKeys;
+
+        const inferred = [];
+        const lower = text.toLowerCase();
+        if (lower.includes('meta api token missing') || lower.includes('meta access token')) inferred.push('META_ACCESS_TOKEN');
+        if (lower.includes('missing page id')) inferred.push('META_PAGE_ID');
+        if (lower.includes('gmail credentials')) inferred.push('GMAIL_USER', 'GMAIL_APP_PASSWORD');
+        if (lower.includes('whatsapp credentials')) inferred.push('META_ACCESS_TOKEN', 'WHATSAPP_PHONE_ID');
+        if (lower.includes('linkedin_access_token') || lower.includes('linkedin access token')) inferred.push('LINKEDIN_ACCESS_TOKEN');
+        if (lower.includes('openrouter_api_token')) inferred.push('OPENROUTER_API_TOKEN');
+        if (lower.includes('replicate_api_token')) inferred.push('REPLICATE_API_TOKEN');
+        if (lower.includes('brave_search_api_key')) inferred.push('BRAVE_SEARCH_API_KEY');
+        return Array.from(new Set(inferred));
+    }
+
+    async _handleToolRequirement(toolCall, resultString) {
+        const text = String(resultString || '');
+        const lower = text.toLowerCase();
+        if (!(lower.includes('missing') || lower.includes('not configured') || lower.includes('not initialized'))) return false;
+
+        const keys = this._detectMissingKeys(text);
+        if (!keys.length) return false;
+
+        this.pendingRequirement = {
+            requestedAt: new Date().toISOString(),
+            toolCall,
+            keys
+        };
+        const keyMessage = keys.length === 1
+            ? `Reply with the value for ${keys[0]} and Nexus will save it and continue.`
+            : `Reply using KEY=value lines for these settings: ${keys.join(', ')}. Nexus will save them and continue.`;
+        this.onUpdate({
+            type: 'input_requested',
+            message: `Mission is blocked by missing configuration for ${toolCall.name}: ${keys.join(', ')}.\n\n${keyMessage}`
+        });
+        return true;
+    }
+
+    async _saveRequirementValues(values) {
+        if (!db) throw new Error('Firebase is not initialized.');
+        const collection = this.currentClientId ? 'client_configs' : 'configs';
+        const docId = this.currentClientId || 'default';
+        await db.collection(collection).doc(docId).set(values, { merge: true });
+        require('./core/config').refresh();
+    }
+
+    async _handleRequirementResponse(userInput) {
+        const pending = this.pendingRequirement;
+        const trimmed = String(userInput || '').trim();
+        if (!trimmed) {
+            this.onUpdate({ type: 'input_requested', message: `Still waiting for ${pending.keys.join(', ')}.` });
+            return;
+        }
+
+        const normalized = trimmed.toLowerCase();
+        if (/^(cancel|stop|skip|no)\b/.test(normalized)) {
+            this.pendingRequirement = null;
+            this.context.push({ role: 'user', content: `Boss cancelled the missing configuration step for ${pending.keys.join(', ')}.` });
+            this.onUpdate({ type: 'thought', message: `Configuration step cancelled by the Boss. Mission will continue without saving new keys.` });
+            await this.resume('The Boss cancelled the configuration request. Continue the mission without requesting those settings again unless absolutely necessary.');
+            return;
+        }
+
+        if (/^use (saved|configured|existing)/.test(normalized)) {
+            const ConfigService = require('./core/config');
+            const existingValues = {};
+            for (const key of pending.keys) {
+                const value = await ConfigService.get(key);
+                if (value) existingValues[key] = value;
+            }
+            const stillMissing = pending.keys.filter((key) => !existingValues[key]);
+            if (!stillMissing.length) {
+                this._recordAudit('requirement_reused', { keys: pending.keys, tool: pending.toolCall.name });
+                this.context.push({ role: 'user', content: `Boss instructed Nexus to use the existing saved configuration for ${pending.keys.join(', ')}.` });
+                this.pendingRequirement = null;
+                this.onUpdate({ type: 'thought', message: `Using the saved configuration for ${pending.keys.join(', ')} and resuming the mission.` });
+                await this.resume('Use the existing saved configuration and continue the current mission without asking again.');
+                return;
+            }
+            this.onUpdate({ type: 'input_requested', message: `I checked the saved settings and still need: ${stillMissing.join(', ')}.` });
+            return;
+        }
+
+        let values = {};
+        if (pending.keys.length === 1 && !trimmed.includes('=')) {
+            values[pending.keys[0]] = trimmed;
+        } else {
+            const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+            for (const line of lines) {
+                const idx = line.indexOf('=');
+                if (idx > 0) {
+                    const key = line.slice(0, idx).trim();
+                    const value = line.slice(idx + 1).trim();
+                    if (key && value) values[key] = value;
+                }
+            }
+        }
+
+        const missingStill = pending.keys.filter((key) => !values[key]);
+        if (missingStill.length) {
+            this.onUpdate({ type: 'input_requested', message: `I still need: ${missingStill.join(', ')}. Please reply with ${missingStill.length === 1 ? 'the value' : 'KEY=value lines'}.` });
+            return;
+        }
+
+        await this._saveRequirementValues(values);
+        this._recordAudit('requirement_saved', { keys: pending.keys, tool: pending.toolCall.name });
+        this.context.push({ role: 'user', content: `Boss supplied required configuration for ${pending.keys.join(', ')}. Continue the current mission.` });
+        this.pendingRequirement = null;
+        this.onUpdate({ type: 'thought', message: `Saved ${Object.keys(values).join(', ')} and resuming the mission.` });
+        await this.resume('Required configuration has been saved. Continue the current mission without restarting it.');
+    }
+
     _beginRun(request) {
         this.currentRun = {
             id: `run_${Date.now()}`,
@@ -627,6 +1194,10 @@ class NexusOrchestrator {
             errorCount: 0,
             lastError: null,
             lastTool: null,
+            lastLlmProvider: null,
+            lastLlmModel: null,
+            providerUsage: {},
+            providerSwitches: [],
             steps: 0,
             clientId: this.currentClientId || null,
             estimatedCostUsd: 0
@@ -638,7 +1209,9 @@ class NexusOrchestrator {
         this.currentRun.finishedAt = new Date().toISOString();
         this.currentRun.status = status;
         this.currentRun.steps = this.stepCount;
-        this.currentRun.estimatedCostUsd = Number(((this.currentRun.llmCalls * 0.00035) + (this.currentRun.toolCalls * 0.0001)).toFixed(6));
+        const providerCostUsd = Object.values(this.currentRun.providerUsage || {}).reduce((sum, entry) => sum + Number(entry.estimatedCostUsd || 0), 0);
+        const fallbackCostUsd = (this.currentRun.llmCalls * 0.00035) + (this.currentRun.toolCalls * 0.0001);
+        this.currentRun.estimatedCostUsd = Number((providerCostUsd > 0 ? providerCostUsd : fallbackCostUsd).toFixed(6));
         this.recentRuns.unshift(this.currentRun);
         this.recentRuns = this.recentRuns.slice(0, 12);
     }
@@ -658,7 +1231,9 @@ class NexusOrchestrator {
         return {
             activeRun: this.currentRun && !this.currentRun.finishedAt ? { ...this.currentRun, steps: this.stepCount } : null,
             pendingApproval: this.pendingApproval,
+            pendingRequirement: this.pendingRequirement,
             pendingRepair: this.pendingRepair,
+            missionMode: this.currentMissionMode,
             auditTrail: this.auditTrail.slice(0, 20),
             recoveryHistory: this.recoveryHistory.slice(0, 20),
             recentRuns: allRuns,
@@ -683,6 +1258,8 @@ class NexusOrchestrator {
             stepCount: this.stepCount,
             currentClientId: this.currentClientId,
             currentMarketingWorkflow: this.currentMarketingWorkflow,
+            missionMode: this.currentMissionMode,
+            manualMissionMode: this.manualMissionMode,
             isWaitingForInput: this.isWaitingForInput,
             currentRun: this.currentRun,
             recentRuns: this.recentRuns,
@@ -703,10 +1280,13 @@ class NexusOrchestrator {
         if (state.stepCount !== undefined) this.stepCount = state.stepCount;
         if (state.currentClientId !== undefined) this.currentClientId = state.currentClientId;
         if (state.currentMarketingWorkflow !== undefined) this.currentMarketingWorkflow = state.currentMarketingWorkflow;
+        if (state.missionMode !== undefined) this.currentMissionMode = state.missionMode;
+        if (state.manualMissionMode !== undefined) this.manualMissionMode = state.manualMissionMode;
         if (state.isWaitingForInput !== undefined) this.isWaitingForInput = state.isWaitingForInput;
         if (state.currentRun) this.currentRun = state.currentRun;
         if (state.recentRuns) this.recentRuns = state.recentRuns;
         if (state.pendingApproval) this.pendingApproval = state.pendingApproval;
+        if (state.pendingRequirement) this.pendingRequirement = state.pendingRequirement;
         if (state.pendingRepair) this.pendingRepair = state.pendingRepair;
         if (state.auditTrail) this.auditTrail = state.auditTrail;
         if (state.recoveryHistory) this.recoveryHistory = state.recoveryHistory;

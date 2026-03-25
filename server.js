@@ -9,15 +9,53 @@ const fs = require('fs');
 const { db } = require('./core/firebase');
 const ConfigService = require('./core/config');
 const PricingService = require('./core/pricing');
+const AgencyQuotePlanner = require('./core/agencyQuotePlanner');
 const MarketingService = require('./core/marketing');
 const MarketingPrompts = require('./core/marketingPrompts');
 const MarketingTemplates = require('./core/marketingTemplates');
+const UsageTracker = require('./core/usageTracker');
+const CommercialDocs = require('./core/commercialDocs');
+const MarketingUtilsTool = require('./tools/marketingUtils');
 const nodemailer = require('nodemailer');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const APP_BOOTED_AT = new Date().toISOString();
+
+async function createPaymentLinkForInvoice(invoice, client) {
+    const stripeSecret = await ConfigService.get('STRIPE_SECRET_KEY');
+    const appBaseUrl = await ConfigService.get('APP_BASE_URL') || process.env.APP_BASE_URL || 'http://localhost:3000';
+
+    if (!stripeSecret) {
+        return `${appBaseUrl.replace(/\/$/, '')}/pay/${invoice.id || invoice.quoteId || 'invoice'}`;
+    }
+
+    const pricing = invoice.pricing || {};
+    const currency = String(pricing.currency || 'USD').toLowerCase();
+    const amount = Math.max(1, Math.round(Number(pricing.total || 0) * 100));
+
+    const payload = new URLSearchParams();
+    payload.append('mode', 'payment');
+    payload.append('success_url', `${appBaseUrl.replace(/\/$/, '')}/?payment=success&invoice=${invoice.id || ''}`);
+    payload.append('cancel_url', `${appBaseUrl.replace(/\/$/, '')}/?payment=cancelled&invoice=${invoice.id || ''}`);
+    payload.append('line_items[0][price_data][currency]', currency);
+    payload.append('line_items[0][price_data][product_data][name]', `Nexus OS Invoice ${invoice.id || ''}`.trim());
+    payload.append('line_items[0][price_data][unit_amount]', String(amount));
+    payload.append('line_items[0][quantity]', '1');
+    if (client?.email) payload.append('customer_email', client.email);
+    payload.append('metadata[invoice_id]', String(invoice.id || ''));
+    payload.append('metadata[client_id]', String(invoice.clientId || ''));
+
+    const response = await require('axios').post('https://api.stripe.com/v1/checkout/sessions', payload.toString(), {
+        headers: {
+            Authorization: `Bearer ${stripeSecret}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+    });
+
+    return response.data?.url || `${appBaseUrl.replace(/\/$/, '')}/pay/${invoice.id || invoice.quoteId || 'invoice'}`;
+}
 
 function buildDiagnostic(requiredKeys, has) {
     const missingKeys = requiredKeys.filter((key) => !has(key));
@@ -56,6 +94,7 @@ function buildInvoiceDocumentModel(invoice, client) {
         clientEmail: client?.email || '',
         createdAt: invoice.createdAt?.toDate ? invoice.createdAt.toDate() : new Date(invoice.createdAt || Date.now()),
         paidAt: invoice.paidAt?.toDate ? invoice.paidAt.toDate() : (invoice.paidAt ? new Date(invoice.paidAt) : null),
+        validUntil: null,
         status: invoice.status || 'unpaid',
         notes: invoice.notes || '',
         paymentUrl: invoice.paymentUrl || '',
@@ -67,9 +106,118 @@ function buildInvoiceDocumentModel(invoice, client) {
             description: item.description || item.serviceCode || 'Service',
             quantity: Number(item.quantity || 1),
             unitCost: Number(item.unitCost || item.baseCost || 0),
-            lineTotal: Number(item.lineTotal || item.total || 0)
+            lineTotal: Number(item.lineTotal || item.lineCost || item.total || 0)
         }))
     };
+}
+
+function buildQuoteDocumentModel(quote, client) {
+    const pricing = quote.pricing || {};
+    const items = Array.isArray(pricing.items) ? pricing.items : [];
+    const currency = pricing.currency || 'USD';
+    return {
+        documentType: 'Quote',
+        quoteNumber: `QTE-${String(quote.id || '').slice(0, 8).toUpperCase()}`,
+        clientName: client?.name || client?.company || 'Client',
+        clientCompany: client?.company || '',
+        clientEmail: client?.email || '',
+        createdAt: quote.createdAt?.toDate ? quote.createdAt.toDate() : new Date(quote.createdAt || Date.now()),
+        validUntil: quote.validUntil?.toDate ? quote.validUntil.toDate() : new Date((quote.createdAt?.toDate ? quote.createdAt.toDate() : new Date(quote.createdAt || Date.now())).getTime() + (7 * 24 * 60 * 60 * 1000)),
+        status: quote.status || 'draft',
+        notes: quote.notes || '',
+        currency,
+        subtotal: Number(pricing.subtotal || 0),
+        taxAmount: Number(pricing.taxAmount || 0),
+        total: Number(pricing.total || 0),
+        baseCost: Number(pricing.baseCost || 0),
+        profitEligibleBaseCost: Number(pricing.profitEligibleBaseCost || pricing.baseCost || 0),
+        passthroughCost: Number(pricing.passthroughCost || 0),
+        profitAmount: Number(pricing.profitAmount || 0),
+        profitMarginPct: Number(pricing.profitMarginPct || 0),
+        taxPct: Number(pricing.taxPct || 0),
+        items: items.map((item) => ({
+            description: item.description || item.serviceCode || 'Service',
+            quantity: Number(item.quantity || 1),
+            unitCost: Number(item.unitCost || 0),
+            lineTotal: Number(item.lineCost || item.lineTotal || 0)
+        }))
+    };
+}
+
+function buildBrandedDocumentLines({
+    title,
+    documentNumber,
+    model,
+    extraHeaderLines = [],
+    itemLines = [],
+    summaryLines = [],
+    footerLines = []
+}) {
+    return [
+        '[NEXUS OS]',
+        'Strategy. Creative. Execution. Reporting.',
+        '',
+        title,
+        documentNumber,
+        `Client: ${model.clientName}`,
+        model.clientCompany ? `Company: ${model.clientCompany}` : '',
+        model.clientEmail ? `Email: ${model.clientEmail}` : '',
+        `Created: ${model.createdAt.toLocaleString()}`,
+        ...extraHeaderLines.filter(Boolean),
+        '',
+        'Scope',
+        ...itemLines,
+        '',
+        'Commercial summary',
+        ...summaryLines,
+        model.notes ? '' : '',
+        model.notes ? `Notes: ${model.notes}` : '',
+        '',
+        ...footerLines.filter(Boolean)
+    ].filter(Boolean);
+}
+
+function buildSimplePdfBuffer(lines, { titleFont = 'Helvetica-Bold', bodyFont = 'Helvetica' } = {}) {
+    const content = [
+        'BT',
+        '/F1 18 Tf',
+        '50 805 Td',
+        `( ${sanitizePdfText(lines[0] || '')} ) Tj`,
+        '/F2 11 Tf'
+    ];
+
+    const remainingLines = lines.slice(1);
+    remainingLines.forEach((line, index) => {
+        const prefix = index === 0 ? '0 -24 Td ' : '0 -16 Td ';
+        content.push(`${prefix}(${sanitizePdfText(line)}) Tj`);
+    });
+    content.push('ET');
+    const stream = content.join('\n');
+    const streamLength = Buffer.byteLength(stream, 'utf8');
+
+    const objects = [
+        '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+        '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+        '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >> endobj',
+        `4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /${titleFont} >> endobj`,
+        `5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /${bodyFont} >> endobj`,
+        `6 0 obj << /Length ${streamLength} >> stream\n${stream}\nendstream endobj`
+    ];
+
+    let pdf = '%PDF-1.4\n';
+    const offsets = [0];
+    for (const obj of objects) {
+        offsets.push(Buffer.byteLength(pdf, 'utf8'));
+        pdf += `${obj}\n`;
+    }
+    const xrefOffset = Buffer.byteLength(pdf, 'utf8');
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += '0000000000 65535 f \n';
+    for (let i = 1; i < offsets.length; i += 1) {
+        pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    return Buffer.from(pdf, 'utf8');
 }
 
 function buildInvoiceCsv(model) {
@@ -98,29 +246,83 @@ function buildInvoiceCsv(model) {
     }).join(',')).join('\n');
 }
 
-function buildInvoicePdfBuffer(model) {
+function buildQuoteCsv(model) {
+    const rows = [
+        ['Quote Number', model.quoteNumber],
+        ['Client', model.clientName],
+        ['Company', model.clientCompany],
+        ['Email', model.clientEmail],
+        ['Status', model.status],
+        ['Created At', model.createdAt.toISOString()],
+        ['Currency', model.currency],
+        ['Base Cost', model.baseCost],
+        ['Profit Eligible Base Cost', model.profitEligibleBaseCost],
+        ['Passthrough Cost', model.passthroughCost],
+        ['Profit Margin %', model.profitMarginPct],
+        ['Profit Amount', model.profitAmount],
+        ['Tax %', model.taxPct],
+        [],
+        ['Description', 'Quantity', 'Unit Cost', 'Line Total'],
+        ...model.items.map((item) => [item.description, item.quantity, item.unitCost, item.lineTotal]),
+        [],
+        ['Subtotal', model.subtotal],
+        ['Tax', model.taxAmount],
+        ['Total', model.total],
+        ['Notes', model.notes]
+    ];
+
+    return rows.map((row) => row.map((cell) => {
+        const value = String(cell ?? '');
+        return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    }).join(',')).join('\n');
+}
+
+function buildUsageCsv(summary) {
+    const providerRows = [
+        ['Scope', summary.scope || 'global'],
+        ['Period', summary.period || 'all'],
+        ['Client ID', summary.clientId || ''],
+        ['Total Calls', summary.totals?.calls || 0],
+        ['Free Calls', summary.totals?.freeCalls || 0],
+        ['Paid Calls', summary.totals?.paidCalls || 0],
+        ['Estimated Paid Cost USD', summary.totals?.estimatedCostUsd || 0],
+        [],
+        ['Providers'],
+        ['Provider', 'Calls', 'Free Calls', 'Paid Calls', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
+        ...(summary.providers || []).map((entry) => [entry.provider, entry.calls, entry.freeCalls, entry.paidCalls, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || '']),
+        [],
+        ['Models'],
+        ['Provider', 'Model', 'Calls', 'Free Calls', 'Paid Calls', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
+        ...(summary.models || []).map((entry) => [entry.provider, entry.model, entry.calls, entry.freeCalls, entry.paidCalls, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || ''])
+    ];
+
+    return providerRows.map((row) => row.map((cell) => {
+        const value = String(cell ?? '');
+        return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    }).join(',')).join('\n');
+}
+
+function buildUsagePdfBuffer(summary) {
     const lines = [
-        'Nexus OS Invoice',
-        model.invoiceNumber,
-        `Client: ${model.clientName}`,
-        model.clientCompany ? `Company: ${model.clientCompany}` : '',
-        model.clientEmail ? `Email: ${model.clientEmail}` : '',
-        `Status: ${model.status}`,
-        `Created: ${model.createdAt.toLocaleString()}`,
-        model.paidAt ? `Paid: ${model.paidAt.toLocaleString()}` : '',
+        'Nexus OS Usage Report',
+        `Scope: ${summary.scope || 'global'}`,
+        `Period: ${summary.period || 'all'}`,
+        summary.clientId ? `Client: ${summary.clientId}` : '',
+        `Total Calls: ${summary.totals?.calls || 0}`,
+        `Free Calls: ${summary.totals?.freeCalls || 0}`,
+        `Paid Calls: ${summary.totals?.paidCalls || 0}`,
+        `Estimated Paid Cost: ${formatCurrencyValue(summary.totals?.estimatedCostUsd || 0, 'USD')}`,
         '',
-        'Items',
-        ...model.items.map((item) => `${item.description} | Qty ${item.quantity} | ${formatCurrencyValue(item.lineTotal, model.currency)}`),
+        'Providers',
+        ...(summary.providers || []).slice(0, 10).map((entry) => `${entry.provider} | ${entry.calls} calls | ${entry.freeCalls} free | ${entry.paidCalls} paid | ${formatCurrencyValue(entry.estimatedCostUsd || 0, 'USD')} | ${entry.resetCadence || ''}`),
         '',
-        `Subtotal: ${formatCurrencyValue(model.subtotal, model.currency)}`,
-        `Tax: ${formatCurrencyValue(model.taxAmount, model.currency)}`,
-        `Total: ${formatCurrencyValue(model.total, model.currency)}`,
-        model.paymentUrl ? `Payment: ${model.paymentUrl}` : ''
+        'Models',
+        ...(summary.models || []).slice(0, 12).map((entry) => `${entry.provider} / ${entry.model} | ${entry.calls} calls | ${entry.freeCalls} free | ${entry.paidCalls} paid`)
     ].filter(Boolean);
 
-    const content = ['BT', '/F1 12 Tf', '50 790 Td'];
+    const content = ['BT', '/F1 11 Tf', '50 790 Td'];
     lines.forEach((line, index) => {
-        const prefix = index === 0 ? '' : '0 -18 Td ';
+        const prefix = index === 0 ? '' : '0 -16 Td ';
         content.push(`${prefix}(${sanitizePdfText(line)}) Tj`);
     });
     content.push('ET');
@@ -151,6 +353,14 @@ function buildInvoicePdfBuffer(model) {
     return Buffer.from(pdf, 'utf8');
 }
 
+function buildInvoicePdfBuffer(model) {
+    return CommercialDocs.buildInvoicePdfBuffer(model);
+}
+
+function buildQuotePdfBuffer(model) {
+    return CommercialDocs.buildQuotePdfBuffer(model);
+}
+
 async function getInvoiceWithClient(invoiceId) {
     const invoiceDoc = await db.collection('invoices').doc(invoiceId).get();
     if (!invoiceDoc.exists) return null;
@@ -161,6 +371,18 @@ async function getInvoiceWithClient(invoiceId) {
         client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
     }
     return { invoice, client, model: buildInvoiceDocumentModel(invoice, client) };
+}
+
+async function getQuoteWithClient(quoteId) {
+    const quoteDoc = await db.collection('quotes').doc(quoteId).get();
+    if (!quoteDoc.exists) return null;
+    const quote = { id: quoteDoc.id, ...quoteDoc.data() };
+    let client = null;
+    if (quote.clientId) {
+        const clientDoc = await db.collection('clients').doc(quote.clientId).get();
+        client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+    }
+    return { quote, client, model: buildQuoteDocumentModel(quote, client) };
 }
 
 // Parse JSON bodies for API routes
@@ -180,7 +402,14 @@ const CONFIG_KEY_LABELS = {
     META_PAGE_ID: 'Meta Page ID',
     REPLICATE_API_TOKEN: 'Replicate API Token',
     OPENROUTER_API_TOKEN: 'OpenRouter API Token',
+    OPENROUTER_MODEL: 'OpenRouter Model',
+    GROQ_API_KEY: 'Groq API Key',
+    GROQ_MODEL: 'Groq Model',
+    NVIDIA_NIM_API_KEY: 'NVIDIA NIM API Key',
+    NVIDIA_MODEL: 'NVIDIA Model',
     LINKEDIN_ACCESS_TOKEN: 'LinkedIn Access Token',
+    STRIPE_SECRET_KEY: 'Stripe Secret Key',
+    APP_BASE_URL: 'Public App Base URL',
     GOOGLE_ADS_CLIENT_ID: 'Google Ads Client ID',
     GOOGLE_ADS_CLIENT_SECRET: 'Google Ads Client Secret',
     GOOGLE_ADS_REFRESH_TOKEN: 'Google Ads Refresh Token',
@@ -294,6 +523,48 @@ app.get('/api/system-status', async (req, res) => {
                 keys: [{ key: 'BRAVE_SEARCH_API_KEY', label: 'Brave Search Key', isSet: has('BRAVE_SEARCH_API_KEY') }],
                 howToGet: 'Get a key from https://api.search.brave.com/',
                 addVia: 'Settings → Brave Search API Key'
+            },
+            {
+                id: 'openrouter',
+                name: 'OpenRouter Fallback',
+                icon: 'OR',
+                description: 'OpenRouter free or low-cost fallback for LLM tasks when Gemini is exhausted.',
+                status: has('OPENROUTER_API_TOKEN') ? 'active' : 'missing',
+                keys: [
+                    { key: 'OPENROUTER_API_TOKEN', label: 'API Token', isSet: has('OPENROUTER_API_TOKEN') },
+                    { key: 'OPENROUTER_MODEL', label: 'Model', isSet: has('OPENROUTER_MODEL') }
+                ],
+                howToGet: 'Create a token in OpenRouter and set a preferred fallback model.',
+                addVia: 'Settings -> OpenRouter Fallback',
+                diagnostics: buildDiagnostic(['OPENROUTER_API_TOKEN'], has)
+            },
+            {
+                id: 'groq',
+                name: 'Groq Fallback',
+                icon: 'GQ',
+                description: 'Groq OpenAI-compatible fallback for fast free-tier text inference.',
+                status: has('GROQ_API_KEY') ? 'active' : 'missing',
+                keys: [
+                    { key: 'GROQ_API_KEY', label: 'Groq API Key', isSet: has('GROQ_API_KEY') },
+                    { key: 'GROQ_MODEL', label: 'Groq Model', isSet: has('GROQ_MODEL') }
+                ],
+                howToGet: 'Create an API key in Groq console and optionally set a model.',
+                addVia: 'Settings -> Groq Fallback',
+                diagnostics: buildDiagnostic(['GROQ_API_KEY'], has)
+            },
+            {
+                id: 'nvidia',
+                name: 'NVIDIA NIM Fallback',
+                icon: 'NV',
+                description: 'NVIDIA NIM OpenAI-compatible fallback for text inference.',
+                status: has('NVIDIA_NIM_API_KEY') ? 'active' : 'missing',
+                keys: [
+                    { key: 'NVIDIA_NIM_API_KEY', label: 'NVIDIA API Key', isSet: has('NVIDIA_NIM_API_KEY') },
+                    { key: 'NVIDIA_MODEL', label: 'NVIDIA Model', isSet: has('NVIDIA_MODEL') }
+                ],
+                howToGet: 'Create an NVIDIA API key and set a fallback model if needed.',
+                addVia: 'Settings -> NVIDIA Fallback',
+                diagnostics: buildDiagnostic(['NVIDIA_NIM_API_KEY'], has)
             },
             {
                 id: 'email',
@@ -429,6 +700,44 @@ app.get('/api/health', async (req, res) => {
     });
 });
 
+app.get('/api/usage/summary', async (req, res) => {
+    try {
+        const { clientId, period } = req.query || {};
+        const summary = await UsageTracker.getUsageSummary({ clientId: clientId || null, period: period || 'all' });
+        res.json({ summary });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/usage/export', async (req, res) => {
+    try {
+        const { clientId, period, format = 'csv' } = req.query || {};
+        const summary = await UsageTracker.getUsageSummary({ clientId: clientId || null, period: period || 'all' });
+        const fileBase = `usage-${clientId || 'global'}-${period || 'all'}`;
+        if (String(format).toLowerCase() === 'pdf') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
+            return res.send(buildUsagePdfBuffer(summary));
+        }
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.csv"`);
+        return res.send(buildUsageCsv(summary));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/usage/leaderboard', async (req, res) => {
+    try {
+        const { period } = req.query || {};
+        const leaders = await UsageTracker.getClientLeaderboard({ period: period || 'all' });
+        res.json({ leaders });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── CRM & Agency Portal API ───────────────────────────────────────────
 app.get('/api/clients', async (req, res) => {
     try {
@@ -504,7 +813,7 @@ app.get('/api/pricing/catalog', (req, res) => {
 });
 
 app.get('/api/marketing/workflows', (req, res) => {
-    res.json({ workflows: MarketingService.getWorkflows(), promptPacks: MarketingPrompts.getAllPromptPacks() });
+    res.json({ workflows: MarketingService.getWorkflows(), promptPacks: MarketingPrompts.getAllPromptPacks(), auditSpecialists: MarketingPrompts.getAuditSpecialists() });
 });
 
 app.post('/api/marketing/brief', async (req, res) => {
@@ -550,6 +859,71 @@ app.post('/api/marketing/brief', async (req, res) => {
             promptPack: MarketingPrompts.getPromptPack(workflowId),
             brief
         });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/audit-bundle', async (req, res) => {
+    try {
+        const { target, clientId, notes, budget, channels } = req.body;
+        let client = null;
+        if (clientId && db) {
+            const clientDoc = await db.collection('clients').doc(clientId).get();
+            client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+        }
+
+        const specialistsMap = MarketingPrompts.getAuditSpecialists();
+        const specialists = Object.entries(specialistsMap).map(([id, item]) => ({ id, ...item }));
+        const auditBundle = {
+            workflow: MarketingService.getWorkflow('audit'),
+            specialists,
+            context: MarketingPrompts.buildAuditBundleContext({
+                workflow: MarketingService.getWorkflow('audit'),
+                target,
+                clientName: client?.name || '',
+                notes,
+                budget,
+                channels
+            }),
+            brief: MarketingService.buildAuditBundle({
+                target,
+                clientName: client?.name || '',
+                notes,
+                budget,
+                channels,
+                specialists
+            })
+        };
+
+        res.json({ success: true, auditBundle });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/page-analysis', async (req, res) => {
+    try {
+        const result = await MarketingUtilsTool.analyzePage(req.body || {});
+        res.json({ success: true, result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/competitor-scan', async (req, res) => {
+    try {
+        const result = await MarketingUtilsTool.scanCompetitors(req.body || {});
+        res.json({ success: true, result });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/marketing/social-calendar', async (req, res) => {
+    try {
+        const result = await MarketingUtilsTool.generateSocialCalendar(req.body || {});
+        res.json({ success: true, result });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -744,6 +1118,120 @@ app.get('/api/quotes', async (req, res) => {
     }
 });
 
+app.post('/api/quotes/planner', async (req, res) => {
+    try {
+        const {
+            campaignName,
+            bannerCount,
+            carouselCount,
+            videoCount,
+            contentDeliverables,
+            tagPackages,
+            reportCount,
+            auditCount,
+            metaAdsWeeks,
+            googleAdsWeeks,
+            linkedinAdsWeeks,
+            websiteProject,
+            websitePages,
+            adSpendMonthly,
+            profitMarginPct,
+            taxPct,
+            currency,
+            includeStrategyRetainer
+        } = req.body || {};
+        const plan = AgencyQuotePlanner.buildPlan({
+            campaignName,
+            bannerCount,
+            carouselCount,
+            videoCount,
+            contentDeliverables,
+            tagPackages,
+            reportCount,
+            auditCount,
+            metaAdsWeeks,
+            googleAdsWeeks,
+            linkedinAdsWeeks,
+            websiteProject,
+            websitePages,
+            adSpendMonthly,
+            profitMarginPct,
+            taxPct,
+            currency,
+            includeStrategyRetainer
+        });
+        res.json({ plan });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/quotes/planner/create', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const {
+            clientId,
+            campaignName,
+            bannerCount,
+            carouselCount,
+            videoCount,
+            contentDeliverables,
+            tagPackages,
+            reportCount,
+            auditCount,
+            metaAdsWeeks,
+            googleAdsWeeks,
+            linkedinAdsWeeks,
+            websiteProject,
+            websitePages,
+            adSpendMonthly,
+            profitMarginPct,
+            taxPct,
+            currency,
+            includeStrategyRetainer,
+            notes
+        } = req.body || {};
+        const plan = AgencyQuotePlanner.buildPlan({
+            campaignName,
+            bannerCount,
+            carouselCount,
+            videoCount,
+            contentDeliverables,
+            tagPackages,
+            reportCount,
+            auditCount,
+            metaAdsWeeks,
+            googleAdsWeeks,
+            linkedinAdsWeeks,
+            websiteProject,
+            websitePages,
+            adSpendMonthly,
+            profitMarginPct,
+            taxPct,
+            currency,
+            includeStrategyRetainer
+        });
+        const docRef = await db.collection('quotes').add({
+            clientId,
+            notes: notes || '',
+            status: 'draft',
+            validUntil: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
+            planner: {
+                campaignName: plan.title,
+                summary: plan.summary,
+                aiOps: plan.aiOps,
+                assumptions: plan.assumptions
+            },
+            pricing: plan.pricing,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+        res.json({ success: true, id: docRef.id, plan });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/quotes', async (req, res) => {
     try {
         if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
@@ -753,11 +1241,84 @@ app.post('/api/quotes', async (req, res) => {
             clientId,
             notes: notes || '',
             status: 'draft',
+            validUntil: new Date(Date.now() + (7 * 24 * 60 * 60 * 1000)),
             pricing,
             createdAt: new Date(),
             updatedAt: new Date()
         });
         res.json({ success: true, id: docRef.id, pricing });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/quotes/:id/export', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const bundle = await getQuoteWithClient(req.params.id);
+        if (!bundle) return res.status(404).json({ error: 'Quote not found' });
+        const format = String(req.query.format || 'pdf').toLowerCase();
+        const filenameBase = `quote-${bundle.model.quoteNumber.toLowerCase()}`;
+        if (format === 'csv') {
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.csv"`);
+            return res.send(buildQuoteCsv(bundle.model));
+        }
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
+        return res.send(buildQuotePdfBuffer(bundle.model));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/quotes/:id/send', async (req, res) => {
+    try {
+        if (!db) return res.status(503).json({ error: 'Firebase not initialized' });
+        const bundle = await getQuoteWithClient(req.params.id);
+        if (!bundle) return res.status(404).json({ error: 'Quote not found' });
+        const { quote, client, model } = bundle;
+        if (!client?.email) return res.status(400).json({ error: 'Client email is required to send a quote' });
+        const gmailUser = await ConfigService.get('GMAIL_USER');
+        const gmailPassword = await ConfigService.get('GMAIL_APP_PASSWORD');
+        if (!gmailUser || !gmailPassword) return res.status(400).json({ error: 'Gmail credentials are not configured' });
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: gmailUser, pass: gmailPassword }
+        });
+
+        const pdf = buildQuotePdfBuffer(model);
+        const csv = buildQuoteCsv(model);
+        const subject = `Quote ${model.quoteNumber} from Nexus OS`;
+        const html = `
+            <div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.6">
+                <p>Dear ${client.name || 'Client'},</p>
+                <p>Please find attached your formal Nexus OS quote <strong>${model.quoteNumber}</strong>.</p>
+                <p>This package outlines the monthly scope, agency pricing, and estimated AI operations cost after free-tier provider windows are exhausted.</p>
+                <p>Once approved, we can convert this quote directly into an invoice and start execution.</p>
+                <p>Regards,<br>Nexus OS Agency Team</p>
+            </div>
+        `;
+
+        await transporter.sendMail({
+            from: gmailUser,
+            to: client.email,
+            subject,
+            html,
+            attachments: [
+                { filename: `quote-${model.quoteNumber.toLowerCase()}.pdf`, content: pdf, contentType: 'application/pdf' },
+                { filename: `quote-${model.quoteNumber.toLowerCase()}.csv`, content: csv, contentType: 'text/csv; charset=utf-8' }
+            ]
+        });
+
+        await db.collection('quotes').doc(quote.id).set({
+            lastSentAt: new Date(),
+            lastSentTo: client.email,
+            updatedAt: new Date()
+        }, { merge: true });
+
+        res.json({ success: true, sentTo: client.email });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -783,18 +1344,33 @@ app.post('/api/invoices/from-quote/:id', async (req, res) => {
         const quoteDoc = await db.collection('quotes').doc(req.params.id).get();
         if (!quoteDoc.exists) return res.status(404).json({ error: 'Quote not found' });
         const quote = quoteDoc.data();
+        let client = null;
+        if (quote.clientId) {
+            const clientDoc = await db.collection('clients').doc(quote.clientId).get();
+            client = clientDoc.exists ? { id: clientDoc.id, ...clientDoc.data() } : null;
+        }
         const invoiceRef = await db.collection('invoices').add({
             clientId: quote.clientId,
             quoteId: req.params.id,
             pricing: quote.pricing,
             status: 'unpaid',
-            paymentUrl: `/pay/${req.params.id}`,
+            paymentUrl: '',
             paidAt: null,
             createdAt: new Date(),
             updatedAt: new Date()
         });
+        const paymentUrl = await createPaymentLinkForInvoice({
+            id: invoiceRef.id,
+            clientId: quote.clientId,
+            quoteId: req.params.id,
+            pricing: quote.pricing
+        }, client);
+        await db.collection('invoices').doc(invoiceRef.id).set({
+            paymentUrl,
+            updatedAt: new Date()
+        }, { merge: true });
         await db.collection('quotes').doc(req.params.id).set({ status: 'invoiced', updatedAt: new Date() }, { merge: true });
-        res.json({ success: true, id: invoiceRef.id });
+        res.json({ success: true, id: invoiceRef.id, paymentUrl });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -966,6 +1542,12 @@ const CLIENT_KEY_LABELS = {
     GEMINI_API_KEY: 'Gemini API Key 1 (Primary)',
     GEMINI_API_KEY_2: 'Gemini API Key 2 (Backup)',
     GEMINI_API_KEY_3: 'Gemini API Key 3 (Backup)',
+    OPENROUTER_API_TOKEN: 'OpenRouter API Token',
+    OPENROUTER_MODEL: 'OpenRouter Model',
+    GROQ_API_KEY: 'Groq API Key',
+    GROQ_MODEL: 'Groq Model',
+    NVIDIA_NIM_API_KEY: 'NVIDIA NIM API Key',
+    NVIDIA_MODEL: 'NVIDIA Model',
     BRAVE_SEARCH_API_KEY: 'Brave Search API Key',
     META_ACCESS_TOKEN: 'Meta Access Token',
     META_AD_ACCOUNT_ID: 'Meta Ad Account ID',
@@ -1171,6 +1753,7 @@ io.on('connection', (socket) => {
     const emitMissionState = () => {
         if (!orchestrator) return;
         const base = orchestrator.getMissionControlData();
+        const activeWaitingJob = jobQueue.find(job => job.status === 'paused' || job.status === 'awaiting_input') || null;
         const queueTotals = {
             queued: jobQueue.filter(job => job.status === 'queued').length,
             paused: jobQueue.filter(job => job.status === 'paused').length,
@@ -1182,9 +1765,15 @@ io.on('connection', (socket) => {
             ...base,
             queue: {
                 activeJobId: currentJobId,
+                activeWaitingJobId: activeWaitingJob?.id || null,
                 jobs: jobQueue.slice(0, 20),
                 totals: queueTotals
             },
+            blocker: activeWaitingJob ? {
+                type: orchestrator.pendingApproval ? 'approval' : orchestrator.pendingRequirement ? 'requirement' : orchestrator.pendingRepair ? 'repair' : 'input',
+                message: orchestrator.pendingApproval?.reason || (orchestrator.pendingRequirement ? `Missing configuration: ${(orchestrator.pendingRequirement.keys || []).join(', ')}` : null) || orchestrator.pendingRepair?.classification?.summary || 'Mission is waiting for more input from the Boss.',
+                jobId: activeWaitingJob.id
+            } : null,
             usage: {
                 sessionEstimatedCostUsd: Number(jobQueue.reduce((sum, job) => sum + Number(job.estimatedCostUsd || 0), 0).toFixed(6)),
                 completedJobs: queueTotals.completed
@@ -1201,7 +1790,7 @@ io.on('connection', (socket) => {
         const lastCompletedRun = mission.recentRuns?.[0];
 
         if (orchestrator.pendingApproval || orchestrator.isWaitingForInput) {
-            job.status = 'paused';
+            job.status = 'awaiting_input';
         } else if (activeRun && !activeRun.finishedAt) {
             job.status = 'running';
         } else if (lastCompletedRun?.finishedAt) {
@@ -1240,6 +1829,11 @@ io.on('connection', (socket) => {
         if (retryReadyJob) {
             retryReadyJob.status = 'queued';
         }
+        const waitingJob = jobQueue.find(job => job.status === 'awaiting_input' || job.status === 'paused');
+        if (waitingJob) {
+            emitMissionState();
+            return;
+        }
         const nextJob = jobQueue.find(job => job.status === 'queued');
         if (!nextJob) {
             emitMissionState();
@@ -1260,6 +1854,7 @@ io.on('connection', (socket) => {
                 orchestrator.setClientContext(null, {});
             }
 
+            orchestrator.manualMissionMode = nextJob.missionMode || null;
             await orchestrator.execute(nextJob.prompt);
         } catch (error) {
             nextJob.attempts = (nextJob.attempts || 0) + 1;
@@ -1322,6 +1917,7 @@ io.on('connection', (socket) => {
             // Auto-save on every log event to ensure persistence
             saveSession();
         }, sessionDir);
+        orchestrator.currentSessionId = sessionId;
 
         if (savedState) {
             orchestrator.restorePersistentState(savedState.orchestratorState);
@@ -1378,6 +1974,7 @@ io.on('connection', (socket) => {
             socket.emit('mission_state', orchestrator.getMissionControlData());
             saveSession();
         }, sessionDir);
+        orchestrator.currentSessionId = sessionId;
 
         latestHistory = [];
         latestLogs = [];
@@ -1389,15 +1986,35 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start_task', async (data) => {
-        const { prompt, clientId } = data;
+        const { prompt, clientId, missionMode } = data;
         if (!orchestrator) {
             socket.emit('nexus_log', { type: 'error', message: 'Nexus Orchestrator not initialized. Please refresh or start a new mission.' });
             return;
+        }
+        if (orchestrator.isWaitingForInput || orchestrator.pendingApproval || orchestrator.pendingRepair || jobQueue.some(job => job.status === 'awaiting_input' || job.status === 'paused')) {
+            try {
+                if (clientId) {
+                    const doc = await db.collection('client_configs').doc(clientId).get();
+                    const clientConfigs = doc.exists ? doc.data() : {};
+                    orchestrator.setClientContext(clientId, clientConfigs);
+                }
+                orchestrator.manualMissionMode = missionMode || null;
+                await orchestrator.resume(prompt);
+                updateJobFromMission();
+                emitMissionState();
+                saveSession();
+                processNextJob();
+                return;
+            } catch (error) {
+                socket.emit('nexus_log', { type: 'error', message: `Resume Error: ${error.message}` });
+                return;
+            }
         }
         const job = {
             id: `job_${Date.now()}`,
             prompt,
             clientId: clientId || null,
+            missionMode: missionMode || null,
             status: 'queued',
             createdAt: new Date().toISOString(),
             startedAt: null,
@@ -1414,7 +2031,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('user_input', async (data) => {
-        const { prompt, clientId } = data;
+        const { prompt, clientId, missionMode } = data;
         if (!orchestrator) {
             socket.emit('nexus_log', { type: 'error', message: 'Nexus Orchestrator not initialized.' });
             return;
@@ -1425,6 +2042,7 @@ io.on('connection', (socket) => {
                 const clientConfigs = doc.exists ? doc.data() : {};
                 orchestrator.setClientContext(clientId, clientConfigs);
             }
+            orchestrator.manualMissionMode = missionMode || null;
             await orchestrator.resume(prompt);
             updateJobFromMission();
             updateOutputsList();

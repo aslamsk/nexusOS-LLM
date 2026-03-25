@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/run-marketing-tests.js",
+    "verify:deploy": "node -c server.js && node -c index.js && node -c core/marketing.js && node -c core/marketingPrompts.js && node -c core/marketingTemplates.js && node -c tools/marketingUtils.js && npm.cmd test && cd frontend && npm.cmd run build -- --configLoader native"
   },
   "keywords": [],
   "author": "",

@@ -161,6 +161,37 @@ function buildMissionBrief({ workflowId, target, clientName, notes, budget, chan
     ].filter(Boolean).join('\n');
 }
 
+function buildAuditBundle({ target, clientName, notes, budget, channels, specialists = [] }) {
+    const workflow = normalizeWorkflow('audit');
+    const scores = specialists.map((specialist) => `- ${specialist.label}: score __/10 | biggest risk | fastest win`);
+    const channelLine = channels?.length ? `Channels in play: ${channels.join(', ')}.` : '';
+    return [
+        `MARKETING WORKFLOW: ${workflow.label}`,
+        `Objective: ${workflow.description}`,
+        target ? `Primary target: ${target}` : '',
+        clientName ? `Client: ${clientName}` : '',
+        channelLine,
+        budget ? `Working budget: ${budget}` : '',
+        notes ? `Client notes: ${notes}` : '',
+        '',
+        'SPECIALIST AUDIT SCORECARD',
+        ...scores,
+        '',
+        'Required final sections:',
+        '1. Executive summary',
+        '2. Content findings',
+        '3. Conversion findings',
+        '4. Competitive findings',
+        '5. Technical / SEO findings',
+        '6. Strategy findings',
+        '7. Top 5 priorities',
+        '8. 30-day action plan',
+        '9. Expected business impact',
+        '',
+        `Expected output artifact: ${workflow.output}`
+    ].filter(Boolean).join('\n');
+}
+
 module.exports = {
     getWorkflows() {
         return Object.values(WORKFLOWS);
@@ -169,5 +200,6 @@ module.exports = {
         return normalizeWorkflow(id);
     },
     detectWorkflowFromText,
-    buildMissionBrief
+    buildMissionBrief,
+    buildAuditBundle
 };
