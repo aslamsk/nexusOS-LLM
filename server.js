@@ -15,6 +15,8 @@ const MarketingPrompts = require('./core/marketingPrompts');
 const MarketingTemplates = require('./core/marketingTemplates');
 const UsageTracker = require('./core/usageTracker');
 const CommercialDocs = require('./core/commercialDocs');
+const SetupPlaybooks = require('./core/setupPlaybooks');
+const SetupDoctor = require('./core/setupDoctor');
 const MarketingUtilsTool = require('./tools/marketingUtils');
 const nodemailer = require('nodemailer');
 
@@ -63,6 +65,15 @@ function buildDiagnostic(requiredKeys, has) {
         ready: missingKeys.length === 0,
         missingKeys,
         configuredKeys: requiredKeys.filter((key) => has(key))
+    };
+}
+
+function buildAnyKeyDiagnostic(candidateKeys, has) {
+    const configuredKeys = candidateKeys.filter((key) => has(key));
+    return {
+        ready: configuredKeys.length > 0,
+        missingKeys: configuredKeys.length ? [] : candidateKeys,
+        configuredKeys
     };
 }
 
@@ -394,6 +405,7 @@ const CONFIG_KEY_LABELS = {
     GEMINI_API_KEY_2: 'Gemini API Key 2 (Backup)',
     GEMINI_API_KEY_3: 'Gemini API Key 3 (Backup)',
     BRAVE_SEARCH_API_KEY: 'Brave Search API Key (for Web Search)',
+    TAVILY_API_KEY: 'Tavily API Key (Search Fallback)',
     GMAIL_USER: 'Gmail Address (for Email Tool)',
     GMAIL_APP_PASSWORD: 'Gmail App Password (for Email Tool)',
     WHATSAPP_PHONE_ID: 'WhatsApp Phone ID (from Meta Developer Portal)',
@@ -516,13 +528,16 @@ app.get('/api/system-status', async (req, res) => {
             },
             {
                 id: 'search',
-                name: 'Web Search (Brave)',
+                name: 'Web Search',
                 icon: '🌐',
-                description: 'Live web search for up-to-date information.',
-                status: has('BRAVE_SEARCH_API_KEY') ? 'active' : 'missing',
-                keys: [{ key: 'BRAVE_SEARCH_API_KEY', label: 'Brave Search Key', isSet: has('BRAVE_SEARCH_API_KEY') }],
-                howToGet: 'Get a key from https://api.search.brave.com/',
-                addVia: 'Settings → Brave Search API Key'
+                description: 'Live web search with Brave primary and Tavily fallback support.',
+                status: (has('BRAVE_SEARCH_API_KEY') || has('TAVILY_API_KEY')) ? 'active' : 'missing',
+                keys: [
+                    { key: 'BRAVE_SEARCH_API_KEY', label: 'Brave Search Key', isSet: has('BRAVE_SEARCH_API_KEY') },
+                    { key: 'TAVILY_API_KEY', label: 'Tavily API Key', isSet: has('TAVILY_API_KEY') }
+                ],
+                howToGet: 'Get a key from Brave Search API or Tavily for search fallback coverage.',
+                addVia: 'Settings → Search, Ads, Billing'
             },
             {
                 id: 'openrouter',
@@ -636,7 +651,7 @@ app.get('/api/system-status', async (req, res) => {
 
         const diagnosticsById = {
             gemini_keys: buildDiagnostic(['GEMINI_API_KEY'], has),
-            search: buildDiagnostic(['BRAVE_SEARCH_API_KEY'], has),
+            search: buildAnyKeyDiagnostic(['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY'], has),
             email: buildDiagnostic(['GMAIL_USER', 'GMAIL_APP_PASSWORD'], has),
             whatsapp: buildDiagnostic(['META_ACCESS_TOKEN', 'WHATSAPP_PHONE_ID'], has),
             memory: { ready: !!db, missingKeys: db ? [] : ['firebase-service-account.json'], configuredKeys: db ? ['firestore'] : [] },
@@ -686,6 +701,33 @@ app.get('/api/system-status', async (req, res) => {
         }));
 
         res.json({ integrations: enrichedIntegrations });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/setup/playbooks', async (req, res) => {
+    try {
+        res.json({ playbooks: SetupPlaybooks.getAllPlaybooks() });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/setup/doctor', async (req, res) => {
+    try {
+        let firestoreData = {};
+        if (db) {
+            const doc = await db.collection('configs').doc('default').get();
+            firestoreData = doc.exists ? doc.data() : {};
+        }
+        const has = (key) => !!(firestoreData[key] || process.env[key]);
+        const report = SetupDoctor.buildSetupDoctor({
+            has,
+            firestoreReady: !!db,
+            prompt: req.query?.prompt || ''
+        });
+        res.json({ report });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1549,6 +1591,7 @@ const CLIENT_KEY_LABELS = {
     NVIDIA_NIM_API_KEY: 'NVIDIA NIM API Key',
     NVIDIA_MODEL: 'NVIDIA Model',
     BRAVE_SEARCH_API_KEY: 'Brave Search API Key',
+    TAVILY_API_KEY: 'Tavily API Key',
     META_ACCESS_TOKEN: 'Meta Access Token',
     META_AD_ACCOUNT_ID: 'Meta Ad Account ID',
     META_PAGE_ID: 'Meta Page ID',
@@ -1990,25 +2033,6 @@ io.on('connection', (socket) => {
         if (!orchestrator) {
             socket.emit('nexus_log', { type: 'error', message: 'Nexus Orchestrator not initialized. Please refresh or start a new mission.' });
             return;
-        }
-        if (orchestrator.isWaitingForInput || orchestrator.pendingApproval || orchestrator.pendingRepair || jobQueue.some(job => job.status === 'awaiting_input' || job.status === 'paused')) {
-            try {
-                if (clientId) {
-                    const doc = await db.collection('client_configs').doc(clientId).get();
-                    const clientConfigs = doc.exists ? doc.data() : {};
-                    orchestrator.setClientContext(clientId, clientConfigs);
-                }
-                orchestrator.manualMissionMode = missionMode || null;
-                await orchestrator.resume(prompt);
-                updateJobFromMission();
-                emitMissionState();
-                saveSession();
-                processNextJob();
-                return;
-            } catch (error) {
-                socket.emit('nexus_log', { type: 'error', message: `Resume Error: ${error.message}` });
-                return;
-            }
         }
         const job = {
             id: `job_${Date.now()}`,

@@ -9,6 +9,10 @@ function detectMissionMode(text, override = null) {
 
     const input = normalize(text);
 
+    if (/\b(open|browser|website|web page|portal|login|sign in|quiz|form|submit|fill|click|type|navigate|read questions?)\b/.test(input)) {
+        return 'plan';
+    }
+
     if (/\b(start|execute|run it|do it now|publish now|launch now|send now|go live)\b/.test(input)) {
         return 'execute';
     }

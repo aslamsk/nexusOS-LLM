@@ -1,3 +1,6 @@
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
 const puppeteer = require('puppeteer');
 
 /**
@@ -8,9 +11,14 @@ class BrowserTool {
     constructor() {
         this.browser = null;
         this.page = null;
+        this.stopRequested = false;
+        this.profileDir = path.join(os.tmpdir(), 'nexus-chrome-profile');
     }
 
     async init(isMobile = false, mobileDevice = 'ios') {
+        if (this.stopRequested) {
+            return;
+        }
         // Check if browser is disconnected
         if (this.browser && !this.browser.isConnected()) {
             console.log("[Browser] Detected disconnected browser, cleaning up...");
@@ -20,7 +28,9 @@ class BrowserTool {
 
         if (!this.browser) {
             const isProd = process.env.NODE_ENV === 'production' || process.env.K_SERVICE;
+            const headlessMode = process.env.BROWSER_HEADLESS === 'true' ? 'new' : false;
             console.log(`[Browser] Launching browser (prod=${isProd}, mobile=${isMobile})...`);
+            fs.mkdirSync(this.profileDir, { recursive: true });
             const commonArgs = [
                 '--ignore-certificate-errors',
                 '--ignore-urlfetcher-cert-requests',
@@ -33,11 +43,11 @@ class BrowserTool {
                 '--no-default-browser-check',     // Skip default browser prompt
                 '--disable-infobars',             // Hide "Chrome is being controlled" bar
                 '--disable-blink-features=AutomationControlled', // Bypass bot detection
-                '--user-data-dir=/tmp/nexus-chrome-profile'      // Isolated profile (no personal extensions)
+                `--user-data-dir=${this.profileDir}`             // Isolated profile (no personal extensions)
             ];
 
             this.browser = await puppeteer.launch({
-                headless: false,
+                headless: headlessMode,
                 ignoreHTTPSErrors: true,
                 args: isProd ? [
                     '--no-sandbox', 
@@ -77,11 +87,16 @@ class BrowserTool {
     }
 
     async close() {
+        this.stopRequested = true;
         if (this.browser) {
             await this.browser.close();
             this.browser = null;
             this.page = null;
         }
+    }
+
+    async stop() {
+        await this.close();
     }
 
     async _describePageState() {
@@ -104,13 +119,26 @@ class BrowserTool {
      * Dispatcher for browser actions requested by the LLM
      */
     async executeAction(args) {
-        await this.init(args.isMobile, args.mobileDevice);
+        this.stopRequested = false;
+        if (!args || typeof args !== 'object') {
+            return 'Error: browserAction requires an argument object.';
+        }
+
+        try {
+            await this.init(args.isMobile, args.mobileDevice);
+        } catch (error) {
+            return `Error: Failed to launch browser. ${error.message}`;
+        }
+
+        if (this.stopRequested || !this.page || this.page.isClosed()) {
+            return 'Error: Browser action cancelled because the Boss stopped the mission.';
+        }
 
         const rawAction = String(args.action || '').trim();
         const action = rawAction === 'navigate'
             ? 'open'
             : rawAction === 'waitForSelector'
-                ? 'extract'
+                ? 'waitForSelector'
                 : (!rawAction && args.url ? 'open' : rawAction);
         try {
             switch (action) {
@@ -140,8 +168,23 @@ class BrowserTool {
                 case 'type':
                     if (!args.selector || !args.text) return 'Error: action=type requires selector and text';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                    await this.page.focus(args.selector);
                     await this.page.type(args.selector, args.text);
                     return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, page: await this._describePageState() }, null, 2);
+
+                case 'clearAndType':
+                    if (!args.selector || !args.text) return 'Error: action=clearAndType requires selector and text';
+                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                    await this.page.click(args.selector, { clickCount: 3 });
+                    await this.page.keyboard.press('Backspace');
+                    await this.page.type(args.selector, args.text);
+                    return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, cleared: true, page: await this._describePageState() }, null, 2);
+
+                case 'focus':
+                    if (!args.selector) return 'Error: action=focus requires selector';
+                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                    await this.page.focus(args.selector);
+                    return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'keyPress':
                     if (!args.key) return 'Error: action=keyPress requires key (e.g., "Enter")';
@@ -188,11 +231,21 @@ class BrowserTool {
                         return JSON.stringify({ ok: false, action, timeout, idle: false, classification: 'timeout', page: await this._describePageState(), error: err.message }, null, 2);
                     }
 
+                case 'waitForSelector':
+                    if (!args.selector) return 'Error: action=waitForSelector requires selector';
+                    try {
+                        await this.page.waitForSelector(args.selector, { timeout: args.timeout || 10000 });
+                        return JSON.stringify({ ok: true, action, selector: args.selector, found: true, page: await this._describePageState() }, null, 2);
+                    } catch (err) {
+                        return JSON.stringify({ ok: false, action, selector: args.selector, found: false, classification: 'timeout', page: await this._describePageState(), error: err.message }, null, 2);
+                    }
+
                 case 'clickText':
                     if (!args.text) return 'Error: action=clickText requires text';
                     try {
                         // Use Puppeteer's built-in text selector which finds the deepest matching element
-                        const selector = `::-p-text(${args.text})`;
+                        const safeText = String(args.text).replace(/[\\()]/g, '\\$&');
+                        const selector = `::-p-text(${safeText})`;
                         await this.page.waitForSelector(selector, { timeout: 5000 });
                         // Click via evaluate to bypass strict visibility/overlay checks
                         await this.page.$eval(selector, el => el.click());
@@ -204,7 +257,7 @@ class BrowserTool {
                 case 'extract':
                     if (!args.selector) return 'Error: action=extract requires selector';
                     await this.page.waitForSelector(args.selector, { timeout: 5000 });
-                    const textContent = await this.page.$eval(args.selector, el => el.innerText);
+                    const textContent = await this.page.$eval(args.selector, el => el.innerText || el.textContent || '');
                     return JSON.stringify({ ok: true, action, selector: args.selector, text: textContent, page: await this._describePageState() }, null, 2);
 
                 case 'getMarkdown':

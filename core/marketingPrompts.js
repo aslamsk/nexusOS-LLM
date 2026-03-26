@@ -88,6 +88,44 @@ module.exports = {
             'Keep outputs client-ready, commercially useful, and specific enough for implementation.'
         ].filter(Boolean).join('\n');
     },
+    buildAdsExecutionContext(requestText = '') {
+        const text = String(requestText || '');
+        const lowered = text.toLowerCase();
+        const budgetMatch = text.match(/indicative working budget:\s*([^\n.]+)/i) || text.match(/\bbudget[:\s]*([^\n.]+)/i);
+        const budgetValue = String(budgetMatch?.[1] || '').trim();
+        const isZeroBudget = /\b0\b|zero|nil|none|no budget/.test(budgetValue.toLowerCase());
+        const wantsOrganic = /\borganic\b/.test(lowered);
+        const mentionsPaid = /\bpaid ads?\b|\bmeta ads\b/.test(lowered);
+        const prefersMetaOnly = /\bfacebook\b|\binstagram\b|\bmeta\b/.test(lowered) && !/\bgoogle ads\b|\blinkedin\b/.test(lowered);
+
+        const rules = [
+            '### ADS EXECUTION RULES',
+            'Use the user-stated channels, budget, and promotion type as hard constraints.',
+            'Do not invent budget, ROAS, ROI, CAC, or revenue projections unless the Boss explicitly asked for modeled paid-media forecasting.',
+            'Do not recommend Google Ads or LinkedIn execution when the brief restricts channels to Meta/Facebook/Instagram.'
+        ];
+
+        if (wantsOrganic || isZeroBudget) {
+            rules.push('This brief is organic-first. Build an ORGANIC META PROMOTION plan, not a paid ads media-buy plan.');
+            rules.push('Do not invent paid budget allocation, ad-set budgets, retargeting spend, or campaign spend tables.');
+            rules.push('Prioritize organic Facebook and Instagram deliverables: post angles, captions, reels hooks, carousel concepts, CTA, hashtag/tag guidance, and posting sequence.');
+            rules.push('If the user later says "promote" without a paid budget, interpret that as organic promotion unless they explicitly approve paid ads spend.');
+        }
+
+        if (prefersMetaOnly) {
+            rules.push('Stay focused on Meta surfaces only: Facebook Page and Instagram organic content.');
+        }
+
+        if (mentionsPaid && !wantsOrganic && !isZeroBudget) {
+            rules.push('If paid media is truly requested with budget, then include campaign structure, audience, creative direction, and approval-gated execution steps.');
+        }
+
+        if (budgetValue) {
+            rules.push(`Budget constraint from brief: ${budgetValue}.`);
+        }
+
+        return rules.join('\n');
+    },
     buildAuditBundleContext({ workflow, target, clientName, notes, budget, channels }) {
         const channelLine = channels?.length ? `Channels under review: ${channels.join(', ')}.` : '';
         const budgetLine = budget ? `Working budget reference: ${budget}.` : '';

@@ -9,6 +9,32 @@ const axios = require('axios');
 class LLMService {
     constructor() {
         this.modelName = 'gemini-2.5-flash';
+        this.stopRequested = false;
+        this.activeControllers = new Set();
+        this.planOpenRouterModels = [
+            'openai/gpt-oss-20b:free',
+            'openai/gpt-oss-120b:free',
+            'google/gemma-3-27b-it:free',
+            'google/gemma-3-12b-it:free'
+        ];
+    }
+
+    stop() {
+        this.stopRequested = true;
+        for (const controller of this.activeControllers) {
+            try {
+                controller.abort();
+            } catch (_) {}
+        }
+        this.activeControllers.clear();
+    }
+
+    resetStop() {
+        this.stopRequested = false;
+    }
+
+    getPlanOpenRouterModels() {
+        return [...this.planOpenRouterModels];
     }
 
     /**
@@ -81,27 +107,43 @@ class LLMService {
 
     async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute' }) {
         if (!apiKey || !model) return null;
+        if (this.stopRequested) {
+            return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: providerName, model };
+        }
 
-        const response = await axios.post(`${baseUrl}/chat/completions`, {
-            model,
-            messages: this._formatMessagesForOpenAI(messages),
-            tools: this.getToolDefinitions(mode).map((tool) => ({
-                type: 'function',
-                function: {
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.parameters
-                }
-            })),
-            tool_choice: 'auto',
-            temperature: 0.2
-        }, {
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                ...headers
-            }
-        });
+        const controller = new AbortController();
+        this.activeControllers.add(controller);
+
+        let response;
+        try {
+            response = await axios.post(`${baseUrl}/chat/completions`, {
+                model,
+                messages: this._formatMessagesForOpenAI(messages),
+                tools: this.getToolDefinitions(mode).map((tool) => ({
+                    type: 'function',
+                    function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.parameters
+                    }
+                })),
+                tool_choice: 'auto',
+                temperature: 0.2
+            }, {
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    ...headers
+                },
+                signal: controller.signal
+            });
+        } finally {
+            this.activeControllers.delete(controller);
+        }
+
+        if (this.stopRequested) {
+            return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: providerName, model };
+        }
 
         const choice = response.data?.choices?.[0]?.message || {};
         const toolCall = choice.tool_calls?.[0];
@@ -181,8 +223,8 @@ class LLMService {
                     properties: {
                         action: { 
                             type: "STRING", 
-                            enum: ["open", "click", "clickPixel", "clickText", "type", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle"], 
-                            description: "The action to perform. Use 'getMarkdown' for a hierarchical view of the page, 'extractActiveElements' for a list of interactive items with (x,y) coordinates, and 'clickPixel' to click by coordinates if CSS selectors fail." 
+                            enum: ["open", "click", "clickPixel", "clickText", "type", "clearAndType", "focus", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle", "waitForSelector"], 
+                            description: "The action to perform. Use only supported browser actions. Prefer 'open' for navigation, 'waitForSelector' to confirm page state, 'clearAndType' for login fields, 'getMarkdown' for a hierarchical page view, 'extractActiveElements' for interactive items with coordinates, and 'clickPixel' only if CSS selectors fail." 
                         },
                         url: { type: "STRING", description: "URL to open (for 'open')." },
                         selector: { type: "STRING", description: "CSS selector (for 'click', 'type', 'hover', 'scroll', 'extract')." },
@@ -629,6 +671,7 @@ class LLMService {
      */
     async generateResponse(messages, options = {}) {
         try {
+            this.resetStop();
             const mode = String(options.mode || 'execute').toLowerCase();
             const formattedContents = messages.map(msg => {
                 if (msg.role === 'system') {
@@ -666,17 +709,14 @@ class LLMService {
                 formattedContents.shift();
             }
 
+            const openRouterApiKey = await ConfigService.get('OPENROUTER_API_TOKEN');
+            const configuredOpenRouterModel = await ConfigService.get('OPENROUTER_MODEL') || 'openrouter/free';
+            const openRouterHeaders = {
+                'HTTP-Referer': 'https://nexus-os.local',
+                'X-Title': 'Nexus OS'
+            };
+
             const fallbackProviders = [
-                {
-                    name: 'OpenRouter',
-                    baseUrl: 'https://openrouter.ai/api/v1',
-                    apiKey: await ConfigService.get('OPENROUTER_API_TOKEN'),
-                    model: await ConfigService.get('OPENROUTER_MODEL') || 'openrouter/free',
-                    headers: {
-                        'HTTP-Referer': 'https://nexus-os.local',
-                        'X-Title': 'Nexus OS'
-                    }
-                },
                 {
                     name: 'Groq',
                     baseUrl: 'https://api.groq.com/openai/v1',
@@ -691,32 +731,64 @@ class LLMService {
                 }
             ];
 
+            const geminiProvider = {
+                name: 'Gemini',
+                baseUrl: null,
+                apiKey: null,
+                model: this.modelName
+            };
+
             const orderedProviders = mode === 'execute'
-                ? fallbackProviders
-                : [...fallbackProviders.filter((provider) => provider.apiKey), {
-                    name: 'Gemini',
-                    baseUrl: null,
-                    apiKey: null,
-                    model: this.modelName
-                }];
+                ? [
+                    {
+                        name: 'OpenRouter',
+                        baseUrl: 'https://openrouter.ai/api/v1',
+                        apiKey: openRouterApiKey,
+                        model: configuredOpenRouterModel,
+                        headers: openRouterHeaders
+                    },
+                    ...fallbackProviders
+                ]
+                : [
+                    {
+                        name: 'OpenRouter',
+                        baseUrl: 'https://openrouter.ai/api/v1',
+                        apiKey: openRouterApiKey,
+                        model: this.planOpenRouterModels[0],
+                        modelCandidates: [...this.planOpenRouterModels, configuredOpenRouterModel].filter((value, index, array) => value && array.indexOf(value) === index),
+                        headers: openRouterHeaders
+                    },
+                    geminiProvider,
+                    ...fallbackProviders
+                ];
 
             for (const provider of orderedProviders) {
                 if (provider.name === 'Gemini') break;
                 if (!provider.apiKey) continue;
-                try {
-                    console.log(`[LLM] Falling back to ${provider.name} using model ${provider.model}...`);
-                    const fallbackResponse = await this._generateWithOpenAICompatible({
-                        providerName: provider.name,
-                        baseUrl: provider.baseUrl,
-                        apiKey: provider.apiKey,
-                        model: provider.model,
-                        headers: provider.headers,
-                        messages,
-                        mode
-                    });
-                    if (fallbackResponse) return fallbackResponse;
-                } catch (error) {
-                    console.error(`[LLM ${provider.name} Fallback Error]`, error.response?.data || error.message);
+
+                const candidateModels = Array.isArray(provider.modelCandidates) && provider.modelCandidates.length
+                    ? provider.modelCandidates
+                    : [provider.model];
+
+                for (const candidateModel of candidateModels) {
+                    try {
+                        console.log(`[LLM] Falling back to ${provider.name} using model ${candidateModel}...`);
+                        const fallbackResponse = await this._generateWithOpenAICompatible({
+                            providerName: provider.name,
+                            baseUrl: provider.baseUrl,
+                            apiKey: provider.apiKey,
+                            model: candidateModel,
+                            headers: provider.headers,
+                            messages,
+                            mode
+                        });
+                        if (fallbackResponse) return fallbackResponse;
+                    } catch (error) {
+                        if (axios.isCancel?.(error) || error.code === 'ERR_CANCELED') {
+                            return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: provider.name, model: candidateModel };
+                        }
+                        console.error(`[LLM ${provider.name} Fallback Error]`, error.response?.data || error.message);
+                    }
                 }
             }
 
@@ -746,6 +818,10 @@ class LLMService {
                         }
                     });
 
+                    if (this.stopRequested) {
+                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: this.modelName };
+                    }
+
                     const functionCall = response.functionCalls?.[0];
                     let textContent = '';
                     try {
@@ -763,6 +839,9 @@ class LLMService {
                         model: this.modelName
                     };
                 } catch (error) {
+                    if (this.stopRequested) {
+                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: this.modelName };
+                    }
                     const isRetryable = error.message.includes('429') ||
                         error.message.includes('503') ||
                         error.message.includes('UNAVAILABLE') ||

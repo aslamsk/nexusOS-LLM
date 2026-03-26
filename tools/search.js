@@ -3,7 +3,7 @@ const ConfigService = require('../core/config');
 
 /**
  * Nexus OS: Web Search Tool
- * Uses Brave Search API with fallback to anonymous DDG scraping.
+ * Uses Tavily first, then Brave Search API, with fallback to anonymous DDG scraping.
  */
 class SearchTool {
     /**
@@ -12,6 +12,15 @@ class SearchTool {
     async search(query) {
         console.log(`[Search] Query: "${query}"`);
         
+        try {
+            const tavilyKey = await ConfigService.get('TAVILY_API_KEY');
+            if (tavilyKey) {
+                return await this._searchTavily(query, tavilyKey);
+            }
+        } catch (e) {
+            console.warn('[Search] Tavily search failed, falling back...', e.message);
+        }
+
         try {
             const braveKey = await ConfigService.get('BRAVE_SEARCH_API_KEY');
             if (braveKey) {
@@ -46,6 +55,32 @@ class SearchTool {
     }
 
     /**
+     * Tavily Search API (Good fallback / free-tier friendly)
+     */
+    async _searchTavily(query, apiKey) {
+        const res = await axios.post('https://api.tavily.com/search', {
+            api_key: apiKey,
+            query,
+            max_results: 8,
+            search_depth: 'basic',
+            include_answer: false,
+            include_raw_content: false
+        }, {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!Array.isArray(res.data?.results) || res.data.results.length === 0) return "No results found.";
+
+        return res.data.results.slice(0, 8).map(r => ({
+            title: r.title,
+            url: r.url,
+            snippet: r.content
+        }));
+    }
+
+    /**
      * DuckDuckGo Scraper (Zero-Config Fallback)
      */
     async _searchDDG(query) {
@@ -60,7 +95,7 @@ class SearchTool {
             
             // Note: In a real prod environment, use a proper scraper or SerpAPI.
             // This is a placeholder for the logic.
-            return `SEARCH_FALLBACK: No Brave Search API key found. I recommend adding one in Settings (BRAVE_SEARCH_API_KEY) for best results. Currently relying on browser sub-agent for search instead.`;
+            return `SEARCH_FALLBACK: No Brave or Tavily search API key found. I recommend adding BRAVE_SEARCH_API_KEY or TAVILY_API_KEY in Settings for better live search. Current anonymous fallback is limited.`;
         } catch (e) {
             return `Error performing fallback search: ${e.message}`;
         }

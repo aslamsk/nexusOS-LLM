@@ -29,6 +29,7 @@ const MissionMode = require('./core/missionMode');
 const AgencyQuotePlanner = require('./core/agencyQuotePlanner');
 const CommercialDocs = require('./core/commercialDocs');
 const { db } = require('./core/firebase');
+const ConfigService = require('./core/config');
 
 /**
  * Nexus OS Orchestrator
@@ -95,6 +96,8 @@ class NexusOrchestrator {
         this.currentSessionId = null;
         this.currentMissionMode = 'discuss';
         this.manualMissionMode = null;
+        this.currentOrganicMetaDraft = null;
+        this.currentWorkflowState = null;
     }
 
     /**
@@ -126,6 +129,10 @@ class NexusOrchestrator {
         this.isWaitingForInput = false;
         this._beginRun(userRequest);
 
+        if (this._applyWorkflowIntent(userRequest)) {
+            this._beginRun(userRequest);
+        }
+
         // CRITICAL FIX: Reset context for a fresh mission to prevent "stale failure" baggage.
         // This ensures the AI starts with a clean slate (System Prompt + New Request).
         this.context = [{ role: 'system', content: this.systemPrompt }];
@@ -139,8 +146,9 @@ class NexusOrchestrator {
         this.currentMarketingWorkflow = detectedMarketingWorkflow ? detectedMarketingWorkflow.id : null;
         let memoryPrompt = "";
         memoryPrompt += MissionMode.buildModePrompt(this.currentMissionMode);
+        memoryPrompt += this._buildExecutionProtocol(userRequest);
         if (memories.length > 0) {
-            memoryPrompt = `\n\n### LONG-TERM MEMORY RECALL:\n${memories.map(m => `- ${m}`).join('\n')}\n\n`;
+            memoryPrompt += `### LONG-TERM MEMORY RECALL:\n${memories.map(m => `- ${m}`).join('\n')}\n\n`;
         }
         if (recoveryPatterns.length > 0) {
             memoryPrompt += `### RECOVERY PATTERN RECALL:\n${recoveryPatterns.map((p, idx) => `${idx + 1}. Tool: ${p.tool} | Failure: ${p.classification} | Successful response: ${p.resolution || p.playbook || p.summary}`).join('\n')}\n\n`;
@@ -148,6 +156,9 @@ class NexusOrchestrator {
         if (detectedMarketingWorkflow) {
             const packId = ['audit', 'copy', 'ads', 'report'].includes(detectedMarketingWorkflow.id) ? detectedMarketingWorkflow.id : 'report';
             memoryPrompt += `${MarketingPrompts.buildPromptContext(packId, detectedMarketingWorkflow)}\n\n`;
+            if (detectedMarketingWorkflow.id === 'ads') {
+                memoryPrompt += `${MarketingPrompts.buildAdsExecutionContext(userRequest)}\n\n`;
+            }
             memoryPrompt += `### MARKETING SPECIALISTS\n${detectedMarketingWorkflow.specialists.map((item) => `- ${item}`).join('\n')}\n\n`;
             if (detectedMarketingWorkflow.id === 'audit') {
                 memoryPrompt += `${MarketingPrompts.buildAuditBundleContext({
@@ -238,6 +249,13 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         this.isStopped = false;
         this.isWaitingForInput = false;
         this.onUpdate({ type: 'start', message: `Resuming task with user input...` });
+        this._applyWorkflowIntent(userInput);
+
+        const organicPublishResult = await this._resumeOrganicMetaPublish(userInput);
+        if (organicPublishResult) {
+            this.isRunning = false;
+            return;
+        }
         
         const lastMsg = this.context[this.context.length - 1];
         if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCall && lastMsg.toolCall.name === 'askUserForInput') {
@@ -256,10 +274,208 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         }
     }
 
+    _extractOrganicMetaDraft(text = '') {
+        const value = String(text || '');
+        const hasPromotionContext = /\bfacebook\b|\binstagram\b|\bmeta\b/i.test(value);
+        const title = value.match(/\*\*Title:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
+        const description = value.match(/\*\*Description:\*\*\s*([\s\S]*?)\n\s*\*\*Call to Action:\*\*/i)?.[1]?.trim() || '';
+        const ctaLine = value.match(/\*\*Call to Action:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
+        const link = value.match(/\*\*Link:\*\*\s*(https?:\/\/[^\s]+)/i)?.[1]?.trim() || '';
+        const image = value.match(/\*\*Image:\*\*\s*(https?:\/\/[^\s]+)/i)?.[1]?.trim() || '';
+        const tagsBlock = value.match(/\*\*Tags\/Hashtags:\*\*\s*([\s\S]*?)(?:\n\[Download|\nBoss|\nNexus|$)/i)?.[1]?.trim() || '';
+        const message = description
+            ? `${title ? `${title}\n\n` : ''}${description}${tagsBlock ? `\n\n${tagsBlock}` : ''}`.trim()
+            : '';
+
+        if (!hasPromotionContext || !message || !link) return null;
+        return {
+            channel: 'meta_organic',
+            title,
+            description,
+            message,
+            cta: /shop now/i.test(ctaLine) ? 'SHOP_NOW' : 'LEARN_MORE',
+            ctaLabel: ctaLine || 'SHOP NOW',
+            link,
+            imagePath: image || null,
+            tags: tagsBlock || '',
+            preparedAt: new Date().toISOString()
+        };
+    }
+
+    _setWorkflowState(nextState = null) {
+        this.currentWorkflowState = nextState ? { ...nextState, updatedAt: new Date().toISOString() } : null;
+    }
+
+    _applyWorkflowIntent(text = '') {
+        const value = String(text || '').toLowerCase();
+        if (!value.trim()) return false;
+
+        const wantsQuote = /\b(quote|quotation|invoice|pricing|estimate|proposal|quote plan)\b/.test(value);
+        const wantsOrganicPromote = /\b(promote|publish|post)\b/.test(value) && /\b(organic|facebook|instagram|meta)\b/.test(value);
+
+        if (wantsQuote) {
+            this._setWorkflowState({
+                domain: 'marketing',
+                channel: /\bmeta|facebook|instagram\b/.test(value) ? 'meta' : 'general',
+                mode: 'quote',
+                stage: 'planning'
+            });
+            return true;
+        }
+
+        if (wantsOrganicPromote || this._isOrganicPublishIntent(text)) {
+            this._setWorkflowState({
+                domain: 'marketing',
+                channel: 'meta',
+                mode: 'organic_publish',
+                stage: this.currentOrganicMetaDraft ? 'draft_ready' : 'drafting'
+            });
+            return true;
+        }
+
+        return false;
+    }
+
+    _isOrganicPublishIntent(text = '') {
+        const value = String(text || '').trim().toLowerCase();
+        if (!value) return false;
+        if (['continue', 'proceed', 'publish', 'promote it', 'post it', 'launch it', 'go live'].includes(value)) return true;
+        return /\b(promote|publish|post|go live|launch)\b/.test(value) && /\bfacebook|instagram|meta\b/.test(value);
+    }
+
+    async _resumeOrganicMetaPublish(userInput) {
+        if (!this.currentOrganicMetaDraft || !this._isOrganicPublishIntent(userInput)) return false;
+
+        const pageId = await ConfigService.get('META_PAGE_ID');
+        const args = {
+            action: 'publishOrganicPost',
+            pageId: pageId || null,
+            message: this.currentOrganicMetaDraft.message,
+            link: this.currentOrganicMetaDraft.link,
+            imagePath: this.currentOrganicMetaDraft.imagePath || this.lastUploadedFile || null,
+            cta: this.currentOrganicMetaDraft.cta,
+            boss_approved: false
+        };
+
+        const missingPublishFields = this._validateMetaOrganicArgs(args);
+        this.context.push({ role: 'user', content: userInput });
+        if (missingPublishFields) {
+            this.onUpdate({ type: 'input_requested', message: missingPublishFields });
+            this.isWaitingForInput = true;
+            return true;
+        }
+
+        const preview = [
+            `Prepared organic Meta publish payload detected from the previous draft.`,
+            `Title: ${this.currentOrganicMetaDraft.title || 'Untitled post'}`,
+            `CTA: ${this.currentOrganicMetaDraft.ctaLabel || 'SHOP NOW'}`,
+            `Link: ${this.currentOrganicMetaDraft.link}`,
+            `Image: ${this.currentOrganicMetaDraft.imagePath || 'none'}`
+        ].join('\n');
+
+        this.pendingApproval = {
+            requestedAt: new Date().toISOString(),
+            toolCall: { name: 'metaAds', args },
+            reason: 'This action will publish the prepared organic Meta post to Facebook/Instagram.',
+            preview,
+            details: {
+                type: 'meta_organic_post',
+                pageId: args.pageId,
+                messagePreview: String(args.message || '').slice(0, 400),
+                link: args.link
+            }
+        };
+        this.onUpdate({
+            type: 'approval_requested',
+            message: `Prepared organic Meta post is ready. Reply YES to publish it now or NO to cancel.\n\n${preview}`
+        });
+        this.isWaitingForInput = true;
+        return true;
+    }
+
+    _shouldAutoRequestOrganicApproval(userRequest = '', responseText = '') {
+        const request = String(userRequest || '').toLowerCase();
+        const response = String(responseText || '').toLowerCase();
+        const wantsOrganicPublish =
+            /\borganic\b/.test(request) &&
+            /\b(meta|facebook|instagram)\b/.test(request) &&
+            /\b(publish|post|promote)\b/.test(request);
+        const askedForApproval =
+            /\bask for approval\b/.test(request) ||
+            /\bafter i reply yes\b/.test(request) ||
+            /\bafter i say yes\b/.test(request);
+        const responseRequestsApproval =
+            /\bapprove\b/.test(response) &&
+            /\bpublish\b/.test(response);
+        return wantsOrganicPublish && (askedForApproval || responseRequestsApproval);
+    }
+
+    async _queueOrganicDraftApprovalFromDraft() {
+        if (!this.currentOrganicMetaDraft) return false;
+
+        const pageId = await ConfigService.get('META_PAGE_ID');
+        const args = {
+            action: 'publishOrganicPost',
+            pageId: pageId || null,
+            message: this.currentOrganicMetaDraft.message,
+            link: this.currentOrganicMetaDraft.link,
+            imagePath: this.currentOrganicMetaDraft.imagePath || this.lastUploadedFile || null,
+            cta: this.currentOrganicMetaDraft.cta,
+            boss_approved: false
+        };
+
+        const missingPublishFields = this._validateMetaOrganicArgs(args);
+        if (missingPublishFields) {
+            this.onUpdate({ type: 'input_requested', message: missingPublishFields });
+            this.isWaitingForInput = true;
+            return true;
+        }
+
+        const preview = [
+            `Prepared organic Meta publish payload detected from the previous draft.`,
+            `Title: ${this.currentOrganicMetaDraft.title || 'Untitled post'}`,
+            `CTA: ${this.currentOrganicMetaDraft.ctaLabel || 'SHOP NOW'}`,
+            `Link: ${this.currentOrganicMetaDraft.link}`,
+            `Image: ${this.currentOrganicMetaDraft.imagePath || 'none'}`
+        ].join('\n');
+
+        this.pendingApproval = {
+            requestedAt: new Date().toISOString(),
+            toolCall: { name: 'metaAds', args },
+            reason: 'This action will publish the prepared organic Meta post to Facebook/Instagram.',
+            preview,
+            details: {
+                type: 'meta_organic_post',
+                pageId: args.pageId,
+                messagePreview: String(args.message || '').slice(0, 400),
+                link: args.link
+            }
+        };
+        this.onUpdate({
+            type: 'approval_requested',
+            message: `Prepared organic Meta post is ready. Reply YES to publish it now or NO to cancel.\n\n${preview}`
+        });
+        this.isWaitingForInput = true;
+        this._setWorkflowState({
+            domain: 'marketing',
+            channel: 'meta',
+            mode: 'organic_publish',
+            stage: 'awaiting_approval'
+        });
+        return true;
+    }
+
     stop() {
         this.isStopped = true;
         this.isRunning = false;
         this.isWaitingForInput = false;
+        this.pendingApproval = null;
+        this.pendingRepair = null;
+        this.pendingRequirement = null;
+        this.llmService?.stop?.();
+        Promise.resolve()
+            .then(() => BrowserTool.stop?.())
+            .catch((error) => console.warn(`[Orchestrator] Browser stop failed: ${error.message}`));
         this._finishRun('stopped');
         this.onUpdate({ type: 'error', message: 'Mission forcefully terminated by the Boss.' });
     }
@@ -309,8 +525,55 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     _detectCommercialQuoteRequest(text) {
         const value = String(text || '').toLowerCase();
-        return /\b(quote|quotation|commercial quote|invoice)\b/.test(value) &&
-            /\b(meta ads?|google ads?|linkedin ads?|banner|creative|month|weeks?)\b/.test(value);
+        const isOrganicPublishRequest =
+            /\b(publish|post|promote|organic)\b/.test(value) &&
+            /\b(meta|facebook|instagram)\b/.test(value);
+        if (isOrganicPublishRequest) return false;
+
+        const hasCommercialIntent = /\b(quote|quotation|commercial quote|invoice|pricing|estimate|cost breakdown|proposal)\b/.test(value);
+        const hasScopedWork = /\b(meta ads?|google ads?|linkedin ads?|banner|creative|month|weeks?|management|deliverables?)\b/.test(value);
+        return hasCommercialIntent && hasScopedWork;
+    }
+
+    _buildExecutionProtocol(userRequest) {
+        const value = String(userRequest || '').toLowerCase();
+        const parts = [
+            '### NEXUS EXECUTION PROTOCOL',
+            '- First understand the Boss objective, then identify the exact missing details.',
+            '- If required details are missing, ask only for the exact missing fields and wait.',
+            '- Before taking meaningful action, produce a short numbered plan that matches the available tools.',
+            '- Do not invent tool capabilities. Use only the exact supported tool names and action names.',
+            '- Prefer deterministic tool use over generic chat explanations when a supported tool exists.'
+        ];
+
+        if (/\b(browser|open|login|sign in|signup|dashboard|website|portal|google ai studio|setup|configure|apikey|api key|console)\b/.test(value)) {
+            parts.push('### BROWSER ACTION RULES');
+            parts.push('- In PLAN mode for browser work, first analyze the live page state before attempting form entry or clicks.');
+            parts.push('- Preferred browser sequence: `open` -> `waitForNetworkIdle` or `waitForSelector` -> `getMarkdown` -> `extractActiveElements` -> choose target -> interact.');
+            parts.push('- Supported browser navigation action is `open`, not `navigate`.');
+            parts.push('- Supported field actions are `type`, `clearAndType`, `focus`, `click`, `clickText`, `keyPress`, `waitForSelector`, `waitForNetworkIdle`, `extract`, `getMarkdown`, and `extractActiveElements`.');
+            parts.push('- For login/setup flows, ask the Boss for exact missing fields like email, password, OTP, account choice, or button confirmation instead of guessing.');
+            parts.push('- Use `waitForSelector` or `waitForNetworkIdle` to confirm page state before the next step.');
+            parts.push('- If selector targeting is unclear, use `extractActiveElements` or `getMarkdown` before proceeding.');
+            parts.push('- If a browser interaction fails, immediately re-scan with `getMarkdown` and `extractActiveElements`, then retry using the refreshed page state instead of asking the Boss too early.');
+        }
+
+        if (/\bquiz\b|\bquestion\b|\bsubmit\b/.test(value)) {
+            parts.push('### QUIZ / FORM WORK RULES');
+            parts.push('- If the Boss already provided form values like name, mobile, city, URL, or submit instruction, use them directly.');
+            parts.push('- After the quiz opens, read the visible questions and options from the page with `getMarkdown` and `extractActiveElements` before answering.');
+            parts.push('- Do not ask the Boss to provide quiz questions or answers if they are visible on the page.');
+            parts.push('- Work through the quiz question by question, choose the best answer from the page, and submit only after all questions are handled.');
+            parts.push('- If answer targets are unclear, scan again, scroll if needed, and retry with visible text or coordinates before pausing.');
+        }
+
+        if (this._detectCommercialQuoteRequest(userRequest)) {
+            parts.push('### COMMERCIAL WORK RULES');
+            parts.push('- For quote/invoice requests, prefer direct commercial planner tools instead of search or browser research.');
+            parts.push('- Treat ad spend as passthrough unless the Boss explicitly wants it included in markup.');
+        }
+
+        return `${parts.join('\n')}\n\n`;
     }
 
     _extractCommercialQuoteDefaults(text) {
@@ -495,7 +758,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         if (name === 'sendEmail' || name === 'readEmail') return 'Execution engine: Gmail SMTP/IMAP.';
         if (name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') return 'Execution engine: WhatsApp Cloud API.';
         if (name === 'browserAction') return 'Execution engine: Browser sub-agent (Puppeteer).';
-        if (name === 'searchWeb') return 'Execution engine: Brave Search API.';
+        if (name === 'searchWeb') return 'Execution engine: Tavily Search API (primary) with Brave fallback.';
         if (name === 'buildAgencyQuotePlan' || name === 'createAgencyQuoteArtifacts') return 'Execution engine: Nexus OS commercial quote planner with agency pricing and document generation.';
 
         return null;
@@ -517,6 +780,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             if (quotaMode === 'HIGH') delay = 1000;
             
             await new Promise(r => setTimeout(r, delay));
+            if (this.isStopped) {
+                this.isStopped = false;
+                break;
+            }
 
             // Inject stateful tracking context and Dynamic Tool Rules
             let stateContext = "";
@@ -545,6 +812,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             // Ask LLM what to do next
             if (this.currentRun) this.currentRun.llmCalls += 1;
             const response = await this.llmService.generateResponse(this.context, { mode: this.currentMissionMode });
+            if (this.isStopped) {
+                this.isStopped = false;
+                break;
+            }
             if (this.currentRun) {
                 const previousProvider = this.currentRun.lastLlmProvider;
                 if (response.provider) this.currentRun.lastLlmProvider = response.provider;
@@ -586,15 +857,41 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             }
 
             if (response.text) {
+                const organicDraft = this._extractOrganicMetaDraft(response.text);
+                if (organicDraft) {
+                    this.currentOrganicMetaDraft = organicDraft;
+                    this._setWorkflowState({
+                        domain: 'marketing',
+                        channel: 'meta',
+                        mode: 'organic_publish',
+                        stage: 'draft_ready'
+                    });
+                    this._recordAudit('organic_meta_draft_prepared', {
+                        link: organicDraft.link,
+                        cta: organicDraft.cta,
+                        title: organicDraft.title
+                    });
+                }
                 if (response.text.startsWith('MISSION BREACH:')) {
                     this.onUpdate({ type: 'error', message: response.text });
                 } else {
                     this.onUpdate({ type: 'thought', message: response.text });
                 }
                 this.context.push({ role: 'assistant', content: response.text });
+
+                if (organicDraft && this._shouldAutoRequestOrganicApproval(originalRequest || this.context.find(m => m.role === 'user')?.content || '', response.text)) {
+                    if (await this._queueOrganicDraftApprovalFromDraft()) {
+                        this._finishRun('paused');
+                        return;
+                    }
+                }
             }
 
             if (response.toolCall) {
+                if (this.isStopped) {
+                    this.isStopped = false;
+                    break;
+                }
                 this.onUpdate({
                     type: 'action',
                     name: response.toolCall.name,
@@ -621,6 +918,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
                 // Execute the tool
                 let result = await this.dispatchTool(response.toolCall);
+                if (this.isStopped) {
+                    this.isStopped = false;
+                    break;
+                }
                 let resultString = this._formatToolResult(result);
 
                 // AUTO-RECOVERY: If a browser interaction fails, automatically scan for elements
@@ -686,9 +987,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
         }
 
-        // Conditionally close browser
+        // Close browser after finished missions, or when explicitly requested.
         const requestToCheck = originalRequest || (this.context.find(m => m.role === 'user')?.content || "");
-        const shouldClose = /auto[- ]?close(d)?/i.test(requestToCheck);
+        const usedBrowser = Boolean(this.currentRun?.toolsUsed?.browserAction);
+        const shouldClose = !this.isWaitingForInput && (usedBrowser || /auto[- ]?close(d)?/i.test(requestToCheck));
         if (shouldClose) {
             this.onUpdate({ type: 'step', message: 'Auto-closing browser as requested...' });
             await BrowserTool.close();
@@ -699,8 +1001,138 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         return this._dispatchTool(toolCall, {});
     }
 
+    _normalizeToolCall(toolCall = {}) {
+        const browserActionAliases = new Set([
+            'open',
+            'click',
+            'clickPixel',
+            'clickText',
+            'type',
+            'clearAndType',
+            'focus',
+            'keyPress',
+            'hover',
+            'scroll',
+            'extract',
+            'extractActiveElements',
+            'getMarkdown',
+            'screenshot',
+            'waitForNetworkIdle',
+            'waitForSelector'
+        ]);
+
+        if (browserActionAliases.has(toolCall.name)) {
+            return {
+                name: 'browserAction',
+                args: {
+                    ...(toolCall.args || {}),
+                    action: toolCall.name
+                }
+            };
+        }
+
+        if (toolCall.name === 'browserAction') {
+            return {
+                ...toolCall,
+                args: { ...(toolCall.args || {}) }
+            };
+        }
+
+        if (toolCall.name === 'metaAds') {
+            const normalizedArgs = { ...(toolCall.args || {}) };
+            if (typeof normalizedArgs.body === 'string' && normalizedArgs.body.trim()) {
+                try {
+                    const parsedBody = JSON.parse(normalizedArgs.body);
+                    if (parsedBody && typeof parsedBody === 'object') {
+                        normalizedArgs.message = normalizedArgs.message || parsedBody.message || '';
+                        normalizedArgs.link = normalizedArgs.link || parsedBody?.call_to_action?.link || parsedBody.link || '';
+                        normalizedArgs.imagePath = normalizedArgs.imagePath || parsedBody.media_url || parsedBody.imagePath || '';
+                        normalizedArgs.cta = normalizedArgs.cta || parsedBody?.call_to_action?.type || '';
+                        normalizedArgs.title = normalizedArgs.title || parsedBody.title || '';
+                        normalizedArgs.pageId = this._isBlankValue(normalizedArgs.pageId) ? (parsedBody.pageId || '') : normalizedArgs.pageId;
+                    }
+                } catch (_) {}
+            }
+            return {
+                ...toolCall,
+                args: normalizedArgs
+            };
+        }
+
+        return toolCall;
+    }
+
+    _isBlankValue(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return !normalized || ['null', 'undefined', 'none', 'n/a', 'na'].includes(normalized);
+    }
+
+    _validateMetaOrganicArgs(args = {}) {
+        const action = String(args.action || '');
+        if (!['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'].includes(action)) {
+            return null;
+        }
+
+        const missing = [];
+        const pageIdMissing = this._isBlankValue(args.pageId);
+        if (pageIdMissing) missing.push('pageId');
+
+        if (action === 'publishOrganicPost' || action === 'publishOrganicPhoto') {
+            const messageMissing = this._isBlankValue(args.message);
+            const imagePathMissing = this._isBlankValue(args.imagePath) && this._isBlankValue(this.lastUploadedFile);
+            const linkMissing = this._isBlankValue(args.link);
+            if (messageMissing) missing.push('message');
+            if (imagePathMissing && linkMissing) missing.push('imagePath or link');
+        }
+
+        if (action === 'publishOrganicPhoto' && this._isBlankValue(args.imagePath) && this._isBlankValue(this.lastUploadedFile)) {
+            if (!missing.includes('imagePath')) missing.push('imagePath');
+        }
+
+        if (action === 'publishOrganicVideo' || action === 'publishOrganicReel') {
+            if (this._isBlankValue(args.videoPath)) missing.push('videoPath');
+            if (action === 'publishOrganicVideo' && this._isBlankValue(args.title)) missing.push('title');
+            if (this._isBlankValue(args.description)) missing.push('description');
+        }
+
+        if (!missing.length) return null;
+        return `Organic Meta publish is missing required fields: ${missing.join(', ')}. Prepare the real post payload first, then ask for Boss approval.`;
+    }
+
+    _isMetaOrganicPublishAction(toolCall = {}) {
+        return toolCall?.name === 'metaAds' &&
+            ['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'].includes(String(toolCall?.args?.action || ''));
+    }
+
+    _isSuccessfulMetaPublishResult(result) {
+        if (!result || typeof result !== 'object') return false;
+        if (result.error) return false;
+        return Boolean(result.id || result.post_id || result.success === true);
+    }
+
+    _isMetaAuthError(result) {
+        if (!result || typeof result !== 'object') return false;
+        const code = Number(result?.details?.code || 0);
+        const subcode = Number(result?.details?.error_subcode || 0);
+        const message = String(result?.error || result?.details?.message || '').toLowerCase();
+        return code === 190 || subcode === 463 || message.includes('access token') || message.includes('oauth');
+    }
+
+    _formatMetaPublishSuccess(result, draft = null) {
+        const postId = result?.id || result?.post_id || 'unknown';
+        const lines = [
+            'Organic Meta post published successfully.',
+            `Post ID: ${postId}`,
+            draft?.title ? `Title: ${draft.title}` : '',
+            draft?.ctaLabel ? `CTA: ${draft.ctaLabel}` : '',
+            draft?.link ? `Link: ${draft.link}` : ''
+        ].filter(Boolean);
+        return lines.join('\n');
+    }
+
     async _dispatchTool(toolCall, options = {}) {
-        const { name, args } = toolCall;
+        const normalizedToolCall = this._normalizeToolCall(toolCall);
+        const { name, args } = normalizedToolCall;
         if (this.currentRun) {
             this.currentRun.toolCalls += 1;
             this.currentRun.lastTool = name;
@@ -710,10 +1142,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             const executionOnlyTools = new Set(['generate_image', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia']);
             const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']);
             if (!options.skipGovernance && this.currentMissionMode !== 'execute' && executionOnlyTools.has(name)) {
-                const engineHint = await this._describeExecutionEngine(toolCall);
+                const engineHint = await this._describeExecutionEngine(normalizedToolCall);
                 this.pendingApproval = {
                     requestedAt: new Date().toISOString(),
-                    toolCall,
+                    toolCall: normalizedToolCall,
                     reason: `Plan is ready. Nexus wants to move from ${this.currentMissionMode.toUpperCase()} to EXECUTE before using ${name}.`,
                     preview: `Approve EXECUTE mode to continue with ${name}.`,
                     details: {
@@ -743,7 +1175,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                         currentMode: this.currentMissionMode,
                         tool: name,
                         estimatedTools: [name],
-                        likelyEngine: await this._describeExecutionEngine(toolCall),
+                        likelyEngine: await this._describeExecutionEngine(normalizedToolCall),
                         estimatedCostBand: 'low'
                     }
                 };
@@ -754,11 +1186,15 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: Nexus is ready to move into PLAN mode for ${name}.`;
             }
-            const governance = GovernanceService.evaluate(toolCall);
+            const metaOrganicValidation = name === 'metaAds' ? this._validateMetaOrganicArgs(args) : null;
+            if (metaOrganicValidation) {
+                return `Error: ${metaOrganicValidation}`;
+            }
+            const governance = GovernanceService.evaluate(normalizedToolCall);
             if (!options.skipGovernance && governance.requiresApproval && args?.boss_approved !== true) {
                 this.pendingApproval = {
                     requestedAt: new Date().toISOString(),
-                    toolCall,
+                    toolCall: normalizedToolCall,
                     reason: governance.reason,
                     preview: governance.preview,
                     details: governance.details || null
@@ -790,12 +1226,16 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 case 'multiReplaceFileContent':
                     return await this.tools.multiReplaceFileContent(args.absolutePath, args.chunks);
                 case 'runCommand': return await this.tools.runCommand(args.command, args.cwd);
-                case 'browserAction': 
-                    const browserResult = await this.tools.browserAction(args);
+                case 'browserAction': {
+                    const normalizedBrowserArgs = { ...(args || {}) };
+                    if (!String(normalizedBrowserArgs.action || '').trim()) {
+                        normalizedBrowserArgs.action = normalizedBrowserArgs.url ? 'open' : 'getMarkdown';
+                    }
+                    const browserResult = await this.tools.browserAction(normalizedBrowserArgs);
                     
                     // Visual Feedback: Auto-screenshot after every meaningful navigation or interaction
                     const visualActions = ['open', 'click', 'clickPixel', 'type', 'keyPress', 'clickText', 'scroll', 'hover'];
-                    if (visualActions.includes(args.action)) {
+                    if (visualActions.includes(normalizedBrowserArgs.action)) {
                         const screenshotName = `screenshot_${Date.now()}.png`;
                         const screenshotPath = path.join(this.taskDir, screenshotName);
                         await this.tools.browserAction({ action: 'annotateAndScreenshot', savePath: screenshotPath });
@@ -806,6 +1246,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                         this.onUpdate({ type: 'thought', message: `🖼️ **Browser Update:**\n![Browser View](${publicUrl})` });
                     }
                     return browserResult;
+                }
                 case 'generate_image': {
                     const result = await ImageGenTool.generateImage(args.prompt, args.savePath);
                     if (!String(result).toLowerCase().startsWith('error')) {
@@ -971,9 +1412,54 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             this.context.push({ role: 'assistant', content: '', toolCall: approvedCall });
             this.onUpdate({ type: 'action', name: approvedCall.name, args: approvedCall.args });
             this.pendingApproval = null;
+            if (approvedCall.name === 'metaAds' && String(approvedCall.args?.action || '').startsWith('publishOrganic')) {
+                this._setWorkflowState({
+                    domain: 'marketing',
+                    channel: 'meta',
+                    mode: 'organic_publish',
+                    stage: 'publishing'
+                });
+            }
             const result = await this._dispatchTool(approvedCall, { skipGovernance: true });
             this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
             this.context.push({ role: 'tool', name: approvedCall.name, content: result });
+            if (this._isMetaOrganicPublishAction(approvedCall)) {
+                if (this._isSuccessfulMetaPublishResult(result)) {
+                    this._setWorkflowState({
+                        domain: 'marketing',
+                        channel: 'meta',
+                        mode: 'organic_publish',
+                        stage: 'published'
+                    });
+                    this.onUpdate({ type: 'complete', message: this._formatMetaPublishSuccess(result, this.currentOrganicMetaDraft) });
+                    this._finishRun('completed');
+                    return;
+                }
+                this._setWorkflowState({
+                    domain: 'marketing',
+                    channel: 'meta',
+                    mode: 'organic_publish',
+                    stage: 'publish_failed'
+                });
+                if (this._isMetaAuthError(result)) {
+                    this.pendingRequirement = {
+                        requestedAt: new Date().toISOString(),
+                        toolCall: approvedCall,
+                        keys: ['META_ACCESS_TOKEN']
+                    };
+                    this.onUpdate({
+                        type: 'input_requested',
+                        message: 'Meta publish failed because the Meta access token is expired or invalid. Reply with a fresh META_ACCESS_TOKEN (or update settings) and Nexus will continue.'
+                    });
+                    this.isWaitingForInput = true;
+                    this._finishRun('paused');
+                    return;
+                }
+                this.onUpdate({ type: 'error', message: `Organic Meta publish failed.\n${this._formatToolResult(result).slice(0, 5000)}` });
+                this.isWaitingForInput = true;
+                this._finishRun('paused');
+                return;
+            }
             await this._runLoop(null);
         } finally {
             this.isRunning = false;
@@ -1002,6 +1488,13 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         });
         this.recoveryHistory = this.recoveryHistory.slice(0, 50);
         this._recordAudit('self_healing_detected', { tool: toolCall.name, classification: classification.type });
+        await MemoryService.saveRecoveryPattern({
+            tool: toolCall.name,
+            classification: classification.type,
+            summary: classification.summary,
+            playbook: playbook?.strategy || null,
+            resolution: 'Detected automatically during live self-healing flow'
+        });
 
         if (!playbook) return;
 
@@ -1263,6 +1756,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             isWaitingForInput: this.isWaitingForInput,
             currentRun: this.currentRun,
             recentRuns: this.recentRuns,
+            currentOrganicMetaDraft: this.currentOrganicMetaDraft,
+            currentWorkflowState: this.currentWorkflowState,
             pendingApproval: this.pendingApproval,
             pendingRepair: this.pendingRepair,
             auditTrail: this.auditTrail,
@@ -1285,6 +1780,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         if (state.isWaitingForInput !== undefined) this.isWaitingForInput = state.isWaitingForInput;
         if (state.currentRun) this.currentRun = state.currentRun;
         if (state.recentRuns) this.recentRuns = state.recentRuns;
+        if (state.currentOrganicMetaDraft) this.currentOrganicMetaDraft = state.currentOrganicMetaDraft;
+        if (state.currentWorkflowState) this.currentWorkflowState = state.currentWorkflowState;
         if (state.pendingApproval) this.pendingApproval = state.pendingApproval;
         if (state.pendingRequirement) this.pendingRequirement = state.pendingRequirement;
         if (state.pendingRepair) this.pendingRepair = state.pendingRepair;

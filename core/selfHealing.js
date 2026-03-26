@@ -5,7 +5,16 @@ class SelfHealingService {
 
         if (!text) return null;
 
-        if (name === 'browserAction' && (text.includes('not found') || text.includes('failed') || text.includes('selector'))) {
+        if (
+            name === 'browserAction' &&
+            (
+                text.includes('not found') ||
+                text.includes('failed') ||
+                text.includes('selector') ||
+                text.includes('requires selector') ||
+                text.includes('unknown browser action')
+            )
+        ) {
             return {
                 type: 'browser_mismatch',
                 severity: 'medium',

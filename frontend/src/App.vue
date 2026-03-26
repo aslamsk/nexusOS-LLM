@@ -92,6 +92,8 @@ const newClient = ref({ name: '', company: '', email: '', phone: '', notes: '', 
 const configToast = ref({ show: false, message: '', type: 'success' })
 const alertsEnabled = ref(localStorage.getItem('nexus_alerts_enabled') === 'true')
 const selectedQuotePreset = ref('custom')
+const setupDoctor = ref({ summary: { ready: true, status: 'ready', message: '' }, blockers: [], recommendations: [], providers: [] })
+const setupPlaybooks = ref([])
 
 const AGENCY_QUOTE_PRESETS = {
   custom: {
@@ -155,6 +157,7 @@ const CLIENT_KEY_INFO = {
   GEMINI_API_KEY: { label: 'Gemini API Key 1', placeholder: 'AIza...', howTo: 'Create in Google AI Studio for primary inference.', setupPrompt: 'Open Google AI Studio, create a Gemini API key for primary inference, and wait for my input if any login or confirmation is needed.' },
   GEMINI_API_KEY_2: { label: 'Gemini API Key 2', placeholder: 'AIza...', howTo: 'Create a second key for failover rotation.', setupPrompt: 'Open Google AI Studio and help me create a backup Gemini API key for failover rotation. Pause for my login or MFA input when needed, then continue.' },
   BRAVE_SEARCH_API_KEY: { label: 'Brave Search API Key', placeholder: 'BSA...', howTo: 'Create in Brave Search API dashboard.', setupPrompt: 'Open Brave Search API dashboard and guide me step by step to create a Brave Search API key. Pause for any login or payment inputs and continue after I reply.' },
+  TAVILY_API_KEY: { label: 'Tavily API Key', placeholder: 'tvly-...', howTo: 'Create in Tavily dashboard as a search fallback provider.', setupPrompt: 'Open Tavily and guide me step by step to create an API key for Nexus search fallback. Pause for login or verification input and continue after I reply.' },
   OPENROUTER_API_TOKEN: { label: 'OpenRouter API Token', placeholder: 'sk-or-...', howTo: 'Create in OpenRouter account settings for free fallback routing.', setupPrompt: 'Open OpenRouter account settings and guide me step by step to create an API token for Nexus fallback routing. Pause for any login or verification input and continue after I reply.' },
   OPENROUTER_MODEL: { label: 'OpenRouter Model', placeholder: 'openrouter/free', howTo: 'Set a free or preferred fallback model ID for OpenRouter.', setupPrompt: 'Help me choose and confirm the best OpenRouter fallback model for Nexus OS. Prefer a free model unless I ask otherwise.' },
   GROQ_API_KEY: { label: 'Groq API Key', placeholder: 'gsk_...', howTo: 'Create in Groq console for OpenAI-compatible fallback inference.', setupPrompt: 'Open the Groq console and guide me step by step to create a Groq API key for Nexus fallback inference. Pause for login or verification inputs and continue when I respond.' },
@@ -180,6 +183,7 @@ const CONFIG_FALLBACK_LABELS = {
   NVIDIA_NIM_API_KEY: 'NVIDIA NIM API Key',
   NVIDIA_MODEL: 'NVIDIA Model',
   BRAVE_SEARCH_API_KEY: 'Brave Search API Key (for Web Search)',
+  TAVILY_API_KEY: 'Tavily API Key (Search Fallback)',
   GMAIL_USER: 'Gmail Address (for Email Tool)',
   GMAIL_APP_PASSWORD: 'Gmail App Password (for Email Tool)',
   WHATSAPP_PHONE_ID: 'WhatsApp Phone ID (from Meta Developer Portal)',
@@ -314,7 +318,7 @@ const configGroups = computed(() => {
     },
     {
       title: 'Search, Ads, Billing',
-      keys: ['BRAVE_SEARCH_API_KEY', 'GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN', 'GOOGLE_ADS_DEVELOPER_TOKEN', 'STRIPE_SECRET_KEY', 'APP_BASE_URL', 'REPLICATE_API_TOKEN']
+      keys: ['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET', 'GOOGLE_ADS_REFRESH_TOKEN', 'GOOGLE_ADS_DEVELOPER_TOKEN', 'STRIPE_SECRET_KEY', 'APP_BASE_URL', 'REPLICATE_API_TOKEN']
     }
   ]
   return groups.map((group) => ({
@@ -461,11 +465,34 @@ async function scrollToBottom() {
 }
 
 function formatMessage(text) { return text ? text.replace(/\n/g, '<br>') : '' }
-function prettyDate(value) { return value ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value)) : 'No timestamp' }
+function prettyDate(value) {
+  if (value === null || value === undefined || value === '') return 'No timestamp'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Invalid timestamp'
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date)
+}
 function dualCurrency(value) {
   const usd = Number(value || 0)
   const inr = usd * usdToInrRate
   return `$${usd.toFixed(2)} / Rs.${inr.toFixed(0)}`
+}
+function isLikelyContinuationPrompt(prompt) {
+  const value = String(prompt || '').trim().toLowerCase()
+  if (!value) return false
+  return [
+    'yes',
+    'no',
+    'continue',
+    'proceed',
+    'approved',
+    'boss approved',
+    'approve',
+    'reject',
+    'cancel',
+    'use saved settings',
+    'use configured meta access token',
+    'use configured meta page id'
+  ].includes(value)
 }
 async function fetchJson(url, options) {
   const response = await fetch(url, options)
@@ -530,6 +557,14 @@ function downloadUsageReport(scope = 'global', format = 'csv') {
   document.body.removeChild(link)
 }
 async function loadToolsDashboard() { toolsData.value = (await fetchJson('/api/system-status')).integrations || [] }
+async function loadSetupCenter(prompt = '') {
+  const [doctorData, playbookData] = await Promise.all([
+    fetchJson(`/api/setup/doctor${prompt ? `?prompt=${encodeURIComponent(prompt)}` : ''}`),
+    fetchJson('/api/setup/playbooks')
+  ])
+  setupDoctor.value = doctorData.report || setupDoctor.value
+  setupPlaybooks.value = playbookData.playbooks || []
+}
 async function loadSessionCatalog() { sessionCatalog.value = (await fetchJson('/api/sessions')).sessions || [] }
 async function loadSystemHealth() { systemHealth.value = await fetchJson('/api/health') }
 async function loadPricingCatalog() { pricingCatalog.value = (await fetchJson('/api/pricing/catalog')).catalog || {} }
@@ -886,6 +921,16 @@ async function handleFileUpload(event) {
 async function submitTask() {
   const prompt = promptInput.value.trim()
   if (!prompt || isWorking.value) return
+  try {
+    const doctorData = await fetchJson(`/api/setup/doctor?prompt=${encodeURIComponent(prompt)}`)
+    setupDoctor.value = doctorData.report || setupDoctor.value
+    const blockers = (doctorData.report?.blockers || []).slice(0, 2)
+    if (blockers.length) {
+      const summary = blockers.map((item) => `${item.title}: ${item.detail}`).join(' | ')
+      chatHistory.value.push({ sender: 'nexus_result', text: `Setup Doctor: ${summary}` })
+      showToast(`Setup Doctor found ${blockers.length} relevant blocker${blockers.length > 1 ? 's' : ''}`, 'error')
+    }
+  } catch (_) {}
   const budgetApproved = await ensureBudgetApproval(selectedClientForChat.value || null)
   if (!budgetApproved) {
     showToast('Mission paused due to budget limit', 'error')
@@ -896,9 +941,14 @@ async function submitTask() {
   promptInput.value = ''
   isWorking.value = true
   const isPaused = hasWaitingMission.value
+  const hasExplicitBlocker = !!missionSummary.value.pendingApproval ||
+    !!missionSummary.value.pendingRequirement ||
+    !!missionSummary.value.pendingRepair ||
+    !!missionSummary.value.blocker
+  const shouldResumeExistingMission = isPaused && (hasExplicitBlocker || isLikelyContinuationPrompt(prompt))
   missionStatus.value = 'active'
   const missionMode = missionModeOverride.value === 'auto' ? null : missionModeOverride.value
-  if (isPaused) socket.emit('user_input', { prompt, clientId: selectedClientForChat.value || null, missionMode })
+  if (shouldResumeExistingMission) socket.emit('user_input', { prompt, clientId: selectedClientForChat.value || null, missionMode })
   else socket.emit('start_task', { prompt, clientId: selectedClientForChat.value || null, missionMode })
   scrollToBottom()
 }
@@ -934,6 +984,7 @@ function changeView(view) {
   if (view === 'finance') { loadPricingCatalog(); loadQuotes(); loadInvoices(); if (selectedFinanceClient.value) loadBudget() }
   if (view === 'marketing') { loadMarketingWorkflows(); loadMarketingBriefs(selectedClientForChat.value || selectedFinanceClient.value || ''); loadMarketingOutputs(selectedClientForChat.value || selectedFinanceClient.value || '') }
   if (view === 'tools') loadToolsDashboard()
+  if (view === 'setup') loadSetupCenter()
   if (view === 'settings') openSettings()
 }
 
@@ -1036,11 +1087,11 @@ async function notifyBossUpdate(title, body) {
 }
 
 function openKeySetupWithNexus(key) {
-  const info = CLIENT_KEY_INFO[key]
+  const info = setupPlaybooks.value.find((item) => item.key === key) || CLIENT_KEY_INFO[key]
   if (!info?.setupPrompt) return showToast('No guided setup flow is mapped for this key yet', 'error')
   activeView.value = 'chat'
   promptInput.value = info.setupPrompt
-  showToast(`Setup mission prepared for ${info.label}`)
+  showToast(`Setup mission prepared for ${info.label || info.title || key}`)
 }
 
 onMounted(async () => {
@@ -1091,7 +1142,7 @@ onMounted(async () => {
     else if (data?.blocker || data?.pendingApproval || data?.pendingRepair || data?.queue?.activeWaitingJobId) missionStatus.value = 'paused'
   })
   clientKeyLabels.value = (await fetchJson('/api/client-key-labels')).labels || {}
-  await Promise.allSettled([loadClients(), loadToolsDashboard(), loadSessionCatalog(), loadSystemHealth(), loadGlobalUsageSummary()])
+  await Promise.allSettled([loadClients(), loadToolsDashboard(), loadSetupCenter(), loadSessionCatalog(), loadSystemHealth(), loadGlobalUsageSummary()])
 })
 
 onBeforeUnmount(() => {
@@ -1649,25 +1700,41 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeView === 'setup'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Setup Center</span><h3>Provider onboarding and resume</h3></div></div>
+          <div class="panel-head"><div><span class="tiny-label">Setup Center</span><h3>Provider onboarding and resume</h3></div><button class="ghost" @click="loadSetupCenter(latestNexusMessage)">Refresh Doctor</button></div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Guided onboarding</strong>
               <p class="muted">Launch provider setup missions directly from Nexus. If login, OTP, MFA, or account selection is needed, answer in chat and Nexus should continue the same setup flow.</p>
             </div>
-            <div v-for="(info, key) in CLIENT_KEY_INFO" :key="`setup-${key}`" class="stack-item">
-              <div class="run-head"><strong>{{ info.label }}</strong><span class="badge">{{ key }}</span></div>
-              <p class="muted">{{ info.howTo }}</p>
+            <div v-for="playbook in setupPlaybooks" :key="`setup-${playbook.key}`" class="stack-item">
+              <div class="run-head"><strong>{{ playbook.title }}</strong><span class="badge">{{ playbook.key }}</span></div>
+              <p class="muted">{{ playbook.description }}</p>
+              <p class="muted">Provider: {{ playbook.provider }} · Category: {{ playbook.category }}</p>
+              <p class="muted">Steps: {{ playbook.steps?.join(' -> ') }}</p>
               <div class="action-row">
-                <button class="primary subtle" @click="openKeySetupWithNexus(key)">Start Setup</button>
+                <button class="primary subtle" @click="openKeySetupWithNexus(playbook.key)">Start Setup</button>
+                <button class="ghost" @click="window.open(playbook.url, '_blank')">Open Provider</button>
                 <button class="ghost" @click="activeView = 'settings'">Open Settings</button>
               </div>
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Alerts</span><h3>Notification and continuation rules</h3></div></div>
+          <div class="panel-head"><div><span class="tiny-label">Setup Doctor</span><h3>Blockers before they break a task</h3></div></div>
           <div class="stack-list">
+            <div class="stack-item">
+              <strong>Status: {{ setupDoctor.summary.status }}</strong>
+              <p class="muted">{{ setupDoctor.summary.message }}</p>
+            </div>
+            <div v-for="blocker in setupDoctor.blockers" :key="blocker.code" class="stack-item">
+              <div class="run-head"><strong>{{ blocker.title }}</strong><span class="badge" :class="blocker.severity === 'critical' ? 'warning' : ''">{{ blocker.severity }}</span></div>
+              <p class="muted">{{ blocker.detail }}</p>
+              <p class="muted">{{ blocker.impact }}</p>
+              <div class="action-row">
+                <button v-if="blocker.playbook?.key" class="primary subtle" @click="openKeySetupWithNexus(blocker.playbook.key)">Guide Me</button>
+                <button v-else class="ghost" @click="activeView = 'tools'">Open Capabilities</button>
+              </div>
+            </div>
             <div class="stack-item">
               <strong>Boss alerts</strong>
               <p class="muted">When enabled, Nexus sends local notifications for tool actions, results, approvals needed, errors, and mission completion.</p>

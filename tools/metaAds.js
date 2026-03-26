@@ -13,6 +13,11 @@ class MetaAdsTool {
         this.apiVersion = 'v19.0';
     }
 
+    _isBlankValue(value) {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        return !normalized || ['null', 'undefined', 'none', 'n/a', 'na'].includes(normalized);
+    }
+
     /**
      * Set and persist Meta credentials to the .env file.
      */
@@ -354,8 +359,13 @@ class MetaAdsTool {
      * Organic Post (FREE): Post directly to the Facebook Page feed
      */
     async publishPagePost(pageId, message, link = '') {
-        require('dotenv').config();
-        const activePageId = pageId || process.env.META_PAGE_ID;
+        const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
+        if (this._isBlankValue(activePageId)) {
+            return { error: 'Missing Page ID for organic post.' };
+        }
+        if (this._isBlankValue(message)) {
+            return { error: 'Missing message for organic post.' };
+        }
         console.log(`[MetaAds] Preparing organic post to Page ${activePageId}...`);
         
         // --- CRITICAL: Meta requires a Page Access Token for organic posting ---
@@ -364,7 +374,7 @@ class MetaAdsTool {
         const endpoint = `${activePageId}/feed`;
         return await this._request('POST', endpoint, {
             message: message,
-            link: link,
+            link: this._isBlankValue(link) ? '' : link,
             access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN') // Override with Page Token if found
         });
     }
@@ -373,9 +383,17 @@ class MetaAdsTool {
      * Organic Photo Post (FREE): Post a photo to the Facebook Page feed
      */
     async publishPagePhoto(pageId, message, imagePathRaw) {
-        require('dotenv').config();
         const imagePath = await this._resolveMedia(imagePathRaw);
-        const activePageId = pageId || process.env.META_PAGE_ID;
+        const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
+        if (this._isBlankValue(activePageId)) {
+            return { error: 'Missing Page ID for photo post.' };
+        }
+        if (this._isBlankValue(message)) {
+            return { error: 'Missing message for photo post.' };
+        }
+        if (this._isBlankValue(imagePath)) {
+            return { error: 'Missing imagePath for photo post.' };
+        }
         console.log(`[MetaAds] Preparing organic photo post to Page ${activePageId}...`);
         
         const pageToken = await this._getPageToken(activePageId);
@@ -394,11 +412,22 @@ class MetaAdsTool {
             
             console.log(`[MetaAds] Running: curl photo post to ${activePageId}...`);
             const result = spawnSync('curl', args);
+            if (result.error) {
+                return { error: 'Photo post spawn failed', details: result.error.message };
+            }
             const output = result.stdout.toString();
+            const stderr = result.stderr.toString();
+            if (!output.trim()) {
+                return { error: 'Photo post returned empty response', output, stderr };
+            }
             try {
-                return JSON.parse(output);
+                const parsed = JSON.parse(output);
+                if (parsed.error) {
+                    return { error: parsed.error.message || 'Meta Graph API error', details: parsed.error, output, stderr };
+                }
+                return parsed;
             } catch (e) {
-                return { error: "Failed to parse photo response", output: output };
+                return { error: 'Failed to parse photo response', output, stderr };
             }
         } catch (e) {
             return { error: "Photo post failed via spawnSync", details: e.message };
