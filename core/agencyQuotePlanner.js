@@ -26,6 +26,7 @@ function toNumber(value, fallback = 0) {
 }
 
 function estimateAiOpsCost(scope) {
+    const totalAds = (scope.weeklyAdsCount || 0) * (scope.durationWeeks || 0);
     const contentUnits =
         scope.bannerCount +
         scope.carouselCount +
@@ -34,11 +35,12 @@ function estimateAiOpsCost(scope) {
         scope.tagPackages +
         scope.reportCount +
         scope.auditCount +
+        totalAds +
         (scope.websiteProject ? 6 : 0) +
         (scope.websitePages * 2);
 
     const llmCallCount = 10 + (contentUnits * 4) + ((scope.metaAdsWeeks + scope.googleAdsWeeks + scope.linkedinAdsWeeks) * 3);
-    const imageRenders = Math.max(0, (scope.bannerCount * 4) + (scope.carouselCount * 5));
+    const imageRenders = Math.max(0, (scope.bannerCount * 4) + (scope.carouselCount * 5) + (totalAds * 2));
     const videoRenders = Math.max(0, scope.videoCount);
 
     const llmCostPerCall =
@@ -56,6 +58,7 @@ function estimateAiOpsCost(scope) {
         llmCallCount,
         imageRenders,
         videoRenders,
+        totalAds,
         llmCost: round(llmCost),
         imageCost: round(imageCost),
         videoCost: round(videoCost),
@@ -95,7 +98,7 @@ function buildServiceItems(scope, aiOps, platformFee) {
             quantity: 1,
             unit: 'package',
             unitCost: aiOps.totalCost,
-            description: `AI/model operations estimate after free-tier exhaustion (${aiOps.llmProvider}${aiOps.imageRenders ? ` + ${aiOps.imageProvider}` : ''}${aiOps.videoRenders ? ` + ${aiOps.videoProvider}` : ''})`,
+            description: `AI Ops / API Data Usage (${aiOps.llmProvider}${aiOps.imageRenders ? ` + ${aiOps.imageProvider}` : ''} - ${aiOps.imageRenders} renders)`,
             excludeFromProfit: true
         });
     }
@@ -141,16 +144,33 @@ function computePlatformFee(scope) {
 }
 
 function normalizeScope(input = {}) {
+    const searchValues = String(input.notes || input.campaignName || '').toLowerCase();
+    
+    // Detect "X ads per week for Y weeks"
+    let weeklyAdsCount = toNumber(input.weeklyAdsCount, 0);
+    let durationWeeks = toNumber(input.durationWeeks, 0);
+    
+    if (weeklyAdsCount === 0 || durationWeeks === 0) {
+        const adsMatch = searchValues.match(/(\d+)\s*ads?\s*\/\s*week/i) || searchValues.match(/(\d+)\s*ads?\s*per\s*week/i);
+        const weeksMatch = searchValues.match(/(\d+)\s*weeks?/i);
+        if (adsMatch) weeklyAdsCount = parseInt(adsMatch[1]);
+        if (weeksMatch) durationWeeks = parseInt(weeksMatch[1]);
+    }
+
+    const totalAds = weeklyAdsCount * durationWeeks;
+    
     return {
-        campaignName: input.campaignName || 'Agency growth package',
-        bannerCount: Math.max(0, toNumber(input.bannerCount, 0)),
+        campaignName: input.campaignName || (weeklyAdsCount ? `${weeklyAdsCount} Ads/Week Marketing Package` : 'Agency growth package'),
+        weeklyAdsCount: Math.max(0, weeklyAdsCount),
+        durationWeeks: Math.max(0, durationWeeks),
+        bannerCount: Math.max(toNumber(input.bannerCount, 0), totalAds),
         carouselCount: Math.max(0, toNumber(input.carouselCount, 0)),
         videoCount: Math.max(0, toNumber(input.videoCount, 0)),
         contentDeliverables: Math.max(0, toNumber(input.contentDeliverables, 0)),
         tagPackages: Math.max(0, toNumber(input.tagPackages, 0)),
         reportCount: Math.max(0, toNumber(input.reportCount, 0)),
         auditCount: Math.max(0, toNumber(input.auditCount, 0)),
-        metaAdsWeeks: Math.max(0, toNumber(input.metaAdsWeeks ?? input.weeks, 0)),
+        metaAdsWeeks: Math.max(0, toNumber(input.metaAdsWeeks ?? input.weeks ?? durationWeeks, 0)),
         googleAdsWeeks: Math.max(0, toNumber(input.googleAdsWeeks, 0)),
         linkedinAdsWeeks: Math.max(0, toNumber(input.linkedinAdsWeeks, 0)),
         websiteProject: Boolean(input.websiteProject || /website/i.test(String(input.notes || ''))),
@@ -158,7 +178,7 @@ function normalizeScope(input = {}) {
         adSpendMonthly: Math.max(0, toNumber(input.adSpendMonthly, 0)),
         profitMarginPct: Math.max(0, toNumber(input.profitMarginPct, 35)),
         taxPct: Math.max(0, toNumber(input.taxPct, 0)),
-        currency: input.currency || 'USD',
+        currency: input.currency || 'INR',
         includeStrategyRetainer: input.includeStrategyRetainer !== undefined ? Boolean(input.includeStrategyRetainer) : true,
         notes: input.notes || ''
     };

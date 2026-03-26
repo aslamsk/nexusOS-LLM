@@ -1,0 +1,182 @@
+{
+  "sessionId": "session_1773931997215",
+  "sessionDir": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T12-15-21-440Z",
+  "orchestratorState": {
+    "context": [
+      {
+        "role": "system",
+        "content": "# Nexus OS: Sovereign Intelligence Protocol v3.1\n\nYou are **Nexus OS**, a self-healing autonomous AI operating system. Move decisively, but stay truthful about tool limits, approvals, credentials, and execution results.\n\n## LAW 1: NO FAKE COMPLETION\n\nNever claim a task was published, sent, created, fixed, or completed unless the real tool output confirmed it.\nNever narrate public or paid actions as successful if the last tool result returned an error, missing credentials, or no confirmed success object.\n\nInstead:\n1. Search memory first when it is relevant.\n2. Use the available tools directly when a supported tool exists.\n3. Ask one specific question only when a required field, approval, or credential is truly missing.\n4. Save only durable, reusable memory.\n\n## LAW 2: APPROVALS AND PUBLIC ACTIONS\n\nAny action that can publish publicly, spend money, message external recipients, or mutate important source files must respect the approval gate.\nIf approval is required:\n1. Prepare the exact payload.\n2. Show a concise preview.\n3. Ask for approval.\n4. Execute only after the Boss says `YES` or another clear approval phrase.\n\n## LAW 3: MEMORY HYGIENE\n\nGood memory:\n- durable credentials the Boss explicitly provided\n- short reusable fix patterns\n- stable client preferences\n- concise decision summaries\n\nBad memory:\n- raw publish payload JSON\n- giant error blobs\n- temporary file paths, screenshots, or output links\n- long quote documents or ephemeral task artifacts\n\n## LAW 4: BROWSER EXECUTION\n\nFor browser work, use the supported actions only.\nPreferred sequence:\n`open` -> `waitForNetworkIdle` or `waitForSelector` -> `getMarkdown` -> `extractActiveElements` -> interact\n\nIf a browser action fails:\n1. Re-scan the page.\n2. Retry with refreshed state.\n3. Pause only if the page still requires a missing credential, OTP, or human decision.\n\n## LAW 5: CODE AND TOOL REPAIRS\n\nWhen execution hits a code or tool failure:\n1. Read the exact error.\n2. Check memory for a known fix if useful.\n3. Apply the smallest real fix.\n4. Re-run verification.\n5. Save only the reusable summary, not the whole transcript.\n\nIf a backend restart is required for code changes to take effect, say that clearly. Do not pretend hot reload applied a backend change if it did not.\n\n## LAW 6: TOOL DISCIPLINE\n\nDo not invent tool names, tool actions, or payload fields.\nPrefer deterministic tool use over generic chat when the tool exists.\nDo not bury the real payload inside an unrelated field if the tool schema already has top-level fields.\n\n## LAW 7: COMPLETION STANDARD\n\nA mission is complete only when:\n1. The requested output was actually delivered.\n2. The result is confirmed by real tool output, API response, terminal output, or screenshot.\n3. The user-facing summary matches the actual result.\n\n## LAW 8: CONTEXT FILES AND CREDENTIALS\n\nWhen an active uploaded file path is present in system state, use that exact path for tools that require a file.\n\nFor backend credentials:\n- check the configured tools first\n- do not ask upfront if the system can verify automatically\n- if a tool reports missing or expired credentials, name the exact missing key and pause for repair\n\n## LAW 9: COMMUNICATION\n\nStay direct and implementation-focused.\nDo not say \"I can't\" when the issue is actually missing approval, missing credentials, unsupported inputs, or a tool failure that can be diagnosed.\nDo not tell the Boss a task is done when the tool output does not prove it.\n"
+      },
+      {
+        "role": "user",
+        "content": "### MISSION MODE: DISCUSS\nKeep costs as low as possible. Stay conversational, clarify goals, and shape the task. Do not start browser research, premium media generation, public publishing, ad spend, or outbound actions unless the Boss explicitly asks to move into planning or execution.\n\n### NEXUS EXECUTION PROTOCOL\n- First understand the Boss objective, then identify the exact missing details.\n- If required details are missing, ask only for the exact missing fields and wait.\n- Before taking meaningful action, produce a short numbered plan that matches the available tools.\n- Do not invent tool capabilities. Use only the exact supported tool names and action names.\n- Prefer deterministic tool use over generic chat explanations when a supported tool exists.\n\n### LONG-TERM MEMORY RECALL:\n- # AD-CAMPAIGNS.md - Mk Fashion Organic Meta Strategy\n\n## Campaign Overview\n- **Client:** SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company\n- **Primary Channel:** Meta (Facebook & Instagram) - Organic\n- **Budget:** $0 (Organic-first approach)\n- **Target Product:** https://mkfashion.in/p/qDYrf_Yn-W\n- **Price Angle:** Starting from Rs.1363 only\n\n## Organic Meta Post - Ready to Publish\n\n### Post Details\n- **Title:** Starting from Rs.1363 - Elevate Your Style with Mk Fashion!\n- **Caption:** Discover exquisite fashion that doesn't break the bank! ✨ Mk Fashion brings you stunning new arrivals, with prices starting from just Rs.1363. Refresh your wardrobe and express your unique style today. Don't miss out on these incredible deals!\n- **Hashtags:** #MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\n- **Media URL:** https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7\n- **Call to Action:** SHOP NOW\n- **CTA Link:** https://mkfashion.in/p/qDYrf_Yn-W\n\n### Implementation Notes\n- Post to both Facebook Page and Instagram Feed\n- Ensure image displays clearly on both platforms\n- CTA button should be set to \"Shop Now\" linking to product page\n- Optimal posting times: 12-2 PM and 7-9 PM IST for maximum reach\n\n## Additional Organic Recommendations\n\n### Content Strategy\n1. **Carousel Posts:** Create 3-5 image carousels showcasing different product angles (detail shots, lifestyle, price highlights)\n2. **Reels Strategy:** 15-30 second reels with trending audio, showing product transformations or \"unboxing\" style content\n3. **User-Generated Content:** Encourage customers to tag @mkfashion for reposts and community building\n4. **Stories Series:** Use polls, questions, and countdowns to drive engagement\n\n### Hashtag Strategy\n- Mix of broad (#Fashion, #Style) and\n- {'platform': 'Facebook, Instagram', 'type': 'ORGANIC_POST', 'media_url': 'https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49', 'message': 'Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! \\u2705\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon\\u0027t miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear', 'call_to_action': {'type': 'SHOP_NOW', 'link': 'https://www.mkfashion.in/product/3b6f5f0c-7c7f-4d8f-8d8f-3b6f5f0c7c7f'}\n- {\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49\",\n  \"message\": \"Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/G9SUj2Rv4x\"\n  }\n}\n- Failed to parse photo response\n- Client: SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company. Budget: $6000. Primary channel: Meta Ads. Target: Generate client proposal with prioritized recommendations and implementation-ready deliverables.\n\nPromote this product: https://mkfashion.in/p/qDYrf_Yn-W\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T12-15-21-440Z. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/session_2026-03-26T12-15-21-440Z/filename.ext)"
+      }
+    ],
+    "lastUploadedFile": null,
+    "stepCount": 0,
+    "currentClientId": null,
+    "currentMarketingWorkflow": null,
+    "missionMode": "discuss",
+    "manualMissionMode": null,
+    "isWaitingForInput": false,
+    "currentRun": {
+      "id": "run_1774527321463",
+      "requestPreview": "Promote this product: https://mkfashion.in/p/qDYrf_Yn-W",
+      "startedAt": "2026-03-26T12:15:21.464Z",
+      "finishedAt": "2026-03-26T12:15:21.523Z",
+      "status": "stopped",
+      "toolCalls": 0,
+      "llmCalls": 0,
+      "toolsUsed": {},
+      "errorCount": 0,
+      "lastError": null,
+      "lastTool": null,
+      "lastLlmProvider": null,
+      "lastLlmModel": null,
+      "providerUsage": {},
+      "providerSwitches": [],
+      "steps": 0,
+      "clientId": null,
+      "estimatedCostUsd": 0
+    },
+    "recentRuns": [
+      {
+        "id": "run_1774527321463",
+        "requestPreview": "Promote this product: https://mkfashion.in/p/qDYrf_Yn-W",
+        "startedAt": "2026-03-26T12:15:21.464Z",
+        "finishedAt": "2026-03-26T12:15:21.523Z",
+        "status": "stopped",
+        "toolCalls": 0,
+        "llmCalls": 0,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": null,
+        "lastLlmModel": null,
+        "providerUsage": {},
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0
+      }
+    ],
+    "currentOrganicMetaDraft": null,
+    "currentWorkflowState": null,
+    "pendingApproval": null,
+    "pendingRepair": null,
+    "auditTrail": [],
+    "recoveryHistory": []
+  },
+  "chatHistory": [
+    {
+      "sender": "nexus",
+      "text": "Mission control is online, Boss. Give me the objective."
+    },
+    {
+      "sender": "user",
+      "text": "Promote this product: https://mkfashion.in/p/qDYrf_Yn-W"
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission stopped by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Mission queued for the Boss. Position: 1"
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission forcefully terminated by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Mission mode: DISCUSS. Nexus will keep cost and tool usage aligned to this stage."
+    },
+    {
+      "sender": "nexus",
+      "text": "Process finished."
+    }
+  ],
+  "logs": [
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-26T12:15:21.462Z"
+    },
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-26T12:15:21.688Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission mode: DISCUSS. Nexus will keep cost and tool usage aligned to this stage.",
+      "at": "2026-03-26T12:15:24.387Z"
+    },
+    {
+      "type": "complete",
+      "message": "Process finished.",
+      "at": "2026-03-26T12:15:24.456Z"
+    }
+  ],
+  "runSummary": {
+    "activeRun": null,
+    "pendingApproval": null,
+    "pendingRequirement": null,
+    "pendingRepair": null,
+    "missionMode": "discuss",
+    "auditTrail": [],
+    "recoveryHistory": [],
+    "recentRuns": [
+      {
+        "id": "run_1774527321463",
+        "requestPreview": "Promote this product: https://mkfashion.in/p/qDYrf_Yn-W",
+        "startedAt": "2026-03-26T12:15:21.464Z",
+        "finishedAt": "2026-03-26T12:15:21.523Z",
+        "status": "stopped",
+        "toolCalls": 0,
+        "llmCalls": 0,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": null,
+        "lastLlmModel": null,
+        "providerUsage": {},
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0
+      }
+    ],
+    "totals": {
+      "missions": 1,
+      "successRate": 0,
+      "paused": 0,
+      "toolCalls": 0,
+      "llmCalls": 0,
+      "estimatedCostUsd": 0
+    }
+  },
+  "jobQueue": [
+    {
+      "id": "job_1774527321456",
+      "prompt": "Promote this product: https://mkfashion.in/p/qDYrf_Yn-W",
+      "clientId": null,
+      "missionMode": null,
+      "status": "cancelled",
+      "createdAt": "2026-03-26T12:15:21.456Z",
+      "startedAt": "2026-03-26T12:15:21.461Z",
+      "finishedAt": "2026-03-26T12:15:21.523Z",
+      "estimatedCostUsd": 0,
+      "attempts": 0,
+      "nextRunAt": null,
+      "steps": 0,
+      "toolCalls": 0,
+      "llmCalls": 0
+    }
+  ],
+  "currentJobId": null,
+  "lastUpdated": "2026-03-26T12:15:24.969Z"
+}

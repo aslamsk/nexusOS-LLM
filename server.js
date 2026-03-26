@@ -18,6 +18,8 @@ const CommercialDocs = require('./core/commercialDocs');
 const SetupPlaybooks = require('./core/setupPlaybooks');
 const SetupDoctor = require('./core/setupDoctor');
 const MarketingUtilsTool = require('./tools/marketingUtils');
+const FinancialDashboard = require('./tools/financialDashboard');
+const ProactiveScanner = require('./tools/proactiveScanner');
 const nodemailer = require('nodemailer');
 
 const app = express();
@@ -2003,21 +2005,18 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start_new_session', () => {
-        if (orchestrator) orchestrator.stop();
+        if (orchestrator) orchestrator.reset();
         
         sessionId = `session_${Date.now()}`;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         sessionDir = path.join(__dirname, 'outputs', `session_${timestamp}`);
         if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
-        orchestrator = new NexusOrchestrator((logEvent) => {
-            socket.emit('nexus_log', logEvent);
-            latestLogs.push({ ...logEvent, at: new Date().toISOString() });
-            latestLogs = latestLogs.slice(-200);
-            socket.emit('mission_state', orchestrator.getMissionControlData());
-            saveSession();
-        }, sessionDir);
-        orchestrator.currentSessionId = sessionId;
+        // Update orchestrator with new session directory
+        if (orchestrator) {
+            orchestrator.taskDir = sessionDir;
+            orchestrator.currentSessionId = sessionId;
+        }
 
         latestHistory = [];
         latestLogs = [];
@@ -2132,6 +2131,106 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('User disconnected');
     });
+});
+
+// ─── Financial Dashboard API ───────────────────────────────────────
+app.get('/api/finance/pnl', async (req, res) => {
+    try {
+        const { period, clientId } = req.query;
+        const report = FinancialDashboard.generatePnlReport({ period: period || 'all', clientId: clientId || '' });
+        res.json(report);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/finance/summary', async (req, res) => {
+    try { res.json(FinancialDashboard.getSummary()); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/finance/track-spend', async (req, res) => {
+    try {
+        const result = FinancialDashboard.trackSpend(req.body);
+        res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/finance/track-revenue', async (req, res) => {
+    try {
+        const result = FinancialDashboard.trackRevenue(req.body);
+        res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Proactive Market Intelligence API ─────────────────────────────
+app.post('/api/proactive/scan', async (req, res) => {
+    try {
+        const { niche } = req.body;
+        if (!niche) return res.status(400).json({ error: 'niche is required' });
+        const result = await ProactiveScanner.scanNiche(niche);
+        io.emit('proactive_proposal', result);
+        res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/proactive/propose', async (req, res) => {
+    try {
+        const { niche, clientName } = req.body;
+        if (!niche) return res.status(400).json({ error: 'niche is required' });
+        const result = await ProactiveScanner.proposeCampaign(niche, clientName || 'The Boss');
+        io.emit('proactive_proposal', { type: 'campaign_proposal', ...result });
+        res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Client Self-Service / Auto-Onboarding API ────────────────────
+app.post('/api/onboard', async (req, res) => {
+    try {
+        const { name, company, email, phone, requirements, budget, channels } = req.body;
+        if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
+
+        // 1. Create client in Firestore
+        const clientRef = await db.collection('clients').add({
+            name, company: company || '', email, phone: phone || '',
+            notes: requirements || '', status: 'onboarding',
+            createdAt: new Date(), source: 'self-service'
+        });
+
+        // 2. Auto-generate quotation based on requirements
+        let quote = null;
+        if (requirements) {
+            const plan = AgencyQuotePlanner.buildPlan({
+                notes: requirements,
+                campaignName: `${name} - Self-Service Package`,
+                adSpendMonthly: Number(budget) || 0,
+                currency: 'INR'
+            });
+            const quoteRef = await db.collection('quotes').add({
+                clientId: clientRef.id, title: plan.title,
+                pricing: plan.pricing, aiOps: plan.aiOps,
+                status: 'draft', createdAt: new Date()
+            });
+            quote = { id: quoteRef.id, ...plan };
+        }
+
+        // 3. Track as potential revenue
+        if (quote) {
+            FinancialDashboard.trackRevenue({
+                amount: 0, currency: 'INR', clientId: clientRef.id,
+                quoteId: quote?.id || '', description: `Onboarding: ${name} (pending approval)`
+            });
+        }
+
+        // 4. Notify the Boss via socket
+        io.emit('proactive_proposal', {
+            type: 'new_client_onboarding',
+            clientId: clientRef.id, clientName: name,
+            company, email, requirements,
+            autoQuote: quote ? { total: quote.pricing?.total, currency: quote.pricing?.currency } : null,
+            message: `New client ${name} (${company || email}) has self-onboarded with requirements. Auto-quotation generated.`
+        });
+
+        res.json({ success: true, clientId: clientRef.id, quote });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const PORT = process.env.PORT || 3000;

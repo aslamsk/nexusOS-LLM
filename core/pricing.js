@@ -1,20 +1,20 @@
 const SERVICE_CATALOG = {
-    meta_ads_management: { label: 'Meta Ads Management', unitCost: 120, unit: 'campaign' },
-    google_ads_management: { label: 'Google Ads Management', unitCost: 140, unit: 'campaign' },
-    linkedin_ads_management: { label: 'LinkedIn Campaign Setup', unitCost: 130, unit: 'campaign' },
-    banner_design: { label: 'Banner Design', unitCost: 25, unit: 'asset' },
-    carousel_design: { label: 'Carousel Design', unitCost: 40, unit: 'asset' },
-    video_creative: { label: 'Video Creative', unitCost: 95, unit: 'asset' },
-    marketing_audit: { label: 'Marketing Audit', unitCost: 90, unit: 'audit' },
-    reporting_pack: { label: 'Reporting Pack', unitCost: 55, unit: 'report' },
-    seo_package: { label: 'SEO Package', unitCost: 110, unit: 'package' },
-    landing_page: { label: 'Landing Page', unitCost: 220, unit: 'project' },
-    website_development: { label: 'Website Development', unitCost: 650, unit: 'project' },
-    fullstack_feature: { label: 'Coding / Fullstack Feature', unitCost: 320, unit: 'feature' },
-    ai_automation: { label: 'AI Automation Workflow', unitCost: 260, unit: 'workflow' },
-    copywriting: { label: 'Copywriting', unitCost: 35, unit: 'deliverable' },
-    tag_research: { label: 'Tags / Hashtag Research', unitCost: 18, unit: 'pack' },
-    strategy_retainer: { label: 'Strategy Retainer', unitCost: 180, unit: 'month' }
+    meta_ads_management: { label: 'Meta Ads Management', unitCost: 5000, unit: 'week' },
+    google_ads_management: { label: 'Google Ads Management', unitCost: 6000, unit: 'week' },
+    linkedin_ads_management: { label: 'LinkedIn Campaign Setup', unitCost: 5500, unit: 'week' },
+    banner_design: { label: 'Banner Design', unitCost: 1500, unit: 'asset' },
+    carousel_design: { label: 'Carousel Design', unitCost: 2500, unit: 'asset' },
+    video_creative: { label: 'Video Creative', unitCost: 5000, unit: 'asset' },
+    marketing_audit: { label: 'Marketing Audit', unitCost: 4000, unit: 'audit' },
+    reporting_pack: { label: 'Reporting Pack', unitCost: 2000, unit: 'report' },
+    seo_package: { label: 'SEO Package', unitCost: 8000, unit: 'package' },
+    landing_page: { label: 'Landing Page', unitCost: 15000, unit: 'project' },
+    website_development: { label: 'Website Development', unitCost: 50000, unit: 'project' },
+    fullstack_feature: { label: 'Coding / Fullstack Feature', unitCost: 25000, unit: 'feature' },
+    ai_automation: { label: 'AI Automation Workflow', unitCost: 20000, unit: 'workflow' },
+    copywriting: { label: 'Copywriting', unitCost: 1000, unit: 'deliverable' },
+    tag_research: { label: 'Tags / Hashtag Research', unitCost: 800, unit: 'pack' },
+    strategy_retainer: { label: 'Strategy Retainer', unitCost: 10000, unit: 'month' }
 };
 
 class PricingService {
@@ -22,7 +22,7 @@ class PricingService {
         return SERVICE_CATALOG;
     }
 
-    buildQuote({ items = [], profitMarginPct = 35, taxPct = 0, currency = 'USD' }) {
+    buildQuote({ items = [], profitMarginPct = 35, taxPct = 0, currency = 'INR' }) {
         const normalizedItems = items.map((item) => {
             const catalogItem = SERVICE_CATALOG[item.serviceCode] || {
                 label: item.description || item.serviceCode || 'Custom Service',

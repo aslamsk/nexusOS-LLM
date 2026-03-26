@@ -418,59 +418,74 @@ class MetaAdsTool {
         });
     }
 
+
     /**
      * Organic Photo Post (FREE): Post a photo to the Facebook Page feed
      */
     async publishPagePhoto(pageId, message, imagePathRaw) {
-        const imagePath = await this._resolveMedia(imagePathRaw);
+        let imagePath = await this._resolveMedia(imagePathRaw);
+        // --- Windows path normalization for curl ---
+        if (imagePath && typeof imagePath === 'string') {
+            imagePath = imagePath.replace(/\\/g, '/');
+        }
+        
         const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
         if (this._isBlankValue(activePageId)) {
             return { error: 'Missing Page ID for photo post.' };
         }
-        if (this._isBlankValue(message)) {
-            return { error: 'Missing message for photo post.' };
-        }
-        if (this._isBlankValue(imagePath)) {
-            return { error: 'Missing imagePath for photo post.' };
-        }
+        
         console.log(`[MetaAds] Preparing organic photo post to Page ${activePageId}...`);
-        
         const pageToken = await this._getPageToken(activePageId);
-        const endpoint = `${activePageId}/photos`;
-        
-        const { spawnSync } = require('child_process');
-        try {
-            const args = [
-                '-s',
-                '-X', 'POST',
-                `https://graph.facebook.com/${this.apiVersion}/${endpoint}`,
-                '-F', `access_token=${pageToken || await ConfigService.get('META_ACCESS_TOKEN')}`,
-                '-F', `message=${message}`,
-                '-F', `source=@${imagePath}`
-            ];
+        const token = pageToken || await ConfigService.get('META_ACCESS_TOKEN');
+
+        return new Promise((resolve) => {
+            const boundary = `----NexusOSBoundary${Math.random().toString(16).substring(2)}`;
+            const url = `https://graph.facebook.com/${this.apiVersion}/${activePageId}/photos`;
             
-            console.log(`[MetaAds] Running: curl photo post to ${activePageId}...`);
-            const result = spawnSync('curl', args);
-            if (result.error) {
-                return { error: 'Photo post spawn failed', details: result.error.message };
-            }
-            const output = result.stdout.toString();
-            const stderr = result.stderr.toString();
-            if (!output.trim()) {
-                return { error: 'Photo post returned empty response', output, stderr };
-            }
-            try {
-                const parsed = JSON.parse(output);
-                if (parsed.error) {
-                    return { error: parsed.error.message || 'Meta Graph API error', details: parsed.error, output, stderr };
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': `multipart/form-data; boundary=${boundary}`
                 }
-                return parsed;
-            } catch (e) {
-                return { error: 'Failed to parse photo response', output, stderr };
-            }
-        } catch (e) {
-            return { error: "Photo post failed via spawnSync", details: e.message };
-        }
+            };
+
+            const req = https.request(url, options, (res) => {
+                let data = '';
+                res.on('data', (chunk) => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.error) {
+                            resolve({ error: parsed.error.message || 'Meta Graph API error', details: parsed.error });
+                        } else {
+                            resolve(parsed);
+                        }
+                    } catch (e) {
+                        resolve({ error: "Failed to parse upload response", output: data });
+                    }
+                });
+            });
+
+            req.on('error', (err) => resolve({ error: "Upload request failed", details: err.message }));
+
+            // Build multipart body
+            const fileContent = fs.readFileSync(imagePath);
+            const filename = path.basename(imagePath);
+
+            req.write(`--${boundary}\r\n`);
+            req.write(`Content-Disposition: form-data; name="access_token"\r\n\r\n${token}\r\n`);
+            
+            req.write(`--${boundary}\r\n`);
+            req.write(`Content-Disposition: form-data; name="message"\r\n\r\n${message}\r\n`);
+            
+            req.write(`--${boundary}\r\n`);
+            req.write(`Content-Disposition: form-data; name="source"; filename="${filename}"\r\n`);
+            req.write(`Content-Type: image/png\r\n\r\n`);
+            req.write(fileContent);
+            req.write(`\r\n--${boundary}--\r\n`);
+            
+            req.end();
+        });
     }
 
     async publishInstagramPhoto(message, imagePathRaw) {

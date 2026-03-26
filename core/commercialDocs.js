@@ -238,284 +238,335 @@ function buildPdfWithEmbeddedLogo(stream, logo) {
     return Buffer.from(pdf, 'binary');
 }
 
-function buildQuotePdfBuffer(model) {
+function buildQuotePdfBuffer(model, plan = {}) {
+    const aiOps = plan.aiOps || model.aiOps || { llmCallCount: 0, imageRenders: 0, totalAds: 0 };
     const left = 42;
-    let y = 720;
+    const pageW = 595;
+    const contentW = pageW - left * 2;
     const lines = [];
 
+    // ── Dark Header Banner (top of page) ──────────────────────────
     lines.push('0.13 0.10 0.22 rg');
     lines.push('0.13 0.10 0.22 RG');
     lines.push('0 760 595 82 re f');
-    lines.push('q');
-    lines.push('34 0 0 34 42 778 cm');
-    lines.push('/Im1 Do');
-    lines.push('Q');
+    lines.push('1 1 1 rg');
     lines.push('BT');
-    lines.push('/F1 20 Tf');
-    lines.push(`${left + 48} 805 Td`);
-    lines.push('(NEXUS OS) Tj');
-    lines.push('/F2 10 Tf');
-    lines.push('0 -16 Td');
-    lines.push('(Agency quotation and commercial planning) Tj');
+    lines.push('/F1 18 Tf');
+    lines.push(`${left + 16} 800 Td`);
+    lines.push('(NEXUS SOVEREIGN AGENCY) Tj');
+    lines.push('/F2 9 Tf');
+    lines.push('0 -14 Td');
+    lines.push('(Global Digital Marketing Operations \\& AI Automation) Tj');
     lines.push('ET');
 
+    // ── Title Block: Quotation / Estimate ──────────────────────────
+    let y = 738;
     lines.push('0.12 0.10 0.18 rg');
     lines.push('BT');
-    lines.push('/F1 22 Tf');
+    lines.push('/F1 20 Tf');
     lines.push(`${left} ${y} Td`);
     lines.push('(Quotation / Estimate) Tj');
-    lines.push('/F2 10 Tf');
-    lines.push('0 -18 Td');
+    lines.push('/F2 9 Tf');
+    lines.push('0 -16 Td');
     lines.push(`(Quote No: ${sanitizePdfText(model.quoteNumber)}) Tj`);
-    lines.push('0 -14 Td');
+    lines.push('0 -13 Td');
     lines.push(`(Created: ${sanitizePdfText(model.createdAt.toLocaleString())}) Tj`);
-    lines.push('0 -14 Td');
+    lines.push('0 -13 Td');
     lines.push(`(Valid Until: ${sanitizePdfText(model.validUntil.toLocaleDateString())}) Tj`);
     lines.push('ET');
 
+    // ── Info Boxes: Quotation by / Quotation to ───────────────────
+    const infoBoxTop = 672;
+    const infoBoxH = 64;
     lines.push('0.94 0.95 0.99 rg');
-    lines.push(`${left} 618 230 72 re f`);
-    lines.push(`${left + 245} 618 230 72 re f`);
+    lines.push(`${left} ${infoBoxTop - infoBoxH} 230 ${infoBoxH} re f`);
+    lines.push(`${left + 245} ${infoBoxTop - infoBoxH} 230 ${infoBoxH} re f`);
     lines.push('0.24 0.21 0.36 rg');
+
+    // Left box: Quotation by
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 12} 674 Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 10} ${infoBoxTop - 14} Td`);
     lines.push('(Quotation by) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -14 Td');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -12 Td');
     lines.push('(Nexus OS Agency) Tj');
-    lines.push('0 -12 Td');
+    lines.push('0 -11 Td');
     lines.push('(Operations Desk) Tj');
-    lines.push('0 -12 Td');
+    lines.push('0 -11 Td');
     lines.push('(India) Tj');
     lines.push('ET');
+
+    // Right box: Quotation to
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 257} 674 Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 255} ${infoBoxTop - 14} Td`);
     lines.push('(Quotation to) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -14 Td');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -12 Td');
     lines.push(`(${sanitizePdfText(model.clientName || 'Client')}) Tj`);
     if (model.clientCompany) {
-        lines.push('0 -12 Td');
+        lines.push('0 -11 Td');
         lines.push(`(${sanitizePdfText(model.clientCompany)}) Tj`);
     }
     if (model.clientEmail) {
-        lines.push('0 -12 Td');
+        lines.push('0 -11 Td');
         lines.push(`(${sanitizePdfText(model.clientEmail)}) Tj`);
     }
     lines.push('ET');
 
+    // ── Table Header ──────────────────────────────────────────────
+    const tableHeaderY = infoBoxTop - infoBoxH - 14;
     lines.push('0.47 0.30 0.91 rg');
-    lines.push(`${left} 590 510 14 re f`);
+    lines.push(`${left} ${tableHeaderY} ${contentW} 14 re f`);
     lines.push('1 1 1 rg');
     lines.push('BT');
-    lines.push('/F1 9 Tf');
-    lines.push(`${left + 8} 594 Td`);
+    lines.push('/F1 8 Tf');
+    lines.push(`${left + 8} ${tableHeaderY + 4} Td`);
+    lines.push('(S.No) Tj');
+    lines.push(`55 0 Td`);
     lines.push('(Service Scope) Tj');
-    lines.push(`${left + 240} 0 Td`);
+    lines.push(`260 0 Td`);
     lines.push('(Qty) Tj');
-    lines.push(`${left + 60} 0 Td`);
+    lines.push(`50 0 Td`);
     lines.push('(Amount) Tj');
     lines.push('ET');
 
+    // ── Table Rows ────────────────────────────────────────────────
+    y = tableHeaderY - 6;
     lines.push('0.16 0.14 0.24 rg');
     const items = model.items.slice(0, 12);
-    items.forEach((item) => {
+    items.forEach((item, idx) => {
+        y -= 16;
+        // Alternating row background
+        if (idx % 2 === 0) {
+            lines.push('0.97 0.97 0.99 rg');
+            lines.push(`${left} ${y - 3} ${contentW} 16 re f`);
+            lines.push('0.16 0.14 0.24 rg');
+        }
         lines.push('BT');
-        lines.push('/F2 9 Tf');
-        lines.push(`${left + 8} ${y = y - 20} Td`);
-        lines.push(`(${sanitizePdfText(item.description)}) Tj`);
-        lines.push(`${left + 250 - (left + 8)} 0 Td`);
+        lines.push('/F2 8 Tf');
+        lines.push(`${left + 8} ${y} Td`);
+        lines.push(`(${idx + 1}.) Tj`);
+        lines.push(`55 0 Td`);
+        lines.push(`(${sanitizePdfText(String(item.description).slice(0, 55))}) Tj`);
+        lines.push(`260 0 Td`);
         lines.push(`(${sanitizePdfText(item.quantity)}) Tj`);
-        lines.push(`${left + 330 - (left + 250)} 0 Td`);
+        lines.push(`50 0 Td`);
         lines.push(`(${sanitizePdfText(formatCurrencyValue(item.lineTotal, model.currency))}) Tj`);
         lines.push('ET');
     });
 
-    const summaryTop = y - 42;
-    lines.push('0.96 0.98 1 rg');
-    lines.push(`${left + 300} ${summaryTop - 54} 210 88 re f`);
+    // ── Separator line ────────────────────────────────────────────
+    y -= 8;
+    lines.push('0.85 0.85 0.90 RG');
+    lines.push(`${left} ${y} ${contentW} 0 re S`);
+
+    // ── Commercial Summary Box ────────────────────────────────────
+    y -= 14;
+    const summaryBoxH = 100;
+    lines.push('0.96 0.97 1 rg');
+    lines.push(`${left + 280} ${y - summaryBoxH} 230 ${summaryBoxH} re f`);
     lines.push('0.14 0.12 0.22 rg');
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 312} ${summaryTop + 20} Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 290} ${y - 4} Td`);
     lines.push('(Commercial Summary) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -16 Td');
-    lines.push(`(Base Cost: ${sanitizePdfText(formatCurrencyValue(model.baseCost, model.currency))}) Tj`);
-    lines.push('0 -14 Td');
-    lines.push(`(Agency Profit: ${sanitizePdfText(formatCurrencyValue(model.profitAmount, model.currency))}) Tj`);
+    lines.push('/F2 8 Tf');
+    lines.push('0 -13 Td');
+    lines.push(`(Base Agency Cost: ${sanitizePdfText(formatCurrencyValue(model.baseCost, model.currency))}) Tj`);
+    lines.push('0 -12 Td');
+    lines.push(`(Agency Profit (${model.profitMarginPct}%): ${sanitizePdfText(formatCurrencyValue(model.profitAmount, model.currency))}) Tj`);
     if (model.passthroughCost) {
-        lines.push('0 -14 Td');
+        lines.push('0 -12 Td');
         lines.push(`(Passthrough: ${sanitizePdfText(formatCurrencyValue(model.passthroughCost, model.currency))}) Tj`);
     }
-    lines.push('0 -14 Td');
-    lines.push(`(Total: ${sanitizePdfText(formatCurrencyValue(model.total, model.currency))}) Tj`);
+    lines.push('0 -12 Td');
+    lines.push(`(AI Ops: ${aiOps.llmCallCount || 0} calls / ${aiOps.imageRenders || 0} renders) Tj`);
+    lines.push('/F1 10 Tf');
+    lines.push('0 -16 Td');
+    lines.push(`(TOTAL: ${sanitizePdfText(formatCurrencyValue(model.total, model.currency))}) Tj`);
     lines.push('ET');
 
-    const notesY = summaryTop - 120;
+    // ── Terms and Notes ───────────────────────────────────────────
+    const notesY = y - summaryBoxH - 20;
     lines.push('0.18 0.16 0.28 rg');
     lines.push('BT');
-    lines.push('/F1 10 Tf');
+    lines.push('/F1 9 Tf');
     lines.push(`${left} ${notesY} Td`);
     lines.push('(Terms and Notes) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -16 Td');
-    lines.push('(1. Paid media budget is billed only if approved by the client.) Tj');
-    lines.push('0 -12 Td');
-    lines.push('(2. 50% advance is recommended before execution starts.) Tj');
-    lines.push('0 -12 Td');
-    lines.push('(3. Creative revisions and delivery terms can be added in the final client version.) Tj');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -14 Td');
+    lines.push('(1. AI Assets: Generated visuals and copy are included in the AI Ops package.) Tj');
+    lines.push('0 -11 Td');
+    lines.push('(2. Platform Support: Cloud infrastructure and API connectivity costs are factored in.) Tj');
+    lines.push('0 -11 Td');
+    lines.push('(3. 50% advance required to initiate sovereign autonomous execution.) Tj');
     if (model.notes) {
-        lines.push('0 -16 Td');
-        lines.push(`(Additional Notes: ${sanitizePdfText(model.notes).slice(0, 90)}) Tj`);
+        lines.push('0 -14 Td');
+        lines.push(`(Notes: ${sanitizePdfText(model.notes).slice(0, 80)}) Tj`);
     }
     lines.push('ET');
 
-    try {
-        const logo = loadPngForPdf(getLogoAssetPath());
-        return buildPdfWithEmbeddedLogo(lines.join('\n'), logo);
-    } catch (error) {
-        return buildPdfBufferFromStream(lines.join('\n'));
-    }
+    return buildPdfBufferFromStream(lines.join('\n'));
 }
 
 function buildInvoicePdfBuffer(model) {
     const left = 42;
-    let y = 720;
+    const pageW = 595;
+    const contentW = pageW - left * 2;
     const lines = [];
 
+    // ── Dark Header Banner (top of page) ──────────────────────────
     lines.push('0.13 0.10 0.22 rg');
     lines.push('0.13 0.10 0.22 RG');
     lines.push('0 760 595 82 re f');
-    lines.push('q');
-    lines.push('34 0 0 34 42 778 cm');
-    lines.push('/Im1 Do');
-    lines.push('Q');
+    lines.push('1 1 1 rg');
     lines.push('BT');
-    lines.push('/F1 20 Tf');
-    lines.push(`${left + 48} 805 Td`);
-    lines.push('(NEXUS OS) Tj');
-    lines.push('/F2 10 Tf');
-    lines.push('0 -16 Td');
-    lines.push('(Agency finance and billing) Tj');
+    lines.push('/F1 18 Tf');
+    lines.push(`${left + 16} 800 Td`);
+    lines.push('(NEXUS SOVEREIGN AGENCY) Tj');
+    lines.push('/F2 9 Tf');
+    lines.push('0 -14 Td');
+    lines.push('(Agency Finance \\& Billing) Tj');
     lines.push('ET');
 
+    // ── Title Block: Commercial Invoice ────────────────────────────
+    let y = 738;
     lines.push('0.12 0.10 0.18 rg');
     lines.push('BT');
-    lines.push('/F1 22 Tf');
+    lines.push('/F1 20 Tf');
     lines.push(`${left} ${y} Td`);
-    lines.push('(Invoice) Tj');
-    lines.push('/F2 10 Tf');
-    lines.push('0 -18 Td');
+    lines.push('(Commercial Invoice) Tj');
+    lines.push('/F2 9 Tf');
+    lines.push('0 -16 Td');
     lines.push(`(Invoice No: ${sanitizePdfText(model.invoiceNumber)}) Tj`);
-    lines.push('0 -14 Td');
-    lines.push(`(Created: ${sanitizePdfText(model.createdAt.toLocaleString())}) Tj`);
-    lines.push('0 -14 Td');
-    lines.push(`(${sanitizePdfText(model.paidAt ? `Paid: ${model.paidAt.toLocaleString()}` : 'Payment terms: Due on receipt')}) Tj`);
+    lines.push('0 -13 Td');
+    lines.push(`(Issued: ${sanitizePdfText(model.createdAt.toLocaleString())}) Tj`);
+    if (model.status === 'paid') {
+        lines.push('0 -13 Td');
+        lines.push(`(Status: PAID on ${sanitizePdfText(model.paidAt ? model.paidAt.toLocaleDateString() : '')}) Tj`);
+    } else {
+        lines.push('0 -13 Td');
+        lines.push(`(Status: DUE) Tj`);
+    }
     lines.push('ET');
 
+    // ── Info Boxes: Invoice from / Invoice to ─────────────────────
+    const infoBoxTop = 672;
+    const infoBoxH = 64;
     lines.push('0.94 0.95 0.99 rg');
-    lines.push(`${left} 618 230 72 re f`);
-    lines.push(`${left + 245} 618 230 72 re f`);
+    lines.push(`${left} ${infoBoxTop - infoBoxH} 230 ${infoBoxH} re f`);
+    lines.push(`${left + 245} ${infoBoxTop - infoBoxH} 230 ${infoBoxH} re f`);
     lines.push('0.24 0.21 0.36 rg');
+
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 12} 674 Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 10} ${infoBoxTop - 14} Td`);
     lines.push('(Invoice from) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -14 Td');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -12 Td');
     lines.push('(Nexus OS Agency) Tj');
-    lines.push('0 -12 Td');
+    lines.push('0 -11 Td');
     lines.push('(Finance Desk) Tj');
-    lines.push('0 -12 Td');
+    lines.push('0 -11 Td');
     lines.push('(India) Tj');
     lines.push('ET');
+
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 257} 674 Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 255} ${infoBoxTop - 14} Td`);
     lines.push('(Invoice to) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -14 Td');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -12 Td');
     lines.push(`(${sanitizePdfText(model.clientName || 'Client')}) Tj`);
     if (model.clientCompany) {
-        lines.push('0 -12 Td');
+        lines.push('0 -11 Td');
         lines.push(`(${sanitizePdfText(model.clientCompany)}) Tj`);
     }
     if (model.clientEmail) {
-        lines.push('0 -12 Td');
+        lines.push('0 -11 Td');
         lines.push(`(${sanitizePdfText(model.clientEmail)}) Tj`);
     }
     lines.push('ET');
 
+    // ── Table Header ──────────────────────────────────────────────
+    const tableHeaderY = infoBoxTop - infoBoxH - 14;
     lines.push('0.47 0.30 0.91 rg');
-    lines.push(`${left} 590 510 14 re f`);
+    lines.push(`${left} ${tableHeaderY} ${contentW} 14 re f`);
     lines.push('1 1 1 rg');
     lines.push('BT');
-    lines.push('/F1 9 Tf');
-    lines.push(`${left + 8} 594 Td`);
+    lines.push('/F1 8 Tf');
+    lines.push(`${left + 8} ${tableHeaderY + 4} Td`);
     lines.push('(Service Scope) Tj');
-    lines.push(`${left + 240} 0 Td`);
+    lines.push(`280 0 Td`);
     lines.push('(Qty) Tj');
-    lines.push(`${left + 60} 0 Td`);
+    lines.push(`70 0 Td`);
     lines.push('(Amount) Tj');
     lines.push('ET');
 
+    // ── Table Rows ────────────────────────────────────────────────
+    y = tableHeaderY - 6;
     lines.push('0.16 0.14 0.24 rg');
     const items = model.items.slice(0, 12);
-    items.forEach((item) => {
+    items.forEach((item, idx) => {
+        y -= 16;
+        if (idx % 2 === 0) {
+            lines.push('0.97 0.97 0.99 rg');
+            lines.push(`${left} ${y - 3} ${contentW} 16 re f`);
+            lines.push('0.16 0.14 0.24 rg');
+        }
         lines.push('BT');
-        lines.push('/F2 9 Tf');
-        lines.push(`${left + 8} ${y = y - 20} Td`);
-        lines.push(`(${sanitizePdfText(item.description)}) Tj`);
-        lines.push(`${left + 250 - (left + 8)} 0 Td`);
+        lines.push('/F2 8 Tf');
+        lines.push(`${left + 8} ${y} Td`);
+        lines.push(`(${sanitizePdfText(String(item.description).slice(0, 55))}) Tj`);
+        lines.push(`280 0 Td`);
         lines.push(`(${sanitizePdfText(item.quantity)}) Tj`);
-        lines.push(`${left + 330 - (left + 250)} 0 Td`);
+        lines.push(`70 0 Td`);
         lines.push(`(${sanitizePdfText(formatCurrencyValue(item.lineTotal, model.currency))}) Tj`);
         lines.push('ET');
     });
 
-    const summaryTop = y - 42;
-    lines.push('0.96 0.98 1 rg');
-    lines.push(`${left + 300} ${summaryTop - 54} 210 88 re f`);
+    y -= 8;
+    lines.push('0.85 0.85 0.90 RG');
+    lines.push(`${left} ${y} ${contentW} 0 re S`);
+
+    // ── Billing Summary Box ───────────────────────────────────────
+    y -= 14;
+    const summaryBoxH = 88;
+    lines.push('0.96 0.97 1 rg');
+    lines.push(`${left + 280} ${y - summaryBoxH} 230 ${summaryBoxH} re f`);
     lines.push('0.14 0.12 0.22 rg');
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left + 312} ${summaryTop + 20} Td`);
+    lines.push('/F1 9 Tf');
+    lines.push(`${left + 290} ${y - 4} Td`);
     lines.push('(Billing Summary) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -16 Td');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -14 Td');
     lines.push(`(Subtotal: ${sanitizePdfText(formatCurrencyValue(model.subtotal, model.currency))}) Tj`);
-    lines.push('0 -14 Td');
-    lines.push(`(Tax: ${sanitizePdfText(formatCurrencyValue(model.taxAmount, model.currency))}) Tj`);
-    lines.push('0 -14 Td');
-    lines.push(`(Total: ${sanitizePdfText(formatCurrencyValue(model.total, model.currency))}) Tj`);
+    lines.push('0 -12 Td');
+    lines.push(`(Tax (${model.taxPct || 0}%): ${sanitizePdfText(formatCurrencyValue(model.taxAmount, model.currency))}) Tj`);
+    lines.push('/F1 10 Tf');
+    lines.push('0 -18 Td');
+    lines.push(`(TOTAL DUE: ${sanitizePdfText(formatCurrencyValue(model.total, model.currency))}) Tj`);
     lines.push('ET');
 
-    const notesY = summaryTop - 120;
+    const paymentY = y - summaryBoxH - 20;
     lines.push('0.18 0.16 0.28 rg');
     lines.push('BT');
-    lines.push('/F1 10 Tf');
-    lines.push(`${left} ${notesY} Td`);
-    lines.push('(Payment Terms) Tj');
-    lines.push('/F2 9 Tf');
-    lines.push('0 -16 Td');
-    lines.push('(1. Payment is due as per the agreed commercial terms.) Tj');
-    lines.push('0 -12 Td');
-    lines.push('(2. Work may begin or continue after payment confirmation where applicable.) Tj');
+    lines.push('/F1 9 Tf');
+    lines.push(`${left} ${paymentY} Td`);
+    lines.push('(Payment Details) Tj');
+    lines.push('/F2 8 Tf');
+    lines.push('0 -14 Td');
     if (model.paymentUrl) {
-        lines.push('0 -16 Td');
         lines.push(`(Payment Link: ${sanitizePdfText(model.paymentUrl).slice(0, 90)}) Tj`);
+    } else {
+        lines.push('(Please pay securely via Nexus OS Agency portal.) Tj');
     }
     lines.push('ET');
 
-    try {
-        const logo = loadPngForPdf(getLogoAssetPath());
-        return buildPdfWithEmbeddedLogo(lines.join('\n'), logo);
-    } catch (error) {
-        return buildPdfBufferFromStream(lines.join('\n'));
-    }
+    return buildPdfBufferFromStream(lines.join('\n'));
 }
 
 module.exports = {

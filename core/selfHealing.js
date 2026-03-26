@@ -46,6 +46,14 @@ class SelfHealingService {
             };
         }
 
+        if (text.includes('empty response') || text.includes('invalid parameter') || text.includes('can\'t read files')) {
+            return {
+                type: 'tool_logic_error',
+                severity: 'high',
+                summary: 'The tool reached the API but failed due to a logic or path mismatch. Diagnosis of tool source code is recommended.'
+            };
+        }
+
         if (text.includes('approval required')) {
             return {
                 type: 'approval_gate',
@@ -84,6 +92,12 @@ class SelfHealingService {
                     strategy: 'boss_repair_mode',
                     safe: false,
                     message: 'The task needs a missing credential or setup value before it can continue.'
+                };
+            case 'tool_logic_error':
+                return {
+                    strategy: 'analyze_and_patch',
+                    safe: false,
+                    message: 'A logic or path error was detected. Analyze the tool source code, apply a precision patch if a bug is found, and retry.'
                 };
             default:
                 return null;

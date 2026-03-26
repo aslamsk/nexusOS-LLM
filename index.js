@@ -17,6 +17,7 @@ const EmailTool = require('./tools/email');
 const WhatsAppTool = require('./tools/whatsapp');
 const MarketingUtilsTool = require('./tools/marketingUtils');
 const MemoryService = require('./core/memory');
+const ProactiveScannerTool = require('./tools/proactiveScanner');
 const SquadSystem = require('./core/squad');
 const LLMService = require('./core/llm');
 const GovernanceService = require('./core/governance');
@@ -73,6 +74,8 @@ class NexusOrchestrator {
             generateSocialCalendar: MarketingUtilsTool.generateSocialCalendar.bind(MarketingUtilsTool),
             saveMemory: MemoryService.saveMemory.bind(MemoryService),
             searchMemory: MemoryService.searchMemory.bind(MemoryService),
+            scanNiche: ProactiveScannerTool.scanNiche.bind(ProactiveScannerTool),
+            proposeCampaign: ProactiveScannerTool.proposeCampaign.bind(ProactiveScannerTool),
             delegateToAgent: SquadSystem.delegate.bind(SquadSystem)
         };
         this.llmService = new LLMService();
@@ -96,8 +99,43 @@ class NexusOrchestrator {
         this.currentSessionId = null;
         this.currentMissionMode = 'discuss';
         this.manualMissionMode = null;
+        this.currentWorkflowState = null;
+        this.isStopped = false;
+    }
+
+    /**
+     * Stop the current execution loop immediately.
+     */
+    stop() {
+        this.isStopped = true;
+        this.isRunning = false;
+        this.isWaitingForInput = false;
+        this.pendingApproval = null;
+        this.pendingRepair = null;
+        this.pendingRequirement = null;
+        
+        // Signal tools to stop
+        if (this.llmService && typeof this.llmService.stop === 'function') {
+            this.llmService.stop();
+        }
+        
+        // Note: BrowserTool stop is handled as a promise, but we mark the flag first
+        this._finishRun('stopped');
+        this.onUpdate({ type: 'thought', message: "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack." });
+    }
+
+    /**
+     * Reset the internal state for a fresh mission start.
+     */
+    reset() {
+        this.stop();
+        this.context = [{ role: 'system', content: this.systemPrompt }];
+        this.currentClientId = null;
+        this.currentMarketingWorkflow = null;
         this.currentOrganicMetaDraft = null;
         this.currentWorkflowState = null;
+        this.isStopped = false; // Prepare for next use
+        this.onUpdate({ type: 'thought', message: "✨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives." });
     }
 
     /**
@@ -216,9 +254,6 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         this.stepCount = 0;
 
         try {
-            if (detectedCommercialQuote && await this._handleCommercialQuoteShortcut(userRequest)) {
-                return;
-            }
             await this._runLoop(userRequest);
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
@@ -472,21 +507,6 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         return true;
     }
 
-    stop() {
-        this.isStopped = true;
-        this.isRunning = false;
-        this.isWaitingForInput = false;
-        this.pendingApproval = null;
-        this.pendingRepair = null;
-        this.pendingRequirement = null;
-        this.llmService?.stop?.();
-        Promise.resolve()
-            .then(() => BrowserTool.stop?.())
-            .catch((error) => console.warn(`[Orchestrator] Browser stop failed: ${error.message}`));
-        this._finishRun('stopped');
-        this.onUpdate({ type: 'error', message: 'Mission forcefully terminated by the Boss.' });
-    }
-
     _formatToolResult(result) {
         if (typeof result === 'string') return result;
         if (result === null || result === undefined) return String(result);
@@ -557,12 +577,9 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             parts.push('### BROWSER ACTION RULES');
             parts.push('- In PLAN mode for browser work, first analyze the live page state before attempting form entry or clicks.');
             parts.push('- Preferred browser sequence: `open` -> `waitForNetworkIdle` or `waitForSelector` -> `getMarkdown` -> `extractActiveElements` -> choose target -> interact.');
-            parts.push('- Supported browser navigation action is `open`, not `navigate`.');
-            parts.push('- Supported field actions are `type`, `clearAndType`, `focus`, `click`, `clickText`, `keyPress`, `waitForSelector`, `waitForNetworkIdle`, `extract`, `getMarkdown`, and `extractActiveElements`.');
-            parts.push('- For login/setup flows, ask the Boss for exact missing fields like email, password, OTP, account choice, or button confirmation instead of guessing.');
-            parts.push('- Use `waitForSelector` or `waitForNetworkIdle` to confirm page state before the next step.');
+            parts.push('- Supported field actions: `type`, `clearAndType`, `focus`, `click`, `clickText`, `keyPress`, `hover`, `scroll`, `extract`, `getMarkdown`, `extractActiveElements`.');
+            parts.push("- **CRITICAL**: After any 'click', 'clickText', or 'type' action, you MUST immediately call 'getMarkdown' or 'extractActiveElements' again to see the 'Visual State' of the page. Do not assume the page hasn't changed.");
             parts.push('- If selector targeting is unclear, use `extractActiveElements` or `getMarkdown` before proceeding.');
-            parts.push('- If a browser interaction fails, immediately re-scan with `getMarkdown` and `extractActiveElements`, then retry using the refreshed page state instead of asking the Boss too early.');
         }
 
         if (/\bquiz\b|\bquestion\b|\bsubmit\b/.test(value)) {
@@ -594,8 +611,13 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         const monthCount = /(?:one|1)\s*month/i.test(value) ? 1 : numberFrom(/(\d+)\s*months?/i, 0);
         const inferredWeeks = monthCount > 0 ? monthCount * 4 : numberFrom(/(\d+)\s*weeks?/i, 0);
         const wantsAds = /meta|facebook|instagram|google ads?|linkedin|paid ads?|digital marketing|promotion|promot/i.test(value);
+        const weeklyAds = numberFrom(/(\d+)\s*ads?\s*\/\s*week/i, 0) || numberFrom(/(\d+)\s*ads?\s*per\s*week/i, 0);
+        const duration = numberFrom(/(\d+)\s*weeks?/i, 0) || (monthCount ? monthCount * 4 : 4);
+
         return {
             campaignName: 'Agency growth package',
+            weeklyAdsCount: weeklyAds,
+            durationWeeks: duration,
             bannerCount,
             carouselCount: numberFrom(/(\d+)\s*carousel/i, 0),
             videoCount: numberFrom(/(\d+)\s*video/i, 0),
@@ -603,15 +625,15 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             tagPackages: /tags?|keywords?|hashtags?/i.test(value) ? Math.max(1, numberFrom(/(\d+)\s*(?:tag|keyword|hashtag)/i, 1)) : 0,
             reportCount: /report/i.test(value) ? 1 : 0,
             auditCount: /audit/i.test(value) ? 1 : 0,
-            metaAdsWeeks: /meta|facebook|instagram|digital marketing|paid ads?|promotion|promot/i.test(value) ? (inferredWeeks || 4) : 0,
-            googleAdsWeeks: /google/i.test(value) ? (inferredWeeks || 4) : 0,
-            linkedinAdsWeeks: /linkedin/i.test(value) ? (inferredWeeks || 4) : 0,
+            metaAdsWeeks: /meta|facebook|instagram|digital marketing|paid ads?|promotion|promot/i.test(value) ? duration : 0,
+            googleAdsWeeks: /google/i.test(value) ? duration : 0,
+            linkedinAdsWeeks: /linkedin/i.test(value) ? duration : 0,
             websiteProject: /website|landing page|web development/i.test(value),
             websitePages: /website|landing page|web development/i.test(value) ? numberFrom(/(\d+)\s*pages?/i, 1) : 1,
             adSpendMonthly: numberFrom(/(?:ad spend|budget)[^\d]*(\d+(?:\.\d+)?)/i, 0),
             profitMarginPct: 35,
             taxPct: 0,
-            currency: /(?:rs\.|inr|₹)/i.test(value) ? 'INR' : 'USD',
+            currency: /(?:usd|\$|dollars?)/i.test(value) ? 'USD' : 'INR',
             includeStrategyRetainer: true,
             notes: `${value}${wantsAds && /client wish|client choice|as per client wish/i.test(value) ? '\nAd spend is excluded and will be decided by the client.' : ''}`
         };
@@ -658,7 +680,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         ].filter(Boolean).join('\n');
         fs.writeFileSync(mdPath, markdown, 'utf8');
         fs.writeFileSync(csvPath, CommercialDocs.buildQuoteCsv(model), 'utf8');
-        fs.writeFileSync(pdfPath, CommercialDocs.buildQuotePdfBuffer(model));
+        fs.writeFileSync(pdfPath, CommercialDocs.buildQuotePdfBuffer(model, plan));
         const folderName = path.basename(this.taskDir);
         return {
             ok: true,
@@ -774,10 +796,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     async _runLoop(originalRequest) {
         let isTaskCompleted = false;
         for (; this.stepCount < this.maxSteps; this.stepCount++) {
-            if (this.isStopped) {
-                this.isStopped = false;
-                break;
-            }
+            if (this.isStopped) break;
             this.onUpdate({ type: 'step', message: `--- Step ${this.stepCount + 1} ---` });
             
             // ─── Dynamic Rate Limit Safety ──────────────────────────────────
@@ -787,10 +806,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             if (quotaMode === 'HIGH') delay = 1000;
             
             await new Promise(r => setTimeout(r, delay));
-            if (this.isStopped) {
-                this.isStopped = false;
-                break;
-            }
+            if (this.isStopped) break;
 
             // Inject stateful tracking context and Dynamic Tool Rules
             let stateContext = "";
@@ -819,10 +835,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             // Ask LLM what to do next
             if (this.currentRun) this.currentRun.llmCalls += 1;
             const response = await this.llmService.generateResponse(this.context, { mode: this.currentMissionMode });
-            if (this.isStopped) {
-                this.isStopped = false;
-                break;
-            }
+            if (this.isStopped) break;
             if (this.currentRun) {
                 const previousProvider = this.currentRun.lastLlmProvider;
                 if (response.provider) this.currentRun.lastLlmProvider = response.provider;
@@ -895,10 +908,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             }
 
             if (response.toolCall) {
-                if (this.isStopped) {
-                    this.isStopped = false;
-                    break;
-                }
+                if (this.isStopped) break;
                 this.onUpdate({
                     type: 'action',
                     name: response.toolCall.name,
@@ -925,10 +935,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
                 // Execute the tool
                 let result = await this.dispatchTool(response.toolCall);
-                if (this.isStopped) {
-                    this.isStopped = false;
-                    break;
-                }
+                if (this.isStopped) break;
                 let resultString = this._formatToolResult(result);
 
                 // AUTO-RECOVERY: If a browser interaction fails, automatically scan for elements
@@ -1456,6 +1463,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 case 'analyzeMarketingPage': return await this.tools.analyzeMarketingPage(args);
                 case 'scanCompetitors': return await this.tools.scanCompetitors(args);
                 case 'generateSocialCalendar': return await this.tools.generateSocialCalendar(args);
+                case 'scanNiche': return await this.tools.scanNiche(args.niche);
+                case 'proposeCampaign': return await this.tools.proposeCampaign(args.niche, args.clientName);
                 case 'saveMemory': return await this.tools.saveMemory(args.content, args.category);
                 case 'searchMemory': return await this.tools.searchMemory(args.query);
                 case 'delegateToAgent': return await this.tools.delegateToAgent(args.agentType, args.task);
@@ -1610,6 +1619,47 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             const waitResult = await this.tools.browserAction({ action: 'waitForNetworkIdle', timeout: 5000 });
             this.context.push({ role: 'tool', name: 'browserAction', content: waitResult });
             return;
+        }
+
+        if (playbook.strategy === 'analyze_and_patch') {
+            const toolName = toolCall.name;
+            this.onUpdate({ type: 'thought', message: `🔍 Sovereign Protocol: A logic error was detected in tool [${toolName}]. Searching Fix Library...` });
+            
+            // 1. First, search the Fix Library for proven solutions
+            const blueprints = await MemoryService.findFixBlueprints(toolName, classification.type);
+            let blueprintContext = "";
+            if (blueprints && blueprints.length > 0) {
+                this.onUpdate({ type: 'thought', message: `📚 Fix Library: Found ${blueprints.length} proven solution(s) for [${toolName}].` });
+                blueprintContext = `### PROVEN FIX BLUEPRINTS FOUND:
+${blueprints.map((b, idx) => `[Blueprint ${idx + 1}]: ${b.description}\nSuggested Patch:\n${b.patch}`).join('\n\n')}
+
+INSTRUCTION: A proven fix exists for this error. Use 'replaceFileContent' to apply the most relevant blueprint above, then retry.
+\n`;
+            }
+
+            // 2. Map tool names to filenames
+            let toolFileName = `${toolName}.js`;
+            if (toolName === 'browserAction') toolFileName = 'browser.js';
+            if (toolName === 'readFile' || toolName === 'writeFile' || toolName === 'listDir' || toolName === 'replaceFileContent') toolFileName = 'fileSystem.js';
+            
+            const toolFile = path.join(__dirname, 'tools', toolFileName);
+            if (fs.existsSync(toolFile)) {
+                const toolSource = fs.readFileSync(toolFile, 'utf8');
+                this.context.push({ 
+                    role: 'tool', 
+                    name: toolName, 
+                    content: `[SYSTEM DIAGNOSTIC] A logic/path error occurred.
+${blueprintContext}
+SOVEREIGN ENGINEERING PROTOCOL ACTIVATED:
+1. Analyze the tool source below.
+2. If no blueprint above fits, identify the root cause and apply a new precision fix.
+3. CRITICAL: If you create a NEW fix, you MUST also use 'saveMemory' to store a 'Fix Blueprint' with a clear description so this can be used later.
+
+TOOL SOURCE [${toolFileName}]:
+${toolSource}` 
+                });
+                return;
+            }
         }
 
         if (playbook.strategy === 'boss_repair_mode') {

@@ -60,30 +60,24 @@ class GovernanceService {
             }
         }
 
-        if (name === 'replaceFileContent') {
+        if (name === 'replaceFileContent' || name === 'multiReplaceFileContent') {
+            const target = String(args.absolutePath || '');
+            const isTool = target.includes('/tools/') || target.includes('\\tools\\');
+            const isCore = !isTool && !target.toLowerCase().includes('outputs');
+            
             return {
                 requiresApproval: true,
-                reason: 'Replacing source file content can alter core behavior.',
-                preview: `Replace lines ${args.startLine}-${args.endLine} in ${args.absolutePath}`,
+                risk: isCore ? 'CRITICAL' : 'MODERATE',
+                reason: isCore 
+                    ? 'SECURITY ALERT: Modifying a CORE system file can break fundamental OS behavior or security.'
+                    : 'SOVEREIGN REPAIR: Modifying a tool file to fix a logic blocker.',
+                preview: `Target: ${path.basename(target)}\nAction: ${name === 'multiReplaceFileContent' ? 'Multi-section patch' : 'Line replacement'}`,
                 details: {
-                    type: 'replace_file_content',
-                    absolutePath: args.absolutePath,
-                    startLine: args.startLine,
-                    endLine: args.endLine,
-                    replacementPreview: String(args.replacementContent || '').slice(0, 300)
-                }
-            };
-        }
-
-        if (name === 'multiReplaceFileContent') {
-            return {
-                requiresApproval: true,
-                reason: 'Multi-replace can alter multiple sections of a source file.',
-                preview: `Multi-replace ${Array.isArray(args.chunks) ? args.chunks.length : 0} sections in ${args.absolutePath}`,
-                details: {
-                    type: 'multi_replace_file_content',
-                    absolutePath: args.absolutePath,
-                    replacementCount: Array.isArray(args.chunks) ? args.chunks.length : 0
+                    type: 'code_evolution',
+                    absolutePath: target,
+                    isCore,
+                    isTool,
+                    replacementPreview: String(args.replacementContent || args.chunks?.[0]?.replacementContent || '').slice(0, 300)
                 }
             };
         }

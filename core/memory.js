@@ -144,6 +144,49 @@ class MemoryService {
             return [];
         }
     }
+
+    /**
+     * Store a descriptive fix blueprint for a specific tool and classification.
+     */
+    async saveFixBlueprint(tool, classification, patch, description) {
+        if (!db) return "Error: Firebase not initialized.";
+        try {
+            await db.collection('fix_library').add({
+                tool,
+                classification,
+                patch, // The replacement code or chunk
+                description, // Explaining WHY this fix works
+                successCount: 1,
+                lastUsed: new Date(),
+                timestamp: new Date()
+            });
+            return "SUCCESS: Fix blueprint stored in Library.";
+        } catch (e) {
+            return `Error saving fix blueprint: ${e.message}`;
+        }
+    }
+
+    /**
+     * Retrieve the most successful fix blueprints for a tool failure.
+     */
+    async findFixBlueprints(tool, classification) {
+        if (!db) return [];
+        try {
+            const snapshot = await db.collection('fix_library')
+                .where('tool', '==', tool)
+                .where('classification', '==', classification)
+                .orderBy('successCount', 'desc')
+                .limit(3)
+                .get();
+            
+            const results = [];
+            snapshot.forEach(doc => results.push({ id: doc.id, ...doc.data() }));
+            return results;
+        } catch (e) {
+            console.error('[Memory] Fix blueprint lookup failed:', e.message);
+            return [];
+        }
+    }
 }
 
 module.exports = new MemoryService();

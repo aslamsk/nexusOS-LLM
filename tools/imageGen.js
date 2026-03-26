@@ -9,7 +9,7 @@ const path = require('path');
  */
 class ImageGenTool {
     constructor() {
-        this.modelName = 'imagen-4.0-generate-001';
+        this.modelName = 'imagen-3.0-generate-001';
         this.ai = null;
         this.activeApiKey = null;
     }

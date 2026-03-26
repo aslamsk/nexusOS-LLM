@@ -59,7 +59,7 @@ const agencyQuoteDraft = ref({
   adSpendMonthly: 0,
   profitMarginPct: 35,
   taxPct: 0,
-  currency: 'USD',
+  currency: 'INR',
   includeStrategyRetainer: true,
   notes: ''
 })
@@ -69,7 +69,7 @@ const quoteDraft = ref({
   items: [{ serviceCode: 'banner_design', quantity: 1 }],
   profitMarginPct: 35,
   taxPct: 0,
-  currency: 'USD',
+  currency: 'INR',
   notes: ''
 })
 const isAddingClient = ref(false)
@@ -94,6 +94,54 @@ const alertsEnabled = ref(localStorage.getItem('nexus_alerts_enabled') === 'true
 const selectedQuotePreset = ref('custom')
 const setupDoctor = ref({ summary: { ready: true, status: 'ready', message: '' }, blockers: [], recommendations: [], providers: [] })
 const setupPlaybooks = ref([])
+const proactiveProposals = ref([])
+const pnlReport = ref({ totalRevenue: 0, totalExpenses: 0, netProfit: 0, profitMargin: 0, expensesByProvider: {}, transactionCount: 0, recentTransactions: [] })
+const pnlPeriod = ref('all')
+const proactiveScanNiche = ref('')
+const isVoiceListening = ref(false)
+let voiceRecognition = null
+
+function startVoiceInput() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    showToast('Voice not supported in this browser', 'error'); return
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+  voiceRecognition = new SpeechRecognition()
+  voiceRecognition.continuous = false
+  voiceRecognition.interimResults = false
+  voiceRecognition.lang = 'en-US'
+  voiceRecognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript
+    promptInput.value = (promptInput.value ? promptInput.value + ' ' : '') + transcript
+    isVoiceListening.value = false
+    showToast('Voice captured: ' + transcript.slice(0, 50), 'success')
+  }
+  voiceRecognition.onerror = () => { isVoiceListening.value = false }
+  voiceRecognition.onend = () => { isVoiceListening.value = false }
+  isVoiceListening.value = true
+  voiceRecognition.start()
+}
+
+function stopVoiceInput() {
+  if (voiceRecognition) voiceRecognition.stop()
+  isVoiceListening.value = false
+}
+
+async function loadPnlReport() {
+  try {
+    const data = await fetchJson(`/api/finance/pnl?period=${pnlPeriod.value}`)
+    if (data && !data.error) pnlReport.value = data
+  } catch (e) { console.warn('PnL load failed:', e) }
+}
+
+async function runProactiveScan() {
+  if (!proactiveScanNiche.value.trim()) return showToast('Enter a niche to scan, Boss', 'error')
+  showToast('Scanning: ' + proactiveScanNiche.value, 'success')
+  try {
+    await fetchJson('/api/proactive/propose', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ niche: proactiveScanNiche.value }) })
+  } catch (e) { showToast('Scan failed: ' + e.message, 'error') }
+}
+
 
 const AGENCY_QUOTE_PRESETS = {
   custom: {
@@ -930,7 +978,7 @@ async function submitTask() {
       chatHistory.value.push({ sender: 'nexus_result', text: `Setup Doctor: ${summary}` })
       showToast(`Setup Doctor found ${blockers.length} relevant blocker${blockers.length > 1 ? 's' : ''}`, 'error')
     }
-  } catch (_) {}
+  } catch (_) { }
   const budgetApproved = await ensureBudgetApproval(selectedClientForChat.value || null)
   if (!budgetApproved) {
     showToast('Mission paused due to budget limit', 'error')
@@ -981,7 +1029,7 @@ function changeView(view) {
   activeView.value = view
   isMobileNavOpen.value = false
   if (view === 'clients') loadClients()
-  if (view === 'finance') { loadPricingCatalog(); loadQuotes(); loadInvoices(); if (selectedFinanceClient.value) loadBudget() }
+  if (view === 'finance') { loadPricingCatalog(); loadQuotes(); loadInvoices(); loadPnlReport(); if (selectedFinanceClient.value) loadBudget() }
   if (view === 'marketing') { loadMarketingWorkflows(); loadMarketingBriefs(selectedClientForChat.value || selectedFinanceClient.value || ''); loadMarketingOutputs(selectedClientForChat.value || selectedFinanceClient.value || '') }
   if (view === 'tools') loadToolsDashboard()
   if (view === 'setup') loadSetupCenter()
@@ -1141,8 +1189,14 @@ onMounted(async () => {
     if (data?.activeRun) missionStatus.value = 'active'
     else if (data?.blocker || data?.pendingApproval || data?.pendingRepair || data?.queue?.activeWaitingJobId) missionStatus.value = 'paused'
   })
+  socket.on('proactive_proposal', (data) => {
+    proactiveProposals.value.unshift({ ...data, receivedAt: new Date().toISOString() })
+    proactiveProposals.value = proactiveProposals.value.slice(0, 20)
+    if (data.type === 'new_client_onboarding') notifyBossUpdate('New Client!', data.message || 'A client has self-onboarded.')
+    else notifyBossUpdate('Proactive Proposal', data.proposal?.slice(0, 100) || 'Market intelligence update.')
+  })
   clientKeyLabels.value = (await fetchJson('/api/client-key-labels')).labels || {}
-  await Promise.allSettled([loadClients(), loadToolsDashboard(), loadSetupCenter(), loadSessionCatalog(), loadSystemHealth(), loadGlobalUsageSummary()])
+  await Promise.allSettled([loadClients(), loadToolsDashboard(), loadSetupCenter(), loadSessionCatalog(), loadSystemHealth(), loadGlobalUsageSummary(), loadPnlReport()])
 })
 
 onBeforeUnmount(() => {
@@ -1151,6 +1205,7 @@ onBeforeUnmount(() => {
   socket.off('nexus_log')
   socket.off('outputs_list')
   socket.off('mission_state')
+  socket.off('proactive_proposal')
 })
 </script>
 
@@ -1167,23 +1222,34 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="sidebar-stack">
-        <button v-for="item in navItems" :key="item.view" class="nav-item" :class="{ active: activeView === item.view }" @click="changeView(item.view)">
+        <button v-for="item in navItems" :key="item.view" class="nav-item" :class="{ active: activeView === item.view }"
+          @click="changeView(item.view)">
           <span class="nav-title">{{ item.label }}</span><span class="nav-sub">{{ item.eyebrow }}</span>
         </button>
       </div>
       <div class="sidebar-card"><span class="tiny-label">System - </span>
-        <strong>{{ systemHealth.status }}</strong> <br><span class="tiny-copy">Firestore {{ systemHealth.firestore ? 'connected' : 'offline' }}</span></div>
+        <strong>{{ systemHealth.status }}</strong> <br><span class="tiny-copy">Firestore {{ systemHealth.firestore ?
+          'connected' : 'offline' }}</span>
+      </div>
       <div class="sidebar-card"> <br>
-        <span class="tiny-label">Context - </span><strong>{{ activeClientName }}</strong> <br><span class="tiny-copy">Session {{ sessionId || 'pending' }}</span></div>
+        <span class="tiny-label">Context - </span><strong>{{ activeClientName }}</strong> <br><span
+          class="tiny-copy">Session {{ sessionId || 'pending' }}</span>
+      </div>
     </aside>
 
     <main class="workspace" :class="{ 'chat-mode': activeView === 'chat' }">
       <header class="topbar">
-        <div><p class="eyebrow">{{ currentViewMeta.eyebrow }}</p><h1>{{ currentViewMeta.label }}</h1></div>
+        <div>
+          <p class="eyebrow">{{ currentViewMeta.eyebrow }}</p>
+          <h1>{{ currentViewMeta.label }}</h1>
+        </div>
         <div class="action-row topbar-actions">
-          <button class="ghost desktop-only" @click="isSidebarCollapsed = !isSidebarCollapsed">{{ isSidebarCollapsed ? 'Show Left' : 'Hide Left' }}</button>
-          <button class="ghost desktop-only" @click="isRailCollapsed = !isRailCollapsed">{{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}</button>
-          <button v-if="!isRailCollapsed" class="ghost desktop-only" @click="isSummaryVisible = !isSummaryVisible">{{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}</button>
+          <button class="ghost desktop-only" @click="isSidebarCollapsed = !isSidebarCollapsed">{{ isSidebarCollapsed ?
+            'Show Left' : 'Hide Left' }}</button>
+          <button class="ghost desktop-only" @click="isRailCollapsed = !isRailCollapsed">
+            {{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}</button>
+          <button v-if="!isRailCollapsed" class="ghost desktop-only" @click="isSummaryVisible = !isSummaryVisible">{{
+            isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}</button>
           <button class="ghost mobile-secondary" @click="enableNotifications">Alerts</button>
           <button class="ghost mobile-secondary" @click="toggleTheme">{{ theme === 'dark' ? 'Light' : 'Dark' }}</button>
           <button class="ghost mobile-only" @click="isMobileNavOpen = !isMobileNavOpen">Menu</button>
@@ -1192,110 +1258,173 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <section v-if="activeView !== 'chat'" class="hero-grid compact-bar" :class="{ expanded: isRailCollapsed, docked: !isRailCollapsed }">
+      <section v-if="activeView !== 'chat'" class="hero-grid compact-bar"
+        :class="{ expanded: isRailCollapsed, docked: !isRailCollapsed }">
         <article class="hero-card">
           <span class="tiny-label">Mission posture</span>
-          <h2>{{ missionStatus === 'active' ? 'Operation in progress' : missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}</h2>
-          <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage from one place.</p>
-          <div class="pill-row"><span class="pill">{{ missionSummary.totals.missions }} missions</span><span class="pill">{{ missionSummary.totals.successRate }}% success</span><span class="pill">{{ activeIntegrationCount }} integrations</span><span class="pill">{{ dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est. cost</span></div>
+          <h2>
+            {{ missionStatus === 'active' ? 'Operation in progress' : missionStatus === 'paused' ? 'Awaiting Boss input'
+              : 'Ready for next mission' }}</h2>
+          <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage from one
+            place.</p>
+          <div class="pill-row"><span class="pill">{{ missionSummary.totals.missions }} missions</span><span
+              class="pill">{{ missionSummary.totals.successRate }}% success</span><span class="pill">{{
+                activeIntegrationCount }} integrations</span><span class="pill">{{
+                dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est. cost</span></div>
         </article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{ missionSummary.totals.toolCalls }}</strong><p>Total calls</p></article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{ missionSummary.queue?.totals?.queued || 0 }}</strong><p>Waiting missions</p></article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{ missionSummary.totals.llmCalls || 0 }}</strong><p>LLM calls</p></article>
+        <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
+          missionSummary.totals.toolCalls }}</strong>
+          <p>Total calls</p>
+        </article>
+        <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
+          missionSummary.queue?.totals?.queued || 0 }}</strong>
+          <p>Waiting missions</p>
+        </article>
+        <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
+          missionSummary.totals.llmCalls || 0 }}</strong>
+          <p>LLM calls</p>
+        </article>
       </section>
 
       <section v-if="activeView === 'chat'" class="chat-layout">
         <div class="panel panel-chat">
           <div class="panel-head">
-            <div><span class="tiny-label">Live mission</span><h3>Boss stream</h3></div>
-                      <div class="stage-strip">
-            <div class="stage-card">
-              <span class="tiny-label">Stage</span>
-              <strong>{{ currentStage.label }}</strong>
+            <div><span class="tiny-label">Live mission</span>
+              <h3>Boss stream</h3>
             </div>
-            <div class="stage-card stage-detail">
-              <span class="tiny-label">Status</span>
-              <strong>{{ currentStage.detail }}</strong>
+            <div class="stage-strip">
+              <div class="stage-card">
+                <span class="tiny-label">Stage</span>
+                <strong>{{ currentStage.label }}</strong>
+              </div>
+              <div class="stage-card stage-detail">
+                <span class="tiny-label">Status</span>
+                <strong>{{ currentStage.detail }}</strong>
+              </div>
+              <div class="stage-card">
+                <span class="tiny-label">Run State</span>
+                <strong>{{ missionStatus === 'active' ? 'Mission running' : missionStatus === 'paused' ? 'Awaiting Boss'
+                  : 'Standing by' }}</strong>
+              </div>
             </div>
-            <div class="stage-card">
-              <span class="tiny-label">Run State</span>
-              <strong>{{ missionStatus === 'active' ? 'Mission running' : missionStatus === 'paused' ? 'Awaiting Boss' : 'Standing by' }}</strong>
-            </div>
-          </div>
-            <div class="context-box"><label>Context</label><select v-model="selectedClientForChat"><option value="">System Default</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div>
+            <div class="context-box"><label>Context</label><select v-model="selectedClientForChat">
+                <option value="">System Default</option>
+                <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
+              </select></div>
           </div>
           <div class="mini-card engine-card" :class="engineThemeClass">
-            <div class="run-head"><strong>Current engine</strong><span class="badge success">{{ llmStatus.provider }}</span></div>
+            <div class="run-head"><strong>Current engine</strong><span class="badge success">{{ llmStatus.provider
+                }}</span></div>
             <p class="muted">{{ currentEngine }}</p>
             <p class="muted">LLM: {{ llmStatus.provider }} / {{ llmStatus.model }}</p>
             <p class="muted">Mode routing: {{ modeRoutingHint }}</p>
           </div>
 
           <div v-if="planReadyApproval" class="mini-card plan-ready-card">
-            <div class="run-head"><strong>Plan Ready</strong><span class="badge warning">{{ planReadyApproval.currentMode }} -> {{ planReadyApproval.nextMode }}</span></div>
-            <p class="muted">Nexus is ready to move from {{ planReadyApproval.currentMode }} to {{ planReadyApproval.nextMode }} for <strong>{{ planReadyApproval.tool }}</strong>.</p>
+            <div class="run-head"><strong>Plan Ready</strong><span class="badge warning">{{
+              planReadyApproval.currentMode }} -> {{ planReadyApproval.nextMode }}</span></div>
+            <p class="muted">Nexus is ready to move from {{ planReadyApproval.currentMode }} to {{
+              planReadyApproval.nextMode }} for <strong>{{ planReadyApproval.tool }}</strong>.</p>
             <p class="muted">Likely engine: {{ planReadyApproval.likelyEngine }}</p>
             <p class="muted">Estimated cost band: {{ planReadyApproval.estimatedCostBand }}</p>
             <div v-if="planReadyApproval.estimatedTools.length" class="pill-row">
               <span v-for="tool in planReadyApproval.estimatedTools" :key="tool" class="pill">{{ tool }}</span>
             </div>
             <div class="action-row">
-              <button class="primary subtle" @click="useReplyChip('yes')">{{ planReadyApproval.nextMode === 'EXECUTE' ? 'Start Execution' : 'Start Planning' }}</button>
-              <button class="ghost" @click="useReplyChip('no')">{{ planReadyApproval.nextMode === 'EXECUTE' ? 'Stay In Plan' : 'Stay In Discuss' }}</button>
+              <button class="primary subtle" @click="useReplyChip('yes')">{{ planReadyApproval.nextMode === 'EXECUTE' ?
+                'Start Execution' : 'Start Planning' }}</button>
+              <button class="ghost" @click="useReplyChip('no')">
+                {{ planReadyApproval.nextMode === 'EXECUTE' ? 'Stay In Plan' : 'Stay In Discuss' }}</button>
             </div>
           </div>
 
           <div v-if="currentBlocker" class="mini-card">
-            <div class="run-head"><strong>{{ currentBlocker.title }}</strong><span class="badge warning">Action needed</span></div>
+            <div class="run-head"><strong>{{ currentBlocker.title }}</strong><span class="badge warning">Action
+                needed</span></div>
             <p class="muted">{{ currentBlocker.detail }}</p>
           </div>
           <div v-if="suggestedReplyChips.length" class="chip-row">
-            <button v-for="chip in suggestedReplyChips" :key="chip.label + chip.value" class="chip-button" @click="useReplyChip(chip.value)">{{ chip.label }}</button>
+            <button v-for="chip in suggestedReplyChips" :key="chip.label + chip.value" class="chip-button"
+              @click="useReplyChip(chip.value)">{{ chip.label }}</button>
           </div>
           <div ref="chatContainer" class="chat-stream">
             <div v-for="(msg, index) in chatHistory" :key="index" class="message-row" :class="msg.sender">
-              <div class="message-card" :class="msg.sender"><span class="tiny-label">{{ msg.sender.startsWith('nexus') ? 'Nexus' : 'Boss' }}</span><div class="message-text" v-html="formatMessage(msg.text)"></div></div>
+              <div class="message-card" :class="msg.sender"><span class="tiny-label">{{ msg.sender.startsWith('nexus') ?
+                'Nexus' : 'Boss' }}</span>
+                <div class="message-text" v-html="formatMessage(msg.text)"></div>
+              </div>
             </div>
           </div>
           <div class="composer">
-            <div class="action-row"><button class="ghost" @click="fileInput.click()">Attach File</button><input ref="fileInput" type="file" class="hidden-input" @change="handleFileUpload" /></div>
-            <textarea v-model="promptInput" placeholder="Describe the mission, expected result, and constraints." @keydown.enter.exact.prevent="submitTask"></textarea>
-            <div class="action-row"><button v-if="isWorking || missionStatus === 'paused'" class="danger" @click="terminateTask">Stop</button><button v-else class="primary" @click="submitTask">Launch</button></div>
+            <div class="action-row"><button class="ghost" @click="fileInput.click()">Attach File</button><button :class="isVoiceListening ? 'danger' : 'ghost'" @click="isVoiceListening ? stopVoiceInput() : startVoiceInput()">{{ isVoiceListening ? '🔴 Listening...' : '🎤 Voice' }}</button><input
+                ref="fileInput" type="file" class="hidden-input" @change="handleFileUpload" /></div>
+            <textarea v-model="promptInput" placeholder="Describe the mission, expected result, and constraints."
+              @keydown.enter.exact.prevent="submitTask"></textarea>
+            <div class="action-row"><button v-if="isWorking || missionStatus === 'paused'" class="danger"
+                @click="terminateTask">Stop</button><button v-else class="primary" @click="submitTask">Launch</button>
+            </div>
           </div>
         </div>
         <div class="rail" v-show="!isRailCollapsed">
           <div v-if="isSummaryVisible" class="panel summary-panel">
-            <div class="panel-head"><div><span class="tiny-label">Operations</span><h3>Mission overview</h3></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Operations</span>
+                <h3>Mission overview</h3>
+              </div>
+            </div>
             <div class="summary-scroll">
               <article class="hero-card summary-hero">
                 <span class="tiny-label">Mission posture</span>
-                <h2>{{ missionStatus === 'active' ? 'Operation in progress' : missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}</h2>
-                <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage from one place.</p>
+                <h2>
+                  {{ missionStatus === 'active' ? 'Operation in progress' :
+                    missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}
+                </h2>
+                <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage
+                  from one place.</p>
                 <div class="pill-row">
                   <span class="pill">{{ missionSummary.totals.missions }} missions</span>
                   <span class="pill">{{ missionSummary.totals.successRate }}% success</span>
                   <span class="pill">{{ activeIntegrationCount }} integrations</span>
-                  <span class="pill">{{ dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est. cost</span>
+                  <span class="pill">{{ dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est.
+                    cost</span>
                 </div>
               </article>
               <div class="summary-metrics">
-                <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{ missionSummary.totals.toolCalls }}</strong><p>Total calls</p></article>
-                <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{ missionSummary.queue?.totals?.queued || 0 }}</strong><p>Waiting missions</p></article>
-                <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{ missionSummary.totals.llmCalls || 0 }}</strong><p>LLM calls</p></article>
+                <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
+                  missionSummary.totals.toolCalls }}</strong>
+                  <p>Total calls</p>
+                </article>
+                <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
+                  missionSummary.queue?.totals?.queued || 0 }}</strong>
+                  <p>Waiting missions</p>
+                </article>
+                <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
+                  missionSummary.totals.llmCalls || 0 }}</strong>
+                  <p>LLM calls</p>
+                </article>
               </div>
             </div>
           </div>
           <div v-if="missionSummary.pendingApproval" class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Approval gate</span><h3>Boss confirmation needed</h3></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Approval gate</span>
+                <h3>Boss confirmation needed</h3>
+              </div>
+            </div>
             <div class="stack-item">
               <strong>{{ missionSummary.pendingApproval.toolCall?.name }}</strong>
               <p class="muted">{{ missionSummary.pendingApproval.reason }}</p>
               <p class="muted">{{ missionSummary.pendingApproval.preview }}</p>
-              <pre v-if="missionSummary.pendingApproval.details" class="approval-json">{{ JSON.stringify(missionSummary.pendingApproval.details, null, 2) }}</pre>
+              <pre v-if="missionSummary.pendingApproval.details"
+                class="approval-json">{{ JSON.stringify(missionSummary.pendingApproval.details, null, 2) }}</pre>
             </div>
           </div>
           <div v-if="missionSummary.pendingRepair" class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Self-healing</span><h3>Repair mode suggested</h3></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Self-healing</span>
+                <h3>Repair mode suggested</h3>
+              </div>
+            </div>
             <div class="stack-item">
               <strong>{{ missionSummary.pendingRepair.classification?.type }}</strong>
               <p class="muted">{{ missionSummary.pendingRepair.classification?.summary }}</p>
@@ -1303,17 +1432,48 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Queue</span><h3>Durable mission queue</h3></div></div>
-            <div v-if="recentQueue.length" class="stack-list"><div v-for="job in recentQueue" :key="job.id" class="stack-item"><div class="run-head"><strong>{{ job.prompt }}</strong><span class="badge" :class="job.status">{{ job.status }}</span></div><p class="muted">{{ prettyDate(job.createdAt) }} · {{ job.clientId || 'system' }}</p></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Queue</span>
+                <h3>Durable mission queue</h3>
+              </div>
+            </div>
+            <div v-if="recentQueue.length" class="stack-list">
+              <div v-for="job in recentQueue" :key="job.id" class="stack-item">
+                <div class="run-head"><strong>{{ job.prompt }}</strong><span class="badge" :class="job.status">{{
+                  job.status }}</span></div>
+                <p class="muted">{{ prettyDate(job.createdAt) }} · {{ job.clientId || 'system' }}</p>
+              </div>
+            </div>
             <p v-else class="muted">Queued missions will appear here.</p>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Queue controls</span><h3>Replay and retry</h3></div></div>
-            <div v-if="recentQueue.some(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')" class="stack-list"><div v-for="job in recentQueue.filter(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')" :key="job.id + '-control'" class="stack-item"><div class="run-head"><strong>{{ job.status }}</strong><span>{{ prettyDate(job.createdAt) }}</span></div><p class="muted">{{ job.prompt }}</p><div class="action-row" v-if="job.status === 'retry_wait'"><button class="ghost" @click="retryJobNow(job.id)">Retry Now</button></div><div class="action-row" v-else><button class="ghost" @click="requeueJob(job.id)">Requeue</button></div></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Queue controls</span>
+                <h3>Replay and retry</h3>
+              </div>
+            </div>
+            <div
+              v-if="recentQueue.some(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
+              class="stack-list">
+              <div
+                v-for="job in recentQueue.filter(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
+                :key="job.id + '-control'" class="stack-item">
+                <div class="run-head"><strong>{{ job.status }}</strong><span>{{ prettyDate(job.createdAt) }}</span>
+                </div>
+                <p class="muted">{{ job.prompt }}</p>
+                <div class="action-row" v-if="job.status === 'retry_wait'"><button class="ghost"
+                    @click="retryJobNow(job.id)">Retry Now</button></div>
+                <div class="action-row" v-else><button class="ghost" @click="requeueJob(job.id)">Requeue</button></div>
+              </div>
+            </div>
             <p v-else class="muted">No manual queue actions needed right now.</p>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">LLM runtime</span><h3>Provider and model</h3></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">LLM runtime</span>
+                <h3>Provider and model</h3>
+              </div>
+            </div>
             <div class="stack-item">
               <strong>{{ llmStatus.provider }}</strong>
               <p class="muted">{{ llmStatus.model }}</p>
@@ -1332,28 +1492,67 @@ onBeforeUnmount(() => {
             </div>
             <div class="stack-item">
               <strong>Live usage</strong>
-              <p class="muted">{{ todayLiveUsage.calls }} model calls in this run · {{ todayLiveUsage.paidCalls }} paid-estimated</p>
+              <p class="muted">{{ todayLiveUsage.calls }} model calls in this run · {{ todayLiveUsage.paidCalls }}
+                paid-estimated</p>
               <p class="muted">{{ dualCurrency(todayLiveUsage.estimatedCostUsd || 0) }} current run est. cost</p>
             </div>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Outputs</span><h3>Session files</h3></div><button class="ghost" @click="socket.emit('get_outputs')">Refresh</button></div>
-            <div v-if="outputFiles.length" class="stack-list"><a v-for="file in outputFiles" :key="file.url" :href="file.url" target="_blank" rel="noreferrer" class="stack-item"><span>{{ file.name }}</span><span>Open</span></a></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Outputs</span>
+                <h3>Session files</h3>
+              </div><button class="ghost" @click="socket.emit('get_outputs')">Refresh</button>
+            </div>
+            <div v-if="outputFiles.length" class="stack-list"><a v-for="file in outputFiles" :key="file.url"
+                :href="file.url" target="_blank" rel="noreferrer" class="stack-item"><span>{{ file.name
+                }}</span><span>Open</span></a></div>
             <p v-else class="muted">Generated files will appear here.</p>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Recent runs</span><h3>Execution quality</h3></div></div>
-            <div v-if="latestRuns.length" class="stack-list"><div v-for="run in latestRuns" :key="run.id" class="stack-item"><div class="run-head"><strong>{{ run.requestPreview }}</strong><span class="badge" :class="run.status">{{ run.status }}</span></div><p class="muted">{{ prettyDate(run.startedAt) }} · {{ run.toolCalls || 0 }} tools · {{ run.steps || 0 }} steps · ${{ Number(run.estimatedCostUsd || 0).toFixed(4) }}</p><p class="muted">{{ run.lastLlmProvider || 'Gemini' }} / {{ run.lastLlmModel || 'gemini-2.5-flash' }}</p></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Recent runs</span>
+                <h3>Execution quality</h3>
+              </div>
+            </div>
+            <div v-if="latestRuns.length" class="stack-list">
+              <div v-for="run in latestRuns" :key="run.id" class="stack-item">
+                <div class="run-head"><strong>{{ run.requestPreview }}</strong><span class="badge"
+                    :class="run.status">{{ run.status }}</span></div>
+                <p class="muted">{{ prettyDate(run.startedAt) }} · {{ run.toolCalls || 0 }} tools · {{ run.steps || 0 }}
+                  steps · ${{ Number(run.estimatedCostUsd || 0).toFixed(4) }}</p>
+                <p class="muted">{{ run.lastLlmProvider || 'Gemini' }} / {{ run.lastLlmModel || 'gemini-2.5-flash' }}
+                </p>
+              </div>
+            </div>
             <p v-else class="muted">No tracked runs yet.</p>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Audit trail</span><h3>High-risk actions</h3></div></div>
-            <div v-if="recentAudit.length" class="stack-list"><div v-for="entry in recentAudit" :key="entry.at + entry.type" class="stack-item"><div class="run-head"><strong>{{ entry.type }}</strong><span>{{ prettyDate(entry.at) }}</span></div><p class="muted">{{ entry.payload?.tool || 'system' }}</p></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Audit trail</span>
+                <h3>High-risk actions</h3>
+              </div>
+            </div>
+            <div v-if="recentAudit.length" class="stack-list">
+              <div v-for="entry in recentAudit" :key="entry.at + entry.type" class="stack-item">
+                <div class="run-head"><strong>{{ entry.type }}</strong><span>{{ prettyDate(entry.at) }}</span></div>
+                <p class="muted">{{ entry.payload?.tool || 'system' }}</p>
+              </div>
+            </div>
             <p v-else class="muted">No approval events recorded yet.</p>
           </div>
           <div class="panel">
-            <div class="panel-head"><div><span class="tiny-label">Recovery log</span><h3>Self-healing memory</h3></div></div>
-            <div v-if="recentRecovery.length" class="stack-list"><div v-for="entry in recentRecovery" :key="entry.at + entry.tool" class="stack-item"><div class="run-head"><strong>{{ entry.classification?.type }}</strong><span>{{ prettyDate(entry.at) }}</span></div><p class="muted">{{ entry.tool }}</p></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Recovery log</span>
+                <h3>Self-healing memory</h3>
+              </div>
+            </div>
+            <div v-if="recentRecovery.length" class="stack-list">
+              <div v-for="entry in recentRecovery" :key="entry.at + entry.tool" class="stack-item">
+                <div class="run-head"><strong>{{ entry.classification?.type }}</strong><span>{{ prettyDate(entry.at)
+                    }}</span></div>
+                <p class="muted">{{ entry.tool }}</p>
+              </div>
+            </div>
             <p v-else class="muted">No recovery events captured yet.</p>
           </div>
         </div>
@@ -1361,36 +1560,154 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeView === 'clients'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Client operations</span><h3>Accounts and isolated keys</h3></div><button class="ghost" @click="loadClients">Refresh</button></div>
-          <div class="card-grid"><div v-for="client in clients" :key="client.id" class="mini-card"><div class="run-head"><strong>{{ client.name }}</strong><span class="badge success">{{ client.status || 'active' }}</span></div><p class="muted">{{ client.company || 'No organization listed' }}</p><p class="muted">{{ client.email || 'No email set' }}</p><div class="action-row"><button class="ghost" @click="manageClientKeys(client)">Keys</button><button class="ghost" @click="launchMarketingPreset(client)">Marketing</button><button class="primary subtle" @click="activeView = 'chat'; selectedClientForChat = client.id">Use Context</button></div></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Client operations</span>
+              <h3>Accounts and isolated keys</h3>
+            </div><button class="ghost" @click="loadClients">Refresh</button>
+          </div>
+          <div class="card-grid">
+            <div v-for="client in clients" :key="client.id" class="mini-card">
+              <div class="run-head"><strong>{{ client.name }}</strong><span class="badge success">{{ client.status ||
+                'active' }}</span></div>
+              <p class="muted">{{ client.company || 'No organization listed' }}</p>
+              <p class="muted">{{ client.email || 'No email set' }}</p>
+              <div class="action-row"><button class="ghost" @click="manageClientKeys(client)">Keys</button><button
+                  class="ghost" @click="launchMarketingPreset(client)">Marketing</button><button class="primary subtle"
+                  @click="activeView = 'chat'; selectedClientForChat = client.id">Use Context</button></div>
+            </div>
+          </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Client usage</span><h3>Model usage by client</h3></div><div class="context-box"><label>Client</label><select v-model="selectedFinanceClient"><option value="">Select Client</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div></div>
-          <div class="action-row"><select v-model="usagePeriod"><option value="all">All time</option><option value="today">Today</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost" :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'csv')">Export CSV</button><button class="ghost" :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'pdf')">Export PDF</button></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Client usage</span>
+              <h3>Model usage by client</h3>
+            </div>
+            <div class="context-box"><label>Client</label><select v-model="selectedFinanceClient">
+                <option value="">Select Client</option>
+                <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
+              </select></div>
+          </div>
+          <div class="action-row"><select v-model="usagePeriod">
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost"
+              :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'csv')">Export
+              CSV</button><button class="ghost" :disabled="!selectedFinanceClient"
+              @click="downloadUsageReport('client', 'pdf')">Export PDF</button></div>
           <div class="stack-list">
-            <div class="stack-item"><strong>Total model calls</strong><p class="muted">{{ clientUsageSummary.totals.calls || 0 }} total · {{ clientUsageSummary.totals.freeCalls || 0 }} free · {{ clientUsageSummary.totals.paidCalls || 0 }} paid</p><p class="muted">{{ dualCurrency(clientUsageSummary.totals.estimatedCostUsd || 0) }} est. paid usage</p></div>
+            <div class="stack-item"><strong>Total model calls</strong>
+              <p class="muted">{{ clientUsageSummary.totals.calls || 0 }} total · {{ clientUsageSummary.totals.freeCalls
+                || 0 }} free · {{ clientUsageSummary.totals.paidCalls || 0 }} paid</p>
+              <p class="muted">{{ dualCurrency(clientUsageSummary.totals.estimatedCostUsd || 0) }} est. paid usage</p>
+            </div>
             <div v-if="clientUsageSummary.providers?.length" class="stack-item">
               <strong>Providers</strong>
-            <p v-for="provider in clientUsageSummary.providers.slice(0, 6)" :key="provider.provider" class="muted">{{ provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{ provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{ provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
+              <p v-for="provider in clientUsageSummary.providers.slice(0, 6)" :key="provider.provider" class="muted">{{
+                provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{
+                  provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{
+                  provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
             </div>
             <div v-if="clientUsageSummary.models?.length" class="stack-item">
               <strong>Models</strong>
-            <p v-for="model in clientUsageSummary.models.slice(0, 8)" :key="`${model.provider}-${model.model}`" class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
+              <p v-for="model in clientUsageSummary.models.slice(0, 8)" :key="`${model.provider}-${model.model}`"
+                class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }}
+                free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
             </div>
           </div>
-          <p v-if="!selectedFinanceClient" class="muted">Select a client to view model usage totals and free vs paid estimates.</p>
+          <p v-if="!selectedFinanceClient" class="muted">Select a client to view model usage totals and free vs paid
+            estimates.</p>
         </div>
-        <div class="panel"><div class="panel-head"><div><span class="tiny-label">Sessions</span><h3>Recent recoveries</h3></div></div><div v-if="latestSessions.length" class="stack-list"><div v-for="session in latestSessions" :key="session.id" class="stack-item"><strong>{{ session.preview }}</strong><p class="muted">{{ prettyDate(session.lastUpdated) }}</p></div></div><p v-else class="muted">Saved sessions will appear here.</p></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><span class="tiny-label">Sessions</span>
+              <h3>Recent recoveries</h3>
+            </div>
+          </div>
+          <div v-if="latestSessions.length" class="stack-list">
+            <div v-for="session in latestSessions" :key="session.id" class="stack-item"><strong>{{ session.preview
+                }}</strong>
+              <p class="muted">{{ prettyDate(session.lastUpdated) }}</p>
+            </div>
+          </div>
+          <p v-else class="muted">Saved sessions will appear here.</p>
+        </div>
       </section>
 
       <section v-else-if="activeView === 'finance'" class="grid-two">
+        <!-- Proactive Intelligence Panel -->
+        <div class="panel" style="grid-column: 1 / -1">
+          <div class="panel-head">
+            <div><span class="tiny-label">Proactive Intelligence</span>
+              <h3>Market Scanner & Proposals</h3>
+            </div>
+          </div>
+          <div class="mini-card">
+            <div class="run-head">
+              <input v-model="proactiveScanNiche" placeholder="Enter niche (e.g. ethnic fashion)" style="flex: 1" />
+              <button class="primary" @click="runProactiveScan">🔍 Scan & Propose</button>
+            </div>
+            <p class="muted">The agent will autonomously scan market trends and generate a campaign proposal.</p>
+          </div>
+          <div v-if="proactiveProposals.length" class="stack-list">
+            <div v-for="(p, i) in proactiveProposals.slice(0, 5)" :key="i" class="stack-item">
+              <div class="run-head"><strong>{{ p.type === 'new_client_onboarding' ? '👤 ' + (p.clientName || 'New Client') : '🚀 Campaign Proposal' }}</strong><span class="badge success">{{ p.type || 'scan' }}</span></div>
+              <p class="muted" v-if="p.message">{{ p.message }}</p>
+              <div v-if="p.proposal" class="message-text" v-html="formatMessage(p.proposal)"></div>
+              <p class="muted">{{ new Date(p.receivedAt).toLocaleString() }}</p>
+            </div>
+          </div>
+          <p v-else class="muted">No proposals yet. Use the scanner above or wait for proactive agent insights.</p>
+        </div>
+
+        <!-- Live P&L Dashboard -->
+        <div class="panel" style="grid-column: 1 / -1">
+          <div class="panel-head">
+            <div><span class="tiny-label">Financial Intelligence</span>
+              <h3>Live Profit & Loss Dashboard</h3>
+            </div>
+            <div class="run-head">
+              <select v-model="pnlPeriod" @change="loadPnlReport()">
+                <option value="all">All Time</option>
+                <option value="month">This Month</option>
+                <option value="week">This Week</option>
+                <option value="today">Today</option>
+              </select>
+            </div>
+          </div>
+          <div class="summary-metrics">
+            <article class="metric-card compact-metric"><span class="tiny-label">Revenue</span><strong style="color: #22c55e">{{ dualCurrency(pnlReport.totalRevenue || 0) }}</strong><p>Total earned</p></article>
+            <article class="metric-card compact-metric"><span class="tiny-label">Expenses</span><strong style="color: #ef4444">{{ dualCurrency(pnlReport.totalExpenses || 0) }}</strong><p>API + Ads + Ops</p></article>
+            <article class="metric-card compact-metric"><span class="tiny-label">Net Profit</span><strong :style="{ color: (pnlReport.netProfit || 0) >= 0 ? '#22c55e' : '#ef4444' }">{{ dualCurrency(pnlReport.netProfit || 0) }}</strong><p>{{ pnlReport.profitMargin || 0 }}% margin</p></article>
+            <article class="metric-card compact-metric"><span class="tiny-label">Transactions</span><strong>{{ pnlReport.transactionCount || 0 }}</strong><p>Total entries</p></article>
+          </div>
+          <div v-if="Object.keys(pnlReport.expensesByProvider || {}).length" class="mini-card">
+            <label>Expenses by Provider</label>
+            <div class="pill-row">
+              <span v-for="(amount, provider) in pnlReport.expensesByProvider" :key="provider" class="pill">{{ provider }}: {{ dualCurrency(amount) }}</span>
+            </div>
+          </div>
+          <div v-if="(pnlReport.recentTransactions || []).length" class="stack-list">
+            <div v-for="txn in pnlReport.recentTransactions" :key="txn.id" class="stack-item">
+              <div class="run-head"><strong>{{ txn.description || txn.provider || 'Transaction' }}</strong><span class="badge" :class="txn.type === 'revenue' ? 'success' : 'warning'">{{ txn.type }}</span></div>
+              <p class="muted">{{ dualCurrency(txn.amount) }} · {{ new Date(txn.timestamp).toLocaleString() }}</p>
+            </div>
+          </div>
+        </div>
+
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Agency planner</span><h3>Recurring quote builder</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Agency planner</span>
+              <h3>Recurring quote builder</h3>
+            </div>
+          </div>
           <div class="mini-card">
             <label>Preset package</label>
             <div class="run-head">
               <select v-model="selectedQuotePreset">
-                <option v-for="(preset, key) in AGENCY_QUOTE_PRESETS" :key="key" :value="key">{{ preset.label }}</option>
+                <option v-for="(preset, key) in AGENCY_QUOTE_PRESETS" :key="key" :value="key">{{ preset.label }}
+                </option>
               </select>
               <button class="ghost" @click="applyQuotePreset">Apply Preset</button>
             </div>
@@ -1399,102 +1716,214 @@ onBeforeUnmount(() => {
           <div class="mini-card">
             <label>Service mix</label>
             <div class="pill-row selectable-pills">
-              <button
-                v-for="option in SERVICE_SELECTOR_OPTIONS"
-                :key="option.key"
-                class="pill selector-pill"
+              <button v-for="option in SERVICE_SELECTOR_OPTIONS" :key="option.key" class="pill selector-pill"
                 :class="{ active: selectedAgencyServices.includes(option.key) }"
-                @click="toggleAgencyService(option.key)"
-              >
+                @click="toggleAgencyService(option.key)">
                 {{ option.label }}
               </button>
             </div>
-            <p class="muted">Mix design, marketing, development, reporting, and promotion services in one commercial quote.</p>
+            <p class="muted">Mix design, marketing, development, reporting, and promotion services in one commercial
+              quote.</p>
           </div>
           <div class="card-grid">
-            <div class="mini-card"><label>Campaign</label><input v-model="agencyQuoteDraft.campaignName" placeholder="Monthly Meta ads package"></div>
-            <div v-if="visibleAgencyFields.has('bannerCount')" class="mini-card"><label>Banner count</label><input v-model="agencyQuoteDraft.bannerCount" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('carouselCount')" class="mini-card"><label>Carousel count</label><input v-model="agencyQuoteDraft.carouselCount" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('videoCount')" class="mini-card"><label>Video count</label><input v-model="agencyQuoteDraft.videoCount" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('contentDeliverables')" class="mini-card"><label>Content deliverables</label><input v-model="agencyQuoteDraft.contentDeliverables" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('tagPackages')" class="mini-card"><label>Tag / hashtag packs</label><input v-model="agencyQuoteDraft.tagPackages" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('reportCount')" class="mini-card"><label>Reports</label><input v-model="agencyQuoteDraft.reportCount" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('auditCount')" class="mini-card"><label>Audits</label><input v-model="agencyQuoteDraft.auditCount" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('metaAdsWeeks')" class="mini-card"><label>Meta ads weeks</label><input v-model="agencyQuoteDraft.metaAdsWeeks" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('googleAdsWeeks')" class="mini-card"><label>Google ads weeks</label><input v-model="agencyQuoteDraft.googleAdsWeeks" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('linkedinAdsWeeks')" class="mini-card"><label>LinkedIn ads weeks</label><input v-model="agencyQuoteDraft.linkedinAdsWeeks" type="number" min="0"></div>
-            <div v-if="visibleAgencyFields.has('websiteProject')" class="mini-card"><label>Website project</label><select v-model="agencyQuoteDraft.websiteProject"><option :value="false">No</option><option :value="true">Yes</option></select></div>
-            <div v-if="visibleAgencyFields.has('websitePages')" class="mini-card"><label>Website pages</label><input v-model="agencyQuoteDraft.websitePages" type="number" min="1"></div>
-            <div v-if="visibleAgencyFields.has('adSpendMonthly')" class="mini-card"><label>Ad spend / month</label><input v-model="agencyQuoteDraft.adSpendMonthly" type="number" min="0" step="0.01"></div>
-            <div class="mini-card"><label>Profit %</label><input v-model="agencyQuoteDraft.profitMarginPct" type="number" min="0"></div>
-            <div class="mini-card"><label>Tax %</label><input v-model="agencyQuoteDraft.taxPct" type="number" min="0"></div>
-            <div class="mini-card"><label>Currency</label><select v-model="agencyQuoteDraft.currency"><option value="USD">USD</option><option value="INR">INR</option></select></div>
-            <div v-if="visibleAgencyFields.has('includeStrategyRetainer')" class="mini-card"><label>Strategy retainer</label><select v-model="agencyQuoteDraft.includeStrategyRetainer"><option :value="true">Yes</option><option :value="false">No</option></select></div>
-            <div class="mini-card full"><label>Notes</label><textarea v-model="agencyQuoteDraft.notes" placeholder="Client scope, exclusions, launch window, offer notes, approval terms."></textarea></div>
+            <div class="mini-card"><label>Campaign</label><input v-model="agencyQuoteDraft.campaignName"
+                placeholder="Monthly Meta ads package"></div>
+            <div v-if="visibleAgencyFields.has('bannerCount')" class="mini-card"><label>Banner count</label><input
+                v-model="agencyQuoteDraft.bannerCount" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('carouselCount')" class="mini-card"><label>Carousel count</label><input
+                v-model="agencyQuoteDraft.carouselCount" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('videoCount')" class="mini-card"><label>Video count</label><input
+                v-model="agencyQuoteDraft.videoCount" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('contentDeliverables')" class="mini-card"><label>Content
+                deliverables</label><input v-model="agencyQuoteDraft.contentDeliverables" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('tagPackages')" class="mini-card"><label>Tag / hashtag
+                packs</label><input v-model="agencyQuoteDraft.tagPackages" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('reportCount')" class="mini-card"><label>Reports</label><input
+                v-model="agencyQuoteDraft.reportCount" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('auditCount')" class="mini-card"><label>Audits</label><input
+                v-model="agencyQuoteDraft.auditCount" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('metaAdsWeeks')" class="mini-card"><label>Meta ads weeks</label><input
+                v-model="agencyQuoteDraft.metaAdsWeeks" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('googleAdsWeeks')" class="mini-card"><label>Google ads
+                weeks</label><input v-model="agencyQuoteDraft.googleAdsWeeks" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('linkedinAdsWeeks')" class="mini-card"><label>LinkedIn ads
+                weeks</label><input v-model="agencyQuoteDraft.linkedinAdsWeeks" type="number" min="0"></div>
+            <div v-if="visibleAgencyFields.has('websiteProject')" class="mini-card"><label>Website
+                project</label><select v-model="agencyQuoteDraft.websiteProject">
+                <option :value="false">No</option>
+                <option :value="true">Yes</option>
+              </select></div>
+            <div v-if="visibleAgencyFields.has('websitePages')" class="mini-card"><label>Website pages</label><input
+                v-model="agencyQuoteDraft.websitePages" type="number" min="1"></div>
+            <div v-if="visibleAgencyFields.has('adSpendMonthly')" class="mini-card"><label>Ad spend /
+                month</label><input v-model="agencyQuoteDraft.adSpendMonthly" type="number" min="0" step="0.01"></div>
+            <div class="mini-card"><label>Profit %</label><input v-model="agencyQuoteDraft.profitMarginPct"
+                type="number" min="0"></div>
+            <div class="mini-card"><label>Tax %</label><input v-model="agencyQuoteDraft.taxPct" type="number" min="0">
+            </div>
+            <div class="mini-card"><label>Currency</label><select v-model="agencyQuoteDraft.currency">
+                <option value="USD">USD</option>
+                <option value="INR">INR</option>
+              </select></div>
+            <div v-if="visibleAgencyFields.has('includeStrategyRetainer')" class="mini-card"><label>Strategy
+                retainer</label><select v-model="agencyQuoteDraft.includeStrategyRetainer">
+                <option :value="true">Yes</option>
+                <option :value="false">No</option>
+              </select></div>
+            <div class="mini-card full"><label>Notes</label><textarea v-model="agencyQuoteDraft.notes"
+                placeholder="Client scope, exclusions, launch window, offer notes, approval terms."></textarea></div>
           </div>
-          <div class="action-row"><button class="ghost" @click="previewAgencyQuote">Preview Plan</button><button class="primary" @click="createAgencyQuote">Create Agency Quote</button></div>
+          <div class="action-row"><button class="ghost" @click="previewAgencyQuote">Preview Plan</button><button
+              class="primary" @click="createAgencyQuote">Create Agency Quote</button></div>
           <div v-if="plannedAgencyQuote" class="stack-list">
-            <div class="stack-item"><strong>{{ plannedAgencyQuote.title }}</strong><p class="muted">Banners {{ plannedAgencyQuote.summary.bannerCount }} · Carousels {{ plannedAgencyQuote.summary.carouselCount }} · Videos {{ plannedAgencyQuote.summary.videoCount }} · Content {{ plannedAgencyQuote.summary.contentDeliverables }}</p><p class="muted">Channels: {{ (plannedAgencyQuote.summary.activeChannels || []).join(', ') || 'No paid promotion selected' }}</p><p class="muted">AI ops estimate: {{ dualCurrency(plannedAgencyQuote.aiOps.totalCost || 0) }} · Nexus platform fee: {{ dualCurrency(plannedAgencyQuote.platformFee || 0) }}</p><p class="muted">Quoted total: {{ dualCurrency(plannedAgencyQuote.pricing?.total || 0) }}</p></div>
-            <div class="stack-item"><strong>Assumptions</strong><p v-for="line in plannedAgencyQuote.assumptions" :key="line" class="muted">{{ line }}</p></div>
+            <div class="stack-item"><strong>{{ plannedAgencyQuote.title }}</strong>
+              <p class="muted">Banners {{ plannedAgencyQuote.summary.bannerCount }} · Carousels {{
+                plannedAgencyQuote.summary.carouselCount }} · Videos {{ plannedAgencyQuote.summary.videoCount }} ·
+                Content {{ plannedAgencyQuote.summary.contentDeliverables }}</p>
+              <p class="muted">Channels:
+                {{ (plannedAgencyQuote.summary.activeChannels || []).join(', ') || 'No paid promotion selected' }}</p>
+              <p class="muted">AI ops estimate: {{ dualCurrency(plannedAgencyQuote.aiOps.totalCost || 0) }} · Nexus
+                platform fee: {{ dualCurrency(plannedAgencyQuote.platformFee || 0) }}</p>
+              <p class="muted">Quoted total: {{ dualCurrency(plannedAgencyQuote.pricing?.total || 0) }}</p>
+            </div>
+            <div class="stack-item"><strong>Assumptions</strong>
+              <p v-for="line in plannedAgencyQuote.assumptions" :key="line" class="muted">{{ line }}</p>
+            </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Finance</span><h3>Quote and invoice control</h3></div><div class="context-box"><label>Client</label><select v-model="selectedFinanceClient" @change="loadQuotes(); loadInvoices(); loadBudget(); loadMarketingBriefs(selectedFinanceClient); loadMarketingOutputs(selectedFinanceClient)"><option value="">Select Client</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Finance</span>
+              <h3>Quote and invoice control</h3>
+            </div>
+            <div class="context-box"><label>Client</label><select v-model="selectedFinanceClient"
+                @change="loadQuotes(); loadInvoices(); loadBudget(); loadMarketingBriefs(selectedFinanceClient); loadMarketingOutputs(selectedFinanceClient)">
+                <option value="">Select Client</option>
+                <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
+              </select></div>
+          </div>
           <div class="card-grid">
-            <div class="mini-card"><label>Service</label><select v-model="quoteDraft.items[0].serviceCode"><option v-for="(info, code) in pricingCatalog" :key="code" :value="code">{{ info.label }}</option></select></div>
-            <div class="mini-card"><label>Quantity</label><input v-model="quoteDraft.items[0].quantity" type="number" min="1"></div>
-            <div class="mini-card"><label>Profit %</label><input v-model="quoteDraft.profitMarginPct" type="number" min="0"></div>
+            <div class="mini-card"><label>Service</label><select v-model="quoteDraft.items[0].serviceCode">
+                <option v-for="(info, code) in pricingCatalog" :key="code" :value="code">{{ info.label }}</option>
+              </select></div>
+            <div class="mini-card"><label>Quantity</label><input v-model="quoteDraft.items[0].quantity" type="number"
+                min="1"></div>
+            <div class="mini-card"><label>Profit %</label><input v-model="quoteDraft.profitMarginPct" type="number"
+                min="0"></div>
             <div class="mini-card"><label>Tax %</label><input v-model="quoteDraft.taxPct" type="number" min="0"></div>
-            <div class="mini-card full"><label>Notes</label><textarea v-model="quoteDraft.notes" placeholder="Scope, timelines, add-ons, approval notes."></textarea></div>
+            <div class="mini-card full"><label>Notes</label><textarea v-model="quoteDraft.notes"
+                placeholder="Scope, timelines, add-ons, approval notes."></textarea></div>
           </div>
           <div class="action-row"><button class="primary" @click="createQuote">Create Quote</button></div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Budget</span><h3>Client budget status</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Budget</span>
+              <h3>Client budget status</h3>
+            </div>
+          </div>
           <div class="stack-list">
-            <div class="stack-item"><strong>Allocated</strong><p class="muted">{{ dualCurrency(budgetSummary.allocated || 0) }}</p></div>
-            <div class="stack-item"><strong>Approved Overage</strong><p class="muted">{{ dualCurrency(budgetSummary.approvedOverage || 0) }}</p></div>
-            <div class="stack-item"><strong>Spent</strong><p class="muted">{{ dualCurrency(budgetSummary.spent || 0) }}</p></div>
-            <div class="stack-item"><strong>Remaining</strong><p class="muted">{{ dualCurrency(budgetSummary.remaining || 0) }}</p><p v-if="budgetSummary.requiresBossApproval" class="muted">Boss approval required for excess work.</p></div>
+            <div class="stack-item"><strong>Allocated</strong>
+              <p class="muted">{{ dualCurrency(budgetSummary.allocated || 0) }}</p>
+            </div>
+            <div class="stack-item"><strong>Approved Overage</strong>
+              <p class="muted">{{ dualCurrency(budgetSummary.approvedOverage || 0) }}</p>
+            </div>
+            <div class="stack-item"><strong>Spent</strong>
+              <p class="muted">{{ dualCurrency(budgetSummary.spent || 0) }}</p>
+            </div>
+            <div class="stack-item"><strong>Remaining</strong>
+              <p class="muted">{{ dualCurrency(budgetSummary.remaining || 0) }}</p>
+              <p v-if="budgetSummary.requiresBossApproval" class="muted">Boss approval required for excess work.</p>
+            </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Quotes</span><h3>Prepared offers</h3></div></div>
-          <div v-if="quotes.length" class="stack-list"><div v-for="quote in quotes.slice(0, 6)" :key="quote.id" class="stack-item"><div class="run-head"><strong>{{ quote.planner?.campaignName || quote.pricing?.items?.[0]?.description || 'Quote' }}</strong><span class="badge">{{ quote.status }}</span></div><p class="muted">{{ dualCurrency(quote.pricing?.total || 0) }}</p><div class="action-row"><button class="ghost" @click="downloadQuote(quote.id, 'pdf')">PDF</button><button class="ghost" @click="downloadQuote(quote.id, 'csv')">Excel</button><button class="ghost" @click="sendQuote(quote.id)">Send</button><button class="ghost" @click="createInvoiceFromQuote(quote.id)">Create Invoice</button></div></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Quotes</span>
+              <h3>Prepared offers</h3>
+            </div>
+          </div>
+          <div v-if="quotes.length" class="stack-list">
+            <div v-for="quote in quotes.slice(0, 6)" :key="quote.id" class="stack-item">
+              <div class="run-head"><strong>{{ quote.planner?.campaignName || quote.pricing?.items?.[0]?.description ||
+                'Quote' }}</strong><span class="badge">{{ quote.status }}</span></div>
+              <p class="muted">{{ dualCurrency(quote.pricing?.total || 0) }}</p>
+              <div class="action-row"><button class="ghost" @click="downloadQuote(quote.id, 'pdf')">PDF</button><button
+                  class="ghost" @click="downloadQuote(quote.id, 'csv')">Excel</button><button class="ghost"
+                  @click="sendQuote(quote.id)">Send</button><button class="ghost"
+                  @click="createInvoiceFromQuote(quote.id)">Create Invoice</button></div>
+            </div>
+          </div>
           <p v-else class="muted">No quotes yet.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Marketing delivery</span><h3>Proposal and report bridge</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Marketing delivery</span>
+              <h3>Proposal and report bridge</h3>
+            </div>
+          </div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Client-facing documents</strong>
-              <p class="muted">Generate professional proposals and reports from the selected client context, then route them into finance or mission execution.</p>
-              <div class="action-row"><button class="ghost" @click="openFinanceMarketing('proposal')">New Proposal</button><button class="ghost" @click="openFinanceMarketing('report')">New Report</button></div>
+              <p class="muted">Generate professional proposals and reports from the selected client context, then route
+                them into finance or mission execution.</p>
+              <div class="action-row"><button class="ghost" @click="openFinanceMarketing('proposal')">New
+                  Proposal</button><button class="ghost" @click="openFinanceMarketing('report')">New Report</button>
+              </div>
             </div>
             <div v-if="latestMarketingOutput" class="stack-item">
               <strong>Latest marketing output</strong>
               <p class="muted">{{ latestMarketingOutput.fileName }}</p>
-              <div class="action-row"><button class="ghost" @click="downloadMarketingDeliverable(latestMarketingOutput, 'pdf')">PDF</button><button class="ghost" @click="launchDeliverableToChat(latestMarketingOutput)">Use In Mission</button><button class="ghost" @click="sendMarketingDeliverable(latestMarketingOutput)">Send To Client</button></div>
+              <div class="action-row"><button class="ghost"
+                  @click="downloadMarketingDeliverable(latestMarketingOutput, 'pdf')">PDF</button><button class="ghost"
+                  @click="launchDeliverableToChat(latestMarketingOutput)">Use In Mission</button><button class="ghost"
+                  @click="sendMarketingDeliverable(latestMarketingOutput)">Send To Client</button></div>
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Invoices</span><h3>Payment status</h3></div></div>
-          <div v-if="invoices.length" class="stack-list"><div v-for="invoice in invoices.slice(0, 6)" :key="invoice.id" class="stack-item"><div class="run-head"><strong>Invoice {{ invoice.id.slice(0, 8) }}</strong><span class="badge" :class="invoice.status === 'paid' ? 'success' : 'warning'">{{ invoice.status }}</span></div><p class="muted">{{ dualCurrency(invoice.pricing?.total || 0) }} · <a :href="invoice.paymentUrl" target="_blank" rel="noreferrer">Pay</a></p><div class="action-row"><button class="ghost" @click="downloadInvoice(invoice.id, 'pdf')">PDF</button><button class="ghost" @click="downloadInvoice(invoice.id, 'csv')">Excel</button><button class="ghost" @click="sendInvoice(invoice.id)">Send</button><button v-if="invoice.status !== 'paid'" class="ghost" @click="markInvoicePaid(invoice.id)">Mark Paid</button></div></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Invoices</span>
+              <h3>Payment status</h3>
+            </div>
+          </div>
+          <div v-if="invoices.length" class="stack-list">
+            <div v-for="invoice in invoices.slice(0, 6)" :key="invoice.id" class="stack-item">
+              <div class="run-head"><strong>Invoice {{ invoice.id.slice(0, 8) }}</strong><span class="badge"
+                  :class="invoice.status === 'paid' ? 'success' : 'warning'">{{ invoice.status }}</span></div>
+              <p class="muted">{{ dualCurrency(invoice.pricing?.total || 0) }} · <a :href="invoice.paymentUrl"
+                  target="_blank" rel="noreferrer">Pay</a></p>
+              <div class="action-row"><button class="ghost"
+                  @click="downloadInvoice(invoice.id, 'pdf')">PDF</button><button class="ghost"
+                  @click="downloadInvoice(invoice.id, 'csv')">Excel</button><button class="ghost"
+                  @click="sendInvoice(invoice.id)">Send</button><button v-if="invoice.status !== 'paid'" class="ghost"
+                  @click="markInvoicePaid(invoice.id)">Mark Paid</button></div>
+            </div>
+          </div>
           <p v-else class="muted">No invoices yet.</p>
         </div>
       </section>
 
       <section v-else-if="activeView === 'marketing'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Marketing</span><h3>Nexus workflow builder</h3></div><button class="ghost" @click="loadMarketingWorkflows">Refresh</button></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Marketing</span>
+              <h3>Nexus workflow builder</h3>
+            </div><button class="ghost" @click="loadMarketingWorkflows">Refresh</button>
+          </div>
           <div v-if="selectedMarketingWorkflow" class="mini-card full">
-            <div class="run-head"><strong>{{ selectedMarketingWorkflow.label }}</strong><span class="badge">{{ selectedMarketingWorkflow.category }}</span></div>
+            <div class="run-head"><strong>{{ selectedMarketingWorkflow.label }}</strong><span class="badge">{{
+              selectedMarketingWorkflow.category }}</span></div>
             <p class="muted">{{ selectedMarketingWorkflow.description }}</p>
             <p class="muted">Expected output: {{ selectedMarketingWorkflow.output }}</p>
           </div>
           <div v-if="marketingDraft.workflowId === 'audit' && marketingAuditSpecialists.length" class="mini-card full">
-            <div class="panel-head"><div><span class="tiny-label">Audit mode</span><h3>Multi-specialist structure</h3></div></div>
+            <div class="panel-head">
+              <div><span class="tiny-label">Audit mode</span>
+                <h3>Multi-specialist structure</h3>
+              </div>
+            </div>
             <div class="card-grid">
               <div v-for="specialist in marketingAuditSpecialists" :key="specialist.id" class="stack-item">
                 <div class="run-head"><strong>{{ specialist.label }}</strong><span>{{ specialist.id }}</span></div>
@@ -1502,13 +1931,15 @@ onBeforeUnmount(() => {
                 <p class="muted">{{ specialist.deliverable }}</p>
               </div>
             </div>
-            <div class="action-row"><button class="ghost" @click="generateAuditBundle">Generate Audit Bundle</button><button class="ghost" @click="launchAuditBundle">Launch Audit Bundle</button></div>
+            <div class="action-row"><button class="ghost" @click="generateAuditBundle">Generate Audit
+                Bundle</button><button class="ghost" @click="launchAuditBundle">Launch Audit Bundle</button></div>
           </div>
           <div class="card-grid">
             <div class="mini-card">
               <label>Workflow</label>
               <select v-model="marketingDraft.workflowId">
-                <option v-for="workflow in marketingWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.label }}</option>
+                <option v-for="workflow in marketingWorkflows" :key="workflow.id" :value="workflow.id">{{ workflow.label
+                }}</option>
               </select>
             </div>
             <div class="mini-card">
@@ -1526,32 +1957,48 @@ onBeforeUnmount(() => {
             </div>
             <div class="mini-card full">
               <label>Notes</label>
-              <textarea v-model="marketingDraft.notes" placeholder="Goals, offer details, audience, constraints, deliverable expectations."></textarea>
+              <textarea v-model="marketingDraft.notes"
+                placeholder="Goals, offer details, audience, constraints, deliverable expectations."></textarea>
             </div>
           </div>
-          <div class="action-row"><button class="primary" @click="generateMarketingBrief()">Generate Brief</button></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Generated brief</span><h3>Mission-ready prompt</h3></div></div>
-          <div class="mini-card">
-            <textarea v-model="generatedMarketingBrief" placeholder="Generated marketing workflow brief will appear here."></textarea>
-            <div class="action-row"><button class="ghost" @click="launchMarketingBrief">Send To Mission Control</button><button class="ghost" @click="generateMarketingDeliverable('report')">Generate Report</button><button class="ghost" @click="generateMarketingDeliverable('proposal')">Generate Proposal</button></div>
+          <div class="action-row"><button class="primary" @click="generateMarketingBrief()">Generate Brief</button>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Utilities</span><h3>Marketing utility tools</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Generated brief</span>
+              <h3>Mission-ready prompt</h3>
+            </div>
+          </div>
+          <div class="mini-card">
+            <textarea v-model="generatedMarketingBrief"
+              placeholder="Generated marketing workflow brief will appear here."></textarea>
+            <div class="action-row"><button class="ghost" @click="launchMarketingBrief">Send To Mission
+                Control</button><button class="ghost" @click="generateMarketingDeliverable('report')">Generate
+                Report</button><button class="ghost" @click="generateMarketingDeliverable('proposal')">Generate
+                Proposal</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><span class="tiny-label">Utilities</span>
+              <h3>Marketing utility tools</h3>
+            </div>
+          </div>
           <div class="card-grid">
             <div class="mini-card">
               <label>Page analysis</label>
               <p class="muted">Generate a structured page-readiness snapshot from the current target and notes.</p>
               <div class="action-row"><button class="ghost" @click="runPageAnalysis">Run</button></div>
-              <p v-if="marketingUtilityResults.pageAnalysis" class="muted">{{ marketingUtilityResults.pageAnalysis.summary }}</p>
+              <p v-if="marketingUtilityResults.pageAnalysis" class="muted">{{
+                marketingUtilityResults.pageAnalysis.summary }}</p>
             </div>
             <div class="mini-card">
               <label>Competitors</label>
               <input v-model="competitorInput" placeholder="competitor.com, brand two, brand three">
               <div class="action-row"><button class="ghost" @click="runCompetitorScan">Scan</button></div>
-              <p v-if="marketingUtilityResults.competitorScan" class="muted">{{ marketingUtilityResults.competitorScan.summary }}</p>
+              <p v-if="marketingUtilityResults.competitorScan" class="muted">{{
+                marketingUtilityResults.competitorScan.summary }}</p>
             </div>
             <div class="mini-card">
               <label>Social theme</label>
@@ -1559,155 +2006,325 @@ onBeforeUnmount(() => {
               <label>Weeks</label>
               <input v-model="socialWeeks" type="number" min="1" max="12">
               <div class="action-row"><button class="ghost" @click="runSocialCalendar">Generate Calendar</button></div>
-              <p v-if="marketingUtilityResults.socialCalendar" class="muted">{{ marketingUtilityResults.socialCalendar.summary }}</p>
+              <p v-if="marketingUtilityResults.socialCalendar" class="muted">{{
+                marketingUtilityResults.socialCalendar.summary }}</p>
             </div>
           </div>
         </div>
         <div v-if="marketingDraft.workflowId === 'audit'" class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Audit bundle</span><h3>Five-specialist mission pack</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Audit bundle</span>
+              <h3>Five-specialist mission pack</h3>
+            </div>
+          </div>
           <div class="mini-card">
-            <textarea v-model="generatedAuditBundle" placeholder="Generated multi-specialist audit bundle will appear here."></textarea>
-            <div class="action-row"><button class="ghost" @click="launchAuditBundle">Send Audit To Mission Control</button></div>
+            <textarea v-model="generatedAuditBundle"
+              placeholder="Generated multi-specialist audit bundle will appear here."></textarea>
+            <div class="action-row"><button class="ghost" @click="launchAuditBundle">Send Audit To Mission
+                Control</button></div>
           </div>
         </div>
-        <div v-if="marketingUtilityResults.pageAnalysis || marketingUtilityResults.competitorScan || marketingUtilityResults.socialCalendar" class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Utility outputs</span><h3>Structured marketing insights</h3></div></div>
+        <div
+          v-if="marketingUtilityResults.pageAnalysis || marketingUtilityResults.competitorScan || marketingUtilityResults.socialCalendar"
+          class="panel">
+          <div class="panel-head">
+            <div><span class="tiny-label">Utility outputs</span>
+              <h3>Structured marketing insights</h3>
+            </div>
+          </div>
           <div class="stack-list">
             <div v-if="marketingUtilityResults.pageAnalysis" class="stack-item">
-              <div class="run-head"><strong>Page analysis</strong><span>{{ marketingUtilityResults.pageAnalysis.page?.hostname || marketingDraft.target }}</span></div>
-              <p class="muted">{{ marketingUtilityResults.pageAnalysis.findings?.map((item) => `${item.label}: ${item.score}/10`).join(' · ') }}</p>
+              <div class="run-head"><strong>Page analysis</strong><span>{{
+                marketingUtilityResults.pageAnalysis.page?.hostname || marketingDraft.target }}</span></div>
+              <p class="muted">{{marketingUtilityResults.pageAnalysis.findings?.map((item) => `${item.label}:
+                ${item.score}/10`).join(' · ')}}</p>
             </div>
             <div v-if="marketingUtilityResults.competitorScan" class="stack-item">
-              <div class="run-head"><strong>Competitor scan</strong><span>{{ marketingUtilityResults.competitorScan.competitorCount }} competitors</span></div>
-              <p class="muted">{{ marketingUtilityResults.competitorScan.rows?.slice(0, 2).map((item) => `${item.competitor}: ${item.opportunity}`).join(' | ') }}</p>
+              <div class="run-head"><strong>Competitor scan</strong><span>{{
+                marketingUtilityResults.competitorScan.competitorCount }} competitors</span></div>
+              <p class="muted">{{marketingUtilityResults.competitorScan.rows?.slice(0, 2).map((item) =>
+                `${item.competitor}: ${item.opportunity}`).join(' | ')}}</p>
             </div>
             <div v-if="marketingUtilityResults.socialCalendar" class="stack-item">
-              <div class="run-head"><strong>Social calendar</strong><span>{{ marketingUtilityResults.socialCalendar.weeks }} weeks</span></div>
-              <p class="muted">{{ marketingUtilityResults.socialCalendar.posts?.slice(0, 2).map((item) => `${item.hook} (${item.format})`).join(' | ') }}</p>
+              <div class="run-head"><strong>Social calendar</strong><span>{{
+                marketingUtilityResults.socialCalendar.weeks }} weeks</span></div>
+              <p class="muted">{{marketingUtilityResults.socialCalendar.posts?.slice(0, 2).map((item) => `${item.hook}
+                (${item.format})`).join(' | ')}}</p>
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Brief memory</span><h3>Saved marketing briefs</h3></div></div>
-          <div v-if="marketingBriefs.length" class="stack-list"><div v-for="item in marketingBriefs.slice(0, 6)" :key="item.id" class="stack-item"><div class="run-head"><strong>{{ item.workflowId }}</strong><span>{{ prettyDate(item.createdAt?.seconds ? item.createdAt.seconds * 1000 : item.createdAt) }}</span></div><p class="muted">{{ item.target || 'No target specified' }}</p><div class="action-row"><button class="ghost" @click="generatedMarketingBrief = item.brief">Load Brief</button><button class="ghost" @click="promptInput = item.brief; activeView = 'chat'">Launch</button></div></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Brief memory</span>
+              <h3>Saved marketing briefs</h3>
+            </div>
+          </div>
+          <div v-if="marketingBriefs.length" class="stack-list">
+            <div v-for="item in marketingBriefs.slice(0, 6)" :key="item.id" class="stack-item">
+              <div class="run-head"><strong>{{ item.workflowId }}</strong><span>{{ prettyDate(item.createdAt?.seconds ?
+                item.createdAt.seconds * 1000 : item.createdAt) }}</span></div>
+              <p class="muted">{{ item.target || 'No target specified' }}</p>
+              <div class="action-row"><button class="ghost" @click="generatedMarketingBrief = item.brief">Load
+                  Brief</button><button class="ghost"
+                  @click="promptInput = item.brief; activeView = 'chat'">Launch</button></div>
+            </div>
+          </div>
           <p v-else class="muted">Saved workflow briefs will appear here.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Deliverables</span><h3>Generated marketing files</h3></div></div>
-          <div v-if="marketingOutputs.length" class="stack-list"><div v-for="item in marketingOutputs.slice(0, 8)" :key="item.id || item.url" class="stack-item"><div class="run-head"><strong>{{ item.type }}</strong><span>{{ item.workflowId }}</span></div><p class="muted">{{ item.fileName }}</p><div class="action-row"><a :href="item.url" target="_blank" rel="noreferrer" class="link-btn">Open</a><button class="ghost" @click="downloadMarketingDeliverable(item, 'pdf')">PDF</button><button class="ghost" @click="launchDeliverableToChat(item)">Use In Mission</button><button class="ghost" @click="sendMarketingDeliverable(item)">Send To Client</button></div></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Deliverables</span>
+              <h3>Generated marketing files</h3>
+            </div>
+          </div>
+          <div v-if="marketingOutputs.length" class="stack-list">
+            <div v-for="item in marketingOutputs.slice(0, 8)" :key="item.id || item.url" class="stack-item">
+              <div class="run-head"><strong>{{ item.type }}</strong><span>{{ item.workflowId }}</span></div>
+              <p class="muted">{{ item.fileName }}</p>
+              <div class="action-row"><a :href="item.url" target="_blank" rel="noreferrer"
+                  class="link-btn">Open</a><button class="ghost"
+                  @click="downloadMarketingDeliverable(item, 'pdf')">PDF</button><button class="ghost"
+                  @click="launchDeliverableToChat(item)">Use In Mission</button><button class="ghost"
+                  @click="sendMarketingDeliverable(item)">Send To Client</button></div>
+            </div>
+          </div>
           <p v-else class="muted">No marketing deliverables generated yet.</p>
         </div>
       </section>
 
       <section v-else-if="activeView === 'usage'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">KPIs</span><h3>Usage summary tiles</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">KPIs</span>
+              <h3>Usage summary tiles</h3>
+            </div>
+          </div>
           <div class="card-grid">
-            <div class="mini-card"><label>Period calls</label><strong>{{ globalUsageSummary.totals.calls || 0 }}</strong><p class="muted">{{ usagePeriod.toUpperCase() }}</p></div>
-            <div class="mini-card"><label>Free calls</label><strong>{{ globalUsageSummary.totals.freeCalls || 0 }}</strong><p class="muted">estimated free</p></div>
-            <div class="mini-card"><label>Paid calls</label><strong>{{ globalUsageSummary.totals.paidCalls || 0 }}</strong><p class="muted">estimated paid</p></div>
-            <div class="mini-card"><label>Paid cost</label><strong>{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }}</strong><p class="muted">estimated cost</p></div>
+            <div class="mini-card"><label>Period calls</label><strong>{{ globalUsageSummary.totals.calls || 0
+                }}</strong>
+              <p class="muted">{{ usagePeriod.toUpperCase() }}</p>
+            </div>
+            <div class="mini-card"><label>Free calls</label><strong>{{ globalUsageSummary.totals.freeCalls || 0
+                }}</strong>
+              <p class="muted">estimated free</p>
+            </div>
+            <div class="mini-card"><label>Paid calls</label><strong>{{ globalUsageSummary.totals.paidCalls || 0
+                }}</strong>
+              <p class="muted">estimated paid</p>
+            </div>
+            <div class="mini-card"><label>Paid cost</label><strong>{{
+              dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }}</strong>
+              <p class="muted">estimated cost</p>
+            </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Usage</span><h3>Global provider and model usage</h3></div></div>
-          <div class="action-row"><select v-model="usagePeriod"><option value="all">All time</option><option value="today">Today</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost" @click="downloadUsageReport('global', 'csv')">Export CSV</button><button class="ghost" @click="downloadUsageReport('global', 'pdf')">Export PDF</button></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Usage</span>
+              <h3>Global provider and model usage</h3>
+            </div>
+          </div>
+          <div class="action-row"><select v-model="usagePeriod">
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost"
+              @click="downloadUsageReport('global', 'csv')">Export CSV</button><button class="ghost"
+              @click="downloadUsageReport('global', 'pdf')">Export PDF</button></div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Global totals</strong>
-              <p class="muted">{{ globalUsageSummary.totals.calls || 0 }} total calls · {{ globalUsageSummary.totals.freeCalls || 0 }} free · {{ globalUsageSummary.totals.paidCalls || 0 }} paid</p>
-              <p class="muted">{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage</p>
+              <p class="muted">{{ globalUsageSummary.totals.calls || 0 }} total calls · {{
+                globalUsageSummary.totals.freeCalls || 0 }} free · {{ globalUsageSummary.totals.paidCalls || 0 }} paid
+              </p>
+              <p class="muted">{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage
+              </p>
             </div>
             <div v-if="globalUsageSummary.providers?.length" class="stack-item">
               <strong>Provider breakdown</strong>
-              <p v-for="provider in globalUsageSummary.providers" :key="provider.provider" class="muted">{{ provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{ provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{ provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
+              <p v-for="provider in globalUsageSummary.providers" :key="provider.provider" class="muted">{{
+                provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{
+                  provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{
+                  provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Trend</span><h3>Daily usage trend</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Trend</span>
+              <h3>Daily usage trend</h3>
+            </div>
+          </div>
           <div v-if="globalUsageChart.length" class="usage-chart">
             <div v-for="point in globalUsageChart" :key="point.date" class="usage-bar-wrap">
-              <div class="usage-bar" :style="{ height: point.height }" :title="`${point.date}: ${point.calls} calls`"></div>
+              <div class="usage-bar" :style="{ height: point.height }" :title="`${point.date}: ${point.calls} calls`">
+              </div>
               <span>{{ point.date.slice(5) }}</span>
             </div>
           </div>
           <p v-else class="muted">Trend data will appear after usage events are recorded.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Share</span><h3>Provider share</h3></div></div>
-          <div v-if="providerShareRows.length" class="stack-list"><div v-for="provider in providerShareRows" :key="provider.provider" class="stack-item"><div class="run-head"><strong>{{ provider.provider }}</strong><span>{{ provider.percentage }}%</span></div><p class="muted">{{ provider.calls }} calls · {{ dualCurrency(provider.estimatedCostUsd || 0) }}</p></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Share</span>
+              <h3>Provider share</h3>
+            </div>
+          </div>
+          <div v-if="providerShareRows.length" class="stack-list">
+            <div v-for="provider in providerShareRows" :key="provider.provider" class="stack-item">
+              <div class="run-head"><strong>{{ provider.provider }}</strong><span>{{ provider.percentage }}%</span>
+              </div>
+              <p class="muted">{{ provider.calls }} calls · {{ dualCurrency(provider.estimatedCostUsd || 0) }}</p>
+            </div>
+          </div>
           <p v-else class="muted">Provider share will appear after tracked usage accumulates.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Usage</span><h3>Client usage breakdown</h3></div><div class="context-box"><label>Client</label><select v-model="selectedFinanceClient"><option value="">Select Client</option><option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option></select></div></div>
-          <div class="action-row"><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost" :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'csv')">Export CSV</button><button class="ghost" :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'pdf')">Export PDF</button></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Usage</span>
+              <h3>Client usage breakdown</h3>
+            </div>
+            <div class="context-box"><label>Client</label><select v-model="selectedFinanceClient">
+                <option value="">Select Client</option>
+                <option v-for="client in clients" :key="client.id" :value="client.id">{{ client.name }}</option>
+              </select></div>
+          </div>
+          <div class="action-row"><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button
+              class="ghost" :disabled="!selectedFinanceClient" @click="downloadUsageReport('client', 'csv')">Export
+              CSV</button><button class="ghost" :disabled="!selectedFinanceClient"
+              @click="downloadUsageReport('client', 'pdf')">Export PDF</button></div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Client totals</strong>
-              <p class="muted">{{ clientUsageSummary.totals.calls || 0 }} total calls · {{ clientUsageSummary.totals.freeCalls || 0 }} free · {{ clientUsageSummary.totals.paidCalls || 0 }} paid</p>
-              <p class="muted">{{ dualCurrency(clientUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage</p>
+              <p class="muted">{{ clientUsageSummary.totals.calls || 0 }} total calls · {{
+                clientUsageSummary.totals.freeCalls || 0 }} free · {{ clientUsageSummary.totals.paidCalls || 0 }} paid
+              </p>
+              <p class="muted">{{ dualCurrency(clientUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage
+              </p>
             </div>
             <div v-if="clientUsageSummary.providers?.length" class="stack-item">
               <strong>Providers</strong>
-              <p v-for="provider in clientUsageSummary.providers" :key="provider.provider" class="muted">{{ provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{ provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{ provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
+              <p v-for="provider in clientUsageSummary.providers" :key="provider.provider" class="muted">{{
+                provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{
+                  provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{
+                  provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
             </div>
             <div v-if="clientUsageSummary.models?.length" class="stack-item">
               <strong>Models</strong>
-              <p v-for="model in clientUsageSummary.models" :key="`${model.provider}-${model.model}`" class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
+              <p v-for="model in clientUsageSummary.models" :key="`${model.provider}-${model.model}`" class="muted">{{
+                model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }} free · {{
+                  model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
             </div>
           </div>
           <p v-if="!selectedFinanceClient" class="muted">Select a client to see client-based model and media usage.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Models</span><h3>Global model breakdown</h3></div></div>
-          <div v-if="globalUsageSummary.models?.length" class="stack-list"><div v-for="model in globalUsageSummary.models" :key="`${model.provider}-${model.model}`" class="stack-item"><div class="run-head"><strong>{{ model.provider }}</strong><span>{{ model.kind || 'llm' }}</span></div><p class="muted">{{ model.model }}</p><p class="muted">{{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ dualCurrency(model.estimatedCostUsd || 0) }}</p><p class="muted">{{ model.resetCadence }}</p></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Models</span>
+              <h3>Global model breakdown</h3>
+            </div>
+          </div>
+          <div v-if="globalUsageSummary.models?.length" class="stack-list">
+            <div v-for="model in globalUsageSummary.models" :key="`${model.provider}-${model.model}`"
+              class="stack-item">
+              <div class="run-head"><strong>{{ model.provider }}</strong><span>{{ model.kind || 'llm' }}</span></div>
+              <p class="muted">{{ model.model }}</p>
+              <p class="muted">{{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{
+                dualCurrency(model.estimatedCostUsd || 0) }}</p>
+              <p class="muted">{{ model.resetCadence }}</p>
+            </div>
+          </div>
           <p v-else class="muted">No model usage recorded yet.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Fallbacks</span><h3>Provider switch history</h3></div></div>
-          <div v-if="recentProviderSwitches.length" class="stack-list"><div v-for="item in recentProviderSwitches" :key="`${item.runId}-${item.at}`" class="stack-item"><div class="run-head"><strong>{{ item.from }} -> {{ item.to }}</strong><span>{{ prettyDate(item.at) }}</span></div><p class="muted">{{ item.model || 'no model noted' }}</p><p class="muted">{{ item.requestPreview }}</p></div></div>
-          <p v-else class="muted">Fallback switch events will appear here when Nexus rolls from one provider to another.</p>
+          <div class="panel-head">
+            <div><span class="tiny-label">Fallbacks</span>
+              <h3>Provider switch history</h3>
+            </div>
+          </div>
+          <div v-if="recentProviderSwitches.length" class="stack-list">
+            <div v-for="item in recentProviderSwitches" :key="`${item.runId}-${item.at}`" class="stack-item">
+              <div class="run-head"><strong>{{ item.from }} -> {{ item.to }}</strong><span>{{ prettyDate(item.at)
+                  }}</span></div>
+              <p class="muted">{{ item.model || 'no model noted' }}</p>
+              <p class="muted">{{ item.requestPreview }}</p>
+            </div>
+          </div>
+          <p v-else class="muted">Fallback switch events will appear here when Nexus rolls from one provider to another.
+          </p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Clients</span><h3>Top clients by usage</h3></div></div>
-          <div v-if="usageLeaders.length" class="stack-list"><div v-for="leader in usageLeaders" :key="leader.clientId" class="stack-item"><div class="run-head"><strong>{{ leader.clientName }}</strong><span>{{ leader.calls }} calls</span></div><p class="muted">{{ leader.freeCalls }} free · {{ leader.paidCalls }} paid · {{ dualCurrency(leader.estimatedCostUsd || 0) }}</p></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Clients</span>
+              <h3>Top clients by usage</h3>
+            </div>
+          </div>
+          <div v-if="usageLeaders.length" class="stack-list">
+            <div v-for="leader in usageLeaders" :key="leader.clientId" class="stack-item">
+              <div class="run-head"><strong>{{ leader.clientName }}</strong><span>{{ leader.calls }} calls</span></div>
+              <p class="muted">{{ leader.freeCalls }} free · {{ leader.paidCalls }} paid · {{
+                dualCurrency(leader.estimatedCostUsd || 0) }}</p>
+            </div>
+          </div>
           <p v-else class="muted">Client usage rankings will appear after tracked activity accumulates.</p>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Expensive</span><h3>Highest cost drivers</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Expensive</span>
+              <h3>Highest cost drivers</h3>
+            </div>
+          </div>
           <div class="stack-list">
             <div class="stack-item" v-if="mostExpensiveClient">
               <strong>Most expensive client</strong>
               <p class="muted">{{ mostExpensiveClient.clientName }}</p>
-              <p class="muted">{{ dualCurrency(mostExpensiveClient.estimatedCostUsd || 0) }} · {{ mostExpensiveClient.calls }} calls</p>
+              <p class="muted">{{ dualCurrency(mostExpensiveClient.estimatedCostUsd || 0) }} · {{
+                mostExpensiveClient.calls }} calls</p>
             </div>
             <div class="stack-item" v-if="mostExpensiveModel">
               <strong>Most expensive model</strong>
               <p class="muted">{{ mostExpensiveModel.provider }} / {{ mostExpensiveModel.model }}</p>
-              <p class="muted">{{ dualCurrency(mostExpensiveModel.estimatedCostUsd || 0) }} · {{ mostExpensiveModel.calls }} calls</p>
+              <p class="muted">{{ dualCurrency(mostExpensiveModel.estimatedCostUsd || 0) }} · {{
+                mostExpensiveModel.calls }} calls</p>
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Guidance</span><h3>Free tier interpretation</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Guidance</span>
+              <h3>Free tier interpretation</h3>
+            </div>
+          </div>
           <div class="stack-list">
-            <div class="stack-item"><strong>Estimated free vs paid</strong><p class="muted">These numbers are inferred from provider, model, and quota mode. They are not yet direct billing sync from Gemini, OpenRouter, Groq, NVIDIA, or media providers.</p></div>
-            <div class="stack-item"><strong>Reset cadence</strong><p class="muted">Nexus shows a practical reset hint like daily free window, provider quota window, or paid usage. Exact resets still depend on each provider console and account plan.</p></div>
+            <div class="stack-item"><strong>Estimated free vs paid</strong>
+              <p class="muted">These numbers are inferred from provider, model, and quota mode. They are not yet direct
+                billing sync from Gemini, OpenRouter, Groq, NVIDIA, or media providers.</p>
+            </div>
+            <div class="stack-item"><strong>Reset cadence</strong>
+              <p class="muted">Nexus shows a practical reset hint like daily free window, provider quota window, or paid
+                usage. Exact resets still depend on each provider console and account plan.</p>
+            </div>
           </div>
         </div>
       </section>
 
       <section v-else-if="activeView === 'setup'" class="grid-two">
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Setup Center</span><h3>Provider onboarding and resume</h3></div><button class="ghost" @click="loadSetupCenter(latestNexusMessage)">Refresh Doctor</button></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Setup Center</span>
+              <h3>Provider onboarding and resume</h3>
+            </div><button class="ghost" @click="loadSetupCenter(latestNexusMessage)">Refresh Doctor</button>
+          </div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Guided onboarding</strong>
-              <p class="muted">Launch provider setup missions directly from Nexus. If login, OTP, MFA, or account selection is needed, answer in chat and Nexus should continue the same setup flow.</p>
+              <p class="muted">Launch provider setup missions directly from Nexus. If login, OTP, MFA, or account
+                selection is needed, answer in chat and Nexus should continue the same setup flow.</p>
             </div>
             <div v-for="playbook in setupPlaybooks" :key="`setup-${playbook.key}`" class="stack-item">
-              <div class="run-head"><strong>{{ playbook.title }}</strong><span class="badge">{{ playbook.key }}</span></div>
+              <div class="run-head"><strong>{{ playbook.title }}</strong><span class="badge">{{ playbook.key }}</span>
+              </div>
               <p class="muted">{{ playbook.description }}</p>
               <p class="muted">Provider: {{ playbook.provider }} · Category: {{ playbook.category }}</p>
               <p class="muted">Steps: {{ playbook.steps?.join(' -> ') }}</p>
@@ -1720,63 +2337,110 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="panel">
-          <div class="panel-head"><div><span class="tiny-label">Setup Doctor</span><h3>Blockers before they break a task</h3></div></div>
+          <div class="panel-head">
+            <div><span class="tiny-label">Setup Doctor</span>
+              <h3>Blockers before they break a task</h3>
+            </div>
+          </div>
           <div class="stack-list">
             <div class="stack-item">
               <strong>Status: {{ setupDoctor.summary.status }}</strong>
               <p class="muted">{{ setupDoctor.summary.message }}</p>
             </div>
             <div v-for="blocker in setupDoctor.blockers" :key="blocker.code" class="stack-item">
-              <div class="run-head"><strong>{{ blocker.title }}</strong><span class="badge" :class="blocker.severity === 'critical' ? 'warning' : ''">{{ blocker.severity }}</span></div>
+              <div class="run-head"><strong>{{ blocker.title }}</strong><span class="badge"
+                  :class="blocker.severity === 'critical' ? 'warning' : ''">{{ blocker.severity }}</span></div>
               <p class="muted">{{ blocker.detail }}</p>
               <p class="muted">{{ blocker.impact }}</p>
               <div class="action-row">
-                <button v-if="blocker.playbook?.key" class="primary subtle" @click="openKeySetupWithNexus(blocker.playbook.key)">Guide Me</button>
+                <button v-if="blocker.playbook?.key" class="primary subtle"
+                  @click="openKeySetupWithNexus(blocker.playbook.key)">Guide Me</button>
                 <button v-else class="ghost" @click="activeView = 'tools'">Open Capabilities</button>
               </div>
             </div>
             <div class="stack-item">
               <strong>Boss alerts</strong>
-              <p class="muted">When enabled, Nexus sends local notifications for tool actions, results, approvals needed, errors, and mission completion.</p>
-              <div class="action-row"><button class="ghost" @click="enableNotifications">{{ alertsEnabled ? 'Alerts Enabled' : 'Enable Alerts' }}</button></div>
+              <p class="muted">When enabled, Nexus sends local notifications for tool actions, results, approvals
+                needed, errors, and mission completion.</p>
+              <div class="action-row"><button class="ghost" @click="enableNotifications">
+                  {{ alertsEnabled ? 'Alerts Enabled' : 'Enable Alerts' }}</button></div>
             </div>
             <div class="stack-item">
               <strong>Resume behavior</strong>
-              <p class="muted">Setup flows should stay inside the same mission. If Nexus needs your input in the middle, reply in chat and it should resume instead of breaking the workflow.</p>
+              <p class="muted">Setup flows should stay inside the same mission. If Nexus needs your input in the middle,
+                reply in chat and it should resume instead of breaking the workflow.</p>
             </div>
           </div>
         </div>
       </section>
 
       <section v-else-if="activeView === 'tools'" class="panel">
-        <div class="panel-head"><div><span class="tiny-label">Capabilities</span><h3>Provider readiness matrix</h3></div><button class="ghost" @click="loadToolsDashboard">Refresh</button></div>
-        <div class="card-grid"><div v-for="tool in toolsData" :key="tool.id" class="mini-card"><div class="run-head"><strong>{{ tool.name }}</strong><span class="badge" :class="tool.status === 'active' ? 'success' : 'warning'">{{ tool.status }}</span></div><p class="muted">{{ tool.description }}</p><p class="muted" v-if="tool.diagnostics?.missingKeys?.length">Missing: {{ tool.diagnostics.missingKeys.join(', ') }}</p><p class="muted" v-else-if="tool.diagnostics?.ready">Ready: {{ (tool.diagnostics.configuredKeys || []).join(', ') || 'configured' }}</p><div class="action-row"><button class="ghost" @click="editTool(tool)">Configure</button><button class="primary subtle" @click="testTool(tool)">Test</button></div></div></div>
+        <div class="panel-head">
+          <div><span class="tiny-label">Capabilities</span>
+            <h3>Provider readiness matrix</h3>
+          </div><button class="ghost" @click="loadToolsDashboard">Refresh</button>
+        </div>
+        <div class="card-grid">
+          <div v-for="tool in toolsData" :key="tool.id" class="mini-card">
+            <div class="run-head"><strong>{{ tool.name }}</strong><span class="badge"
+                :class="tool.status === 'active' ? 'success' : 'warning'">{{ tool.status }}</span></div>
+            <p class="muted">{{ tool.description }}</p>
+            <p class="muted" v-if="tool.diagnostics?.missingKeys?.length">Missing: {{
+              tool.diagnostics.missingKeys.join(', ') }}</p>
+            <p class="muted" v-else-if="tool.diagnostics?.ready">Ready: {{ (tool.diagnostics.configuredKeys ||
+              []).join(', ') || 'configured' }}</p>
+            <div class="action-row"><button class="ghost" @click="editTool(tool)">Configure</button><button
+                class="primary subtle" @click="testTool(tool)">Test</button></div>
+          </div>
+        </div>
       </section>
 
       <section v-else class="panel">
-        <div class="panel-head"><div><span class="tiny-label">Configuration</span><h3>Keys and quota controls</h3></div></div>
+        <div class="panel-head">
+          <div><span class="tiny-label">Configuration</span>
+            <h3>Keys and quota controls</h3>
+          </div>
+        </div>
         <div class="stack-list">
           <div class="stack-item">
             <strong>Boss / Global default mode</strong>
             <p class="muted">Primary Gemini first, then OpenRouter, Groq, and NVIDIA fallback when configured.</p>
           </div>
-          <div class="action-row"><select v-model="usagePeriod"><option value="all">All time</option><option value="today">Today</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost" @click="downloadUsageReport('global', 'csv')">Export CSV</button><button class="ghost" @click="downloadUsageReport('global', 'pdf')">Export PDF</button></div>
+          <div class="action-row"><select v-model="usagePeriod">
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select><button class="ghost" @click="refreshUsagePanels">Refresh Usage</button><button class="ghost"
+              @click="downloadUsageReport('global', 'csv')">Export CSV</button><button class="ghost"
+              @click="downloadUsageReport('global', 'pdf')">Export PDF</button></div>
           <div class="stack-item">
             <strong>Global model usage</strong>
-            <p class="muted">{{ globalUsageSummary.totals.calls || 0 }} total calls · {{ globalUsageSummary.totals.freeCalls || 0 }} free · {{ globalUsageSummary.totals.paidCalls || 0 }} paid</p>
-            <p class="muted">{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage</p>
+            <p class="muted">{{ globalUsageSummary.totals.calls || 0 }} total calls · {{
+              globalUsageSummary.totals.freeCalls || 0 }} free · {{ globalUsageSummary.totals.paidCalls || 0 }} paid</p>
+            <p class="muted">{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage
+            </p>
           </div>
           <div v-if="globalUsageSummary.providers?.length" class="stack-item">
             <strong>Provider breakdown</strong>
-            <p v-for="provider in globalUsageSummary.providers.slice(0, 8)" :key="provider.provider" class="muted">{{ provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{ provider.paidCalls }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{ provider.resetCadence }} · {{ Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
+            <p v-for="provider in globalUsageSummary.providers.slice(0, 8)" :key="provider.provider" class="muted">{{
+              provider.provider }} · {{ provider.calls }} calls · {{ provider.freeCalls }} free · {{ provider.paidCalls
+              }} paid · {{ dualCurrency(provider.estimatedCostUsd || 0) }} · {{ provider.resetCadence }} · {{
+                Object.keys(provider.kinds || {}).join(' + ') || 'llm' }}</p>
           </div>
           <div v-if="globalUsageSummary.models?.length" class="stack-item">
             <strong>Model breakdown</strong>
-            <p v-for="model in globalUsageSummary.models.slice(0, 10)" :key="`${model.provider}-${model.model}`" class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
+            <p v-for="model in globalUsageSummary.models.slice(0, 10)" :key="`${model.provider}-${model.model}`"
+              class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }}
+              free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
           </div>
         </div>
         <div v-for="group in configGroups" :key="group.title" class="settings-group">
-          <div class="panel-head compact-head"><div><span class="tiny-label">Configuration group</span><h3>{{ group.title }}</h3></div></div>
+          <div class="panel-head compact-head">
+            <div><span class="tiny-label">Configuration group</span>
+              <h3>{{ group.title }}</h3>
+            </div>
+          </div>
           <div class="card-grid">
             <div v-for="entry in group.entries" :key="entry.key" class="mini-card">
               <label>{{ entry.label }}</label>
@@ -1786,8 +2450,10 @@ onBeforeUnmount(() => {
                 <option value="HIGH">HIGH</option>
               </select>
               <div v-else class="inline-input">
-                <input :type="revealKeys[entry.key] ? 'text' : 'password'" v-model="configEdits[entry.key]" :placeholder="entry.isSet ? 'Configured' : 'Unset'">
-                <button class="ghost" @click="revealKeys[entry.key] = !revealKeys[entry.key]">{{ revealKeys[entry.key] ? 'Hide' : 'Show' }}</button>
+                <input :type="revealKeys[entry.key] ? 'text' : 'password'" v-model="configEdits[entry.key]"
+                  :placeholder="entry.isSet ? 'Configured' : 'Unset'">
+                <button class="ghost" @click="revealKeys[entry.key] = !revealKeys[entry.key]">{{ revealKeys[entry.key] ?
+                  'Hide' : 'Show' }}</button>
               </div>
             </div>
           </div>
@@ -1796,9 +2462,85 @@ onBeforeUnmount(() => {
       </section>
     </main>
 
-    <transition name="fade"><div v-if="isAddingClient" class="modal-backdrop" @click.self="isAddingClient = false"><div class="modal-card"><div class="panel-head"><div><span class="tiny-label">New client</span><h3>Create isolated operating context</h3></div><button class="ghost" @click="isAddingClient = false">Close</button></div><div class="card-grid"><div class="mini-card"><label>Name</label><input v-model="newClient.name" placeholder="Acme Growth"></div><div class="mini-card"><label>Company</label><input v-model="newClient.company" placeholder="Acme Pvt Ltd"></div><div class="mini-card"><label>Email</label><input v-model="newClient.email" placeholder="team@acme.com"></div><div class="mini-card"><label>Phone</label><input v-model="newClient.phone" placeholder="+91..."></div><div class="mini-card full"><label>Notes</label><textarea v-model="newClient.notes" placeholder="Brand, goals, constraints, operating notes."></textarea></div><div v-for="(info, key) in CLIENT_KEY_INFO" :key="key" class="mini-card"><div class="run-head"><label>{{ info.label }}</label><button class="link-btn" @click="clientKeyEditing = clientKeyEditing === key ? '' : key">How to get</button></div><p v-if="clientKeyEditing === key" class="muted">{{ info.howTo }}</p><div class="action-row compact-row"><button class="ghost" @click="openKeySetupWithNexus(key)">Set up with Nexus</button></div><input type="password" v-model="newClient.initialKeys[key]" :placeholder="info.placeholder"></div></div><div class="action-row"><button class="ghost" @click="isAddingClient = false">Cancel</button><button class="primary" @click="saveClient">Create Client</button></div></div></div></transition>
-    <transition name="fade"><div v-if="isManagingClientKeys && activeClient" class="modal-backdrop" @click.self="isManagingClientKeys = false"><div class="modal-card"><div class="panel-head"><div><span class="tiny-label">Key management</span><h3>{{ activeClient.name }}</h3></div><button class="ghost" @click="isManagingClientKeys = false">Close</button></div><div class="stack-list"><div class="stack-item"><strong>LLM fallback keys appear first</strong><p class="muted">Gemini primary/backup, then OpenRouter, Groq, and NVIDIA client-specific overrides.</p></div></div><div class="card-grid"><div v-for="keyRow in clientKeysList" :key="keyRow.key" class="mini-card"><label>{{ keyRow.label || clientKeyLabels[keyRow.key] || keyRow.key }}</label><p v-if="CLIENT_KEY_INFO[keyRow.key]?.howTo" class="muted">{{ CLIENT_KEY_INFO[keyRow.key].howTo }}</p><div v-if="CLIENT_KEY_INFO[keyRow.key]?.setupPrompt" class="action-row compact-row"><button class="ghost" @click="openKeySetupWithNexus(keyRow.key)">Set up with Nexus</button></div><input type="password" v-model="clientKeyEdits[keyRow.key]" :placeholder="keyRow.isSet ? 'Configured' : 'Unset'"></div></div><div class="action-row"><button class="primary" @click="saveClientKeys">Save Keys</button></div></div></div></transition>
-    <transition name="fade"><div v-if="isEditingTool && activeTool" class="modal-backdrop" @click.self="isEditingTool = false"><div class="modal-card"><div class="panel-head"><div><span class="tiny-label">Capability tuning</span><h3>{{ activeTool.name }}</h3></div><button class="ghost" @click="isEditingTool = false">Close</button></div><div class="mini-card"><p class="muted">{{ activeTool.description }}</p><span class="badge" :class="activeTool.status === 'active' ? 'success' : 'warning'">{{ activeTool.status === 'active' ? 'Operational' : 'Needs credentials' }}</span></div><div class="mini-card"><label>Operational rules</label><textarea v-model="configEdits[`TOOL_${activeTool.id.toUpperCase()}_RULES`]" placeholder="Example: Always return JSON with a short summary and risk flags."></textarea></div><div class="action-row"><button class="ghost" @click="testTool(activeTool)">Run Test</button><button class="primary" @click="updateToolConfig">Save Guidance</button></div></div></div></transition>
+    <transition name="fade">
+      <div v-if="isAddingClient" class="modal-backdrop" @click.self="isAddingClient = false">
+        <div class="modal-card">
+          <div class="panel-head">
+            <div><span class="tiny-label">New client</span>
+              <h3>Create isolated operating context</h3>
+            </div><button class="ghost" @click="isAddingClient = false">Close</button>
+          </div>
+          <div class="card-grid">
+            <div class="mini-card"><label>Name</label><input v-model="newClient.name" placeholder="Acme Growth"></div>
+            <div class="mini-card"><label>Company</label><input v-model="newClient.company" placeholder="Acme Pvt Ltd">
+            </div>
+            <div class="mini-card"><label>Email</label><input v-model="newClient.email" placeholder="team@acme.com">
+            </div>
+            <div class="mini-card"><label>Phone</label><input v-model="newClient.phone" placeholder="+91..."></div>
+            <div class="mini-card full"><label>Notes</label><textarea v-model="newClient.notes"
+                placeholder="Brand, goals, constraints, operating notes."></textarea></div>
+            <div v-for="(info, key) in CLIENT_KEY_INFO" :key="key" class="mini-card">
+              <div class="run-head"><label>{{ info.label }}</label><button class="link-btn"
+                  @click="clientKeyEditing = clientKeyEditing === key ? '' : key">How to get</button></div>
+              <p v-if="clientKeyEditing === key" class="muted">{{ info.howTo }}</p>
+              <div class="action-row compact-row"><button class="ghost" @click="openKeySetupWithNexus(key)">Set up with
+                  Nexus</button></div><input type="password" v-model="newClient.initialKeys[key]"
+                :placeholder="info.placeholder">
+            </div>
+          </div>
+          <div class="action-row"><button class="ghost" @click="isAddingClient = false">Cancel</button><button
+              class="primary" @click="saveClient">Create Client</button></div>
+        </div>
+      </div>
+    </transition>
+    <transition name="fade">
+      <div v-if="isManagingClientKeys && activeClient" class="modal-backdrop"
+        @click.self="isManagingClientKeys = false">
+        <div class="modal-card">
+          <div class="panel-head">
+            <div><span class="tiny-label">Key management</span>
+              <h3>{{ activeClient.name }}</h3>
+            </div><button class="ghost" @click="isManagingClientKeys = false">Close</button>
+          </div>
+          <div class="stack-list">
+            <div class="stack-item"><strong>LLM fallback keys appear first</strong>
+              <p class="muted">Gemini primary/backup, then OpenRouter, Groq, and NVIDIA client-specific overrides.</p>
+            </div>
+          </div>
+          <div class="card-grid">
+            <div v-for="keyRow in clientKeysList" :key="keyRow.key" class="mini-card"><label>{{ keyRow.label ||
+              clientKeyLabels[keyRow.key] || keyRow.key }}</label>
+              <p v-if="CLIENT_KEY_INFO[keyRow.key]?.howTo" class="muted">{{ CLIENT_KEY_INFO[keyRow.key].howTo }}</p>
+              <div v-if="CLIENT_KEY_INFO[keyRow.key]?.setupPrompt" class="action-row compact-row"><button class="ghost"
+                  @click="openKeySetupWithNexus(keyRow.key)">Set up with Nexus</button></div><input type="password"
+                v-model="clientKeyEdits[keyRow.key]" :placeholder="keyRow.isSet ? 'Configured' : 'Unset'">
+            </div>
+          </div>
+          <div class="action-row"><button class="primary" @click="saveClientKeys">Save Keys</button></div>
+        </div>
+      </div>
+    </transition>
+    <transition name="fade">
+      <div v-if="isEditingTool && activeTool" class="modal-backdrop" @click.self="isEditingTool = false">
+        <div class="modal-card">
+          <div class="panel-head">
+            <div><span class="tiny-label">Capability tuning</span>
+              <h3>{{ activeTool.name }}</h3>
+            </div><button class="ghost" @click="isEditingTool = false">Close</button>
+          </div>
+          <div class="mini-card">
+            <p class="muted">{{ activeTool.description }}</p><span class="badge"
+              :class="activeTool.status === 'active' ? 'success' : 'warning'">{{ activeTool.status === 'active' ?
+                'Operational' : 'Needs credentials' }}</span>
+          </div>
+          <div class="mini-card"><label>Operational rules</label><textarea
+              v-model="configEdits[`TOOL_${activeTool.id.toUpperCase()}_RULES`]"
+              placeholder="Example: Always return JSON with a short summary and risk flags."></textarea></div>
+          <div class="action-row"><button class="ghost" @click="testTool(activeTool)">Run Test</button><button
+              class="primary" @click="updateToolConfig">Save Guidance</button></div>
+        </div>
+      </div>
+    </transition>
     <div v-if="configToast.show" class="toast" :class="configToast.type">{{ configToast.message }}</div>
   </div>
 </template>
@@ -1866,7 +2608,9 @@ onBeforeUnmount(() => {
   --sidebar-grad-end: rgba(11, 9, 27, 0.96);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
@@ -1879,7 +2623,12 @@ body {
   overflow: hidden;
 }
 
-button, input, textarea, select { font: inherit; }
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
 
 .app-shell {
   min-height: 100vh;
@@ -1923,7 +2672,11 @@ button, input, textarea, select { font: inherit; }
   display: none;
 }
 
-.brand { display: flex; align-items: center; gap: 14px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
 
 .brand-mark {
   width: 46px;
@@ -1936,7 +2689,12 @@ button, input, textarea, select { font: inherit; }
   overflow: hidden;
 }
 
-.brand-copy { display: grid; gap: 6px; min-width: 0; }
+.brand-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .brand-logo-image {
   /* height: 24px; */
   width: auto;
@@ -1944,6 +2702,7 @@ button, input, textarea, select { font: inherit; }
   object-fit: contain;
   filter: brightness(1.05);
 }
+
 .brand-icon-image {
   width: 100%;
   height: 100%;
@@ -1952,11 +2711,32 @@ button, input, textarea, select { font: inherit; }
   transform: scale(1.15);
 }
 
-.brand-name, .brand-sub, .eyebrow, .tiny-label, .nav-sub { margin: 0; }
-.brand-name, .topbar h1, .hero-card h2, .panel h3 { font-family: 'Space Grotesk', sans-serif; }
-.brand-name { font-size: .92rem; }
+.brand-name,
+.brand-sub,
+.eyebrow,
+.tiny-label,
+.nav-sub {
+  margin: 0;
+}
 
-.sidebar-stack, .stack-list, .card-grid, .rail { display: grid; gap: 12px; }
+.brand-name,
+.topbar h1,
+.hero-card h2,
+.panel h3 {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.brand-name {
+  font-size: .92rem;
+}
+
+.sidebar-stack,
+.stack-list,
+.card-grid,
+.rail {
+  display: grid;
+  gap: 12px;
+}
 
 .usage-chart {
   display: grid;
@@ -1988,7 +2768,16 @@ button, input, textarea, select { font: inherit; }
   color: var(--muted);
 }
 
-.sidebar-card, .nav-item, .panel, .hero-card, .metric-card, .mini-card, .modal-card, .message-card, .composer, .toast {
+.sidebar-card,
+.nav-item,
+.panel,
+.hero-card,
+.metric-card,
+.mini-card,
+.modal-card,
+.message-card,
+.composer,
+.toast {
   border: 1px solid var(--line);
   background: var(--surface);
   backdrop-filter: blur(14px);
@@ -1996,7 +2785,13 @@ button, input, textarea, select { font: inherit; }
   border-radius: 24px;
 }
 
-.sidebar-card, .panel, .hero-card, .metric-card, .modal-card { padding: 20px; }
+.sidebar-card,
+.panel,
+.hero-card,
+.metric-card,
+.modal-card {
+  padding: 20px;
+}
 
 .nav-item {
   text-align: left;
@@ -2007,15 +2802,36 @@ button, input, textarea, select { font: inherit; }
   min-height: 62px;
 }
 
-.nav-item.active, .nav-item:hover, .stack-item:hover, .primary:hover, .ghost:hover, .danger:hover {
+.nav-item.active,
+.nav-item:hover,
+.stack-item:hover,
+.primary:hover,
+.ghost:hover,
+.danger:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
   background: color-mix(in srgb, var(--surface) 82%, var(--accent) 18%);
 }
 
-.nav-title { display: block; font-weight: 700; }
-.nav-sub, .tiny-copy, .muted, .message-text p { color: var(--muted); }
-.tiny-label, .eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .68rem; font-weight: 800; }
+.nav-title {
+  display: block;
+  font-weight: 700;
+}
+
+.nav-sub,
+.tiny-copy,
+.muted,
+.message-text p {
+  color: var(--muted);
+}
+
+.tiny-label,
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-size: .68rem;
+  font-weight: 800;
+}
 
 .workspace {
   padding: 0;
@@ -2033,7 +2849,18 @@ button, input, textarea, select { font: inherit; }
   height: 100vh;
   overflow: hidden;
 }
-.topbar, .action-row, .panel-head, .run-head, .inline-input { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.topbar,
+.action-row,
+.panel-head,
+.run-head,
+.inline-input {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -2042,7 +2869,12 @@ button, input, textarea, select { font: inherit; }
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 92%, transparent) 0%, color-mix(in srgb, var(--bg) 70%, transparent) 75%, transparent 100%);
   backdrop-filter: blur(18px);
 }
-.topbar h1 { margin: 0; font-size: clamp(1.28rem, 1.5vw, 1.7rem); line-height: 1.05; }
+
+.topbar h1 {
+  margin: 0;
+  font-size: clamp(1.28rem, 1.5vw, 1.7rem);
+  line-height: 1.05;
+}
 
 .hero-grid {
   display: grid;
@@ -2066,9 +2898,20 @@ button, input, textarea, select { font: inherit; }
     linear-gradient(135deg, var(--hero-start), var(--hero-end));
   padding: 16px 18px;
 }
-.hero-card h2 { font-size: clamp(1.05rem, 1.25vw, 1.55rem); margin: 6px 0 4px; line-height: 1.08; }
 
-.pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.hero-card h2 {
+  font-size: clamp(1.05rem, 1.25vw, 1.55rem);
+  margin: 6px 0 4px;
+  line-height: 1.08;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
 .pill {
   padding: 7px 10px;
   border-radius: 999px;
@@ -2077,10 +2920,12 @@ button, input, textarea, select { font: inherit; }
   font-size: .8rem;
   font-weight: 700;
 }
+
 .selector-pill {
   cursor: pointer;
   transition: .18s;
 }
+
 .selector-pill.active {
   background: color-mix(in srgb, var(--accent) 18%, var(--surface));
   border-color: color-mix(in srgb, var(--accent) 44%, transparent);
@@ -2098,6 +2943,7 @@ button, input, textarea, select { font: inherit; }
   font-size: 1.55rem;
   font-family: 'Space Grotesk', sans-serif;
 }
+
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -2107,6 +2953,7 @@ button, input, textarea, select { font: inherit; }
   align-items: stretch;
   overflow: hidden;
 }
+
 .panel-chat {
   display: flex;
   flex-direction: column;
@@ -2116,24 +2963,37 @@ button, input, textarea, select { font: inherit; }
   overflow: hidden;
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 88%, transparent) 0%, color-mix(in srgb, var(--surface) 94%, transparent) 100%);
 }
+
 .stage-strip {
-  display:grid;
-  grid-template-columns: 150px minmax(0,1fr) 150px;
-  gap:10px;
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 150px;
+  gap: 10px;
   flex: 0 0 auto;
   width: 75%;
 }
+
 .stage-card {
-  border:1px solid var(--line);
+  border: 1px solid var(--line);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 90%, transparent) 0%, color-mix(in srgb, var(--stack-bg) 94%, transparent) 100%);
-  border-radius:18px;
-  padding:12px 14px;
-  display:grid;
-  gap:4px;
+  border-radius: 18px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
 }
-.stage-card strong { font-size: .84rem; }
-.stage-detail strong { font-size: .8rem; line-height: 1.35; }
-.context-box { display: grid; gap: 6px; }
+
+.stage-card strong {
+  font-size: .84rem;
+}
+
+.stage-detail strong {
+  font-size: .8rem;
+  line-height: 1.35;
+}
+
+.context-box {
+  display: grid;
+  gap: 6px;
+}
 
 .chat-stream {
   flex: 1 1 auto;
@@ -2147,14 +3007,42 @@ button, input, textarea, select { font: inherit; }
   align-content: start;
 }
 
-.message-row.user { display: flex; justify-content: flex-end; }
+.message-row.user {
+  display: flex;
+  justify-content: flex-end;
+}
 
-.message-card { max-width: min(78%, 720px); padding: 12px 14px; }
-.message-card.user { background: linear-gradient(135deg, var(--user-chat-start), var(--user-chat-end)); color: var(--chat-user-ink); }
-.message-card.nexus_result, .message-card.nexus { background: var(--surface); }
-.message-card.nexus_thought { background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%); border-style: dashed; }
-.message-card.nexus_error { background: color-mix(in srgb, var(--danger) 10%, var(--surface) 90%); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
-.message-text { line-height: 1.48; margin-top: 6px; word-break: break-word; font-size: .92rem; }
+.message-card {
+  max-width: min(78%, 720px);
+  padding: 12px 14px;
+}
+
+.message-card.user {
+  background: linear-gradient(135deg, var(--user-chat-start), var(--user-chat-end));
+  color: var(--chat-user-ink);
+}
+
+.message-card.nexus_result,
+.message-card.nexus {
+  background: var(--surface);
+}
+
+.message-card.nexus_thought {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+  border-style: dashed;
+}
+
+.message-card.nexus_error {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface) 90%);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.message-text {
+  line-height: 1.48;
+  margin-top: 6px;
+  word-break: break-word;
+  font-size: .92rem;
+}
 
 .composer {
   padding: 14px;
@@ -2164,7 +3052,13 @@ button, input, textarea, select { font: inherit; }
   background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
   box-shadow: 0 -16px 34px rgba(6, 4, 14, 0.35);
 }
-.composer textarea, .mini-card textarea, .mini-card input, .mini-card select, .context-box select, .inline-input input {
+
+.composer textarea,
+.mini-card textarea,
+.mini-card input,
+.mini-card select,
+.context-box select,
+.inline-input input {
   width: 100%;
   border: 1px solid var(--line);
   background: var(--input-bg);
@@ -2173,13 +3067,19 @@ button, input, textarea, select { font: inherit; }
   color: var(--ink);
 }
 
-.composer textarea, .mini-card textarea { min-height: 92px; resize: vertical; }
+.composer textarea,
+.mini-card textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: -2px;
 }
+
 .chip-button {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-strong) 88%, transparent);
@@ -2189,18 +3089,21 @@ button, input, textarea, select { font: inherit; }
   font-size: .84rem;
   line-height: 1;
 }
+
 .chip-button:hover {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong) 86%);
 }
+
 .engine-card {
   position: relative;
   overflow: hidden;
-  
-    display: flex !important;
-    justify-content: space-between;
+
+  display: flex !important;
+  justify-content: space-between;
 
 }
+
 .engine-card::before {
   content: '';
   position: absolute;
@@ -2209,43 +3112,68 @@ button, input, textarea, select { font: inherit; }
   background: var(--engine-accent, var(--accent));
   border-radius: 999px;
 }
+
 .engine-gemini {
   --engine-accent: #5f8cff;
 }
+
 .engine-openrouter {
   --engine-accent: #ff8d57;
 }
+
 .engine-groq {
   --engine-accent: #3fd3a4;
 }
+
 .engine-nvidia {
   --engine-accent: #9be15d;
 }
+
 .engine-card .badge.success {
   background: color-mix(in srgb, var(--engine-accent) 20%, transparent);
   border-color: color-mix(in srgb, var(--engine-accent) 36%, transparent);
   color: color-mix(in srgb, var(--engine-accent) 75%, white 25%);
 }
+
 .plan-ready-card {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
+
 .settings-group {
   display: grid;
   gap: 12px;
   margin-top: 18px;
 }
+
 .compact-row {
   justify-content: flex-start;
   margin-top: -4px;
 }
+
 .compact-head {
   padding-inline: 2px;
 }
-.grid-two { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 18px; }
-.card-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-.mini-card { padding: 18px; display: grid; gap: 12px; }
-.mini-card.full { grid-column: 1 / -1; }
+
+.grid-two {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+  gap: 18px;
+}
+
+.card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.mini-card {
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.mini-card.full {
+  grid-column: 1 / -1;
+}
 
 .stack-item {
   padding: 14px 16px;
@@ -2374,14 +3302,43 @@ button, input, textarea, select { font: inherit; }
   background: color-mix(in srgb, var(--muted) 18%, transparent);
 }
 
-.badge.success, .badge.completed { background: color-mix(in srgb, var(--olive) 20%, transparent); color: var(--olive); }
-.badge.warning, .badge.paused, .badge.retry_wait { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
-.badge.running, .badge.queued { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-.badge.stopped, .badge.error, .badge.failed, .badge.dead_letter, .badge.cancelled { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.badge.success,
+.badge.completed {
+  background: color-mix(in srgb, var(--olive) 20%, transparent);
+  color: var(--olive);
+}
 
-button { border: none; cursor: pointer; }
+.badge.warning,
+.badge.paused,
+.badge.retry_wait {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
 
-.primary, .ghost, .danger, .link-btn {
+.badge.running,
+.badge.queued {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.badge.stopped,
+.badge.error,
+.badge.failed,
+.badge.dead_letter,
+.badge.cancelled {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+button {
+  border: none;
+  cursor: pointer;
+}
+
+.primary,
+.ghost,
+.danger,
+.link-btn {
   padding: 10px 14px;
   border-radius: 999px;
   transition: .18s;
@@ -2392,10 +3349,26 @@ button { border: none; cursor: pointer; }
   color: #fff7f0;
 }
 
-.primary.subtle { background: linear-gradient(135deg, var(--olive), color-mix(in srgb, var(--olive) 70%, #10231d 30%)); }
-.ghost { background: var(--ghost-bg); border: 1px solid var(--line); color: var(--ink); }
-.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
-.link-btn { background: transparent; color: var(--accent); padding: 0; }
+.primary.subtle {
+  background: linear-gradient(135deg, var(--olive), color-mix(in srgb, var(--olive) 70%, #10231d 30%));
+}
+
+.ghost {
+  background: var(--ghost-bg);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.danger {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.link-btn {
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+}
 
 .modal-backdrop {
   position: fixed;
@@ -2408,183 +3381,69 @@ button { border: none; cursor: pointer; }
   z-index: 20;
 }
 
-.modal-card { width: min(980px, 100%); max-height: 90vh; overflow: auto; background: var(--surface-strong); }
-.toast { position: fixed; right: 22px; bottom: 22px; padding: 14px 18px; z-index: 30; }
-.hidden-input { display: none; }
-.mobile-only { display: none; }
-.mobile-secondary { display: inline-flex; }
-.desktop-only { display: inline-flex; }
-.fade-enter-active, .fade-leave-active { transition: opacity .16s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-@media (max-width:1100px) {
-  body {
-    overflow: auto;
-  }
-  .app-shell {
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
-  }
-  .app-shell, .hero-grid, .chat-layout, .grid-two { grid-template-columns: 1fr; }
-  .workspace {
-    height: auto;
-    overflow: visible;
-    width: 100%;
-  }
-  .panel-chat, .rail {
-    height: auto;
-    max-height: none;
-  }
-  .panel-chat {
-    display: block;
-    min-height: auto;
-    overflow: visible;
-    padding: 18px;
-  }
-  .panel-chat > * + * {
-    margin-top: 12px;
-  }
-  .panel-chat .panel-head {
-    display: grid;
-    gap: 12px;
-  }
-  .panel-chat .context-box,
-  .panel-chat .context-box select {
-    width: 100%;
-  }
-  .chat-stream,
-  .rail {
-    min-height: unset;
-    overflow: visible;
-  }
-  .chat-stream {
-    min-height: 180px;
-    max-height: 38vh;
-    overflow: auto;
-  }
-  .rail {
-    display: none;
-  }
-  .stage-strip {
-    display: none;
-  }
-  .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(320px, 86vw);
-    transform: translateX(-105%);
-    transition: transform .18s;
-    z-index: 25;
-  }
-  .sidebar.open { transform: translateX(0); }
-  .mobile-only { display: inline-flex; }
-  .topbar {
-    position: static;
-    padding-top: 0;
-  }
-  .chat-layout {
-    height: auto;
-    overflow: visible;
-    display: block;
-  }
-  .hero-grid.compact-bar,
-  .app-shell.railHidden .hero-grid.compact-bar {
-    grid-template-columns: 1fr;
-    grid-auto-rows: auto;
-  }
+.modal-card {
+  width: min(980px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--surface-strong);
 }
 
-@media (max-width:720px) {
-  .workspace { padding: 16px; }
-  .chat-layout {
-    display: block;
-    height: auto;
-    overflow: scroll;
+.toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  padding: 14px 18px;
+  z-index: 30;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.mobile-only {
+  display: none;
+}
+
+.mobile-secondary {
+  display: inline-flex;
+}
+
+.desktop-only {
+  display: inline-flex;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity .16s;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+@media (max-width: 1100px) {
+  .app-shell, .hero-grid, .chat-layout, .grid-two {
+    grid-template-columns: 1fr;
   }
-  .panel-chat {
-    display: block;
-    min-height: auto;
-    height: auto;
-    overflow: visible;
-    padding: 18px;
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: min(320px, 86vw);
+    transform: translateX(-105%); transition: transform .2s cubic-bezier(0.16,1,0.3,1);
+    z-index: 50; box-shadow: 20px 0 40px rgba(0,0,0,0.1);
   }
-  .panel-chat > * + * {
-    margin-top: 12px;
-  }
-  .panel-chat .panel-head {
-    display: grid;
-    gap: 12px;
-  }
-  .panel-chat .context-box {
-    width: 100%;
-  }
-  .panel-chat .context-box select {
-    width: 100%;
-  }
-  .stage-strip {
-    display: none;
-  }
-  .chat-stream {
-    min-height: 180px;
-    max-height: 38vh;
-    overflow: auto;
-    padding-right: 2px;
-  }
-  .rail {
-    display: none;
-  }
-  .message-card { max-width: 100%; }
-  .topbar, .panel-head, .run-head, .inline-input { flex-direction: column; align-items: flex-start; }
-  .action-row { align-items: center; }
-  .stage-strip { grid-template-columns: 1fr; }
-  .hero-card,
-  .metric-card,
-  .panel,
-  .sidebar-card,
-  .composer,
-  .message-card {
-    border-radius: 20px;
-  }
-  .brand {
-    gap: 10px;
-  }
-  .brand-logo-image {
-    max-width: 118px;
-    height: 20px;
-  }
-  .topbar-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .topbar-actions > * {
-    width: 100%;
-    min-width: 0;
-    justify-content: center;
-    padding-inline: 10px;
-  }
-  .desktop-only {
-    display: none;
-  }
-  .mobile-secondary,
-  .mobile-only {
-    display: inline-flex;
-  }
-  .topbar .primary {
-    grid-column: 1 / -1;
-  }
-  .composer {
-    position: static;
-    margin-top: 12px;
-  }
-  body {
-    overflow: auto;
-  }
-  .app-shell {
-    height: auto;
-    overflow: visible;
-  }
+  .sidebar.open { transform: translateX(0); }
+  .rail, .stage-strip, .desktop-only { display: none !important; }
+  .mobile-only { display: flex; }
+  .workspace { padding: 12px; height: 100%; overflow-y: auto; }
+  .panel-chat { height: auto; display: flex; flex-direction: column; min-height: 80vh; padding: 16px; border-radius: 20px; }
+  .chat-stream { flex: 1; max-height: none; min-height: 50vh; overflow-y: auto; padding-right: 4px; }
+  .composer { position: sticky; bottom: 0; background: var(--bg-card); z-index: 10; margin-top: auto; padding-top: 12px; border-radius: 0 0 16px 16px; box-shadow: 0 -10px 20px var(--bg-card); }
+  .topbar { position: sticky; top: 0; padding: 10px 0; background: rgba(255,255,255,0.9); backdrop-filter: blur(8px); z-index: 20; }
+  html.dark .topbar { background: rgba(15,15,18,0.9); }
+  .topbar-actions { display: flex; justify-content: space-between; gap: 8px; width: 100%; }
+  .topbar-actions button { flex: 1; padding: 10px; font-size: 13px; }
+  .message-card { max-width: 95%; }
+  .pill-row.selectable-pills { flex-wrap: wrap; }
+  input, select, textarea { font-size: 16px; } /* Prevents iOS zoom */
 }
 </style>

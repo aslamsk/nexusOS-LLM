@@ -107,7 +107,7 @@ class VideoGenTool {
             if (!apiKey) throw new Error("GEMINI_API_KEY missing in Firestore");
             const genAI = new GoogleGenAI({ apiKey });
             const payload = {
-                model: 'veo-3.1-generate-001',
+                model: 'veo-1.0-generate-001',
                 prompt
             };
             if (imagePath) {

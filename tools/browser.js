@@ -248,7 +248,10 @@ class BrowserTool {
                         const selector = `::-p-text(${safeText})`;
                         await this.page.waitForSelector(selector, { timeout: 5000 });
                         // Click via evaluate to bypass strict visibility/overlay checks
-                        await this.page.$eval(selector, el => el.click());
+                        await this.page.$eval(selector, el => {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            el.click();
+                        });
                         return `Successfully clicked element containing text: '${args.text}'`;
                     } catch (err) {
                         return `Error clicking element with text '${args.text}': ${err.message}`;

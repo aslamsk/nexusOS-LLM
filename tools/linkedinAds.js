@@ -4,20 +4,27 @@ const axios = require('axios');
 class LinkedInAdsTool {
     constructor() {}
 
-    async publishOrganicPost(urn, text) {
+    async publishOrganicPost(urn, text, imagePath = null) {
         const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
-        if (!accessToken) {
-            return { error: "LINKEDIN_ACCESS_TOKEN missing in Firestore" };
-        }
-        if (!urn) {
-            return { error: "LinkedIn organization URN is required." };
-        }
-        if (!text || !String(text).trim()) {
-            return { error: "LinkedIn post text is required." };
-        }
+        if (!accessToken) return { error: "LINKEDIN_ACCESS_TOKEN missing in Firestore" };
+        if (!urn) return { error: "LinkedIn organization URN is required." };
+        if (!text || !String(text).trim()) return { error: "LinkedIn post text is required." };
 
-        console.log(`[LinkedIn] Publishing organic post for URN: ${urn}`);
         try {
+            let media = [];
+            if (imagePath) {
+                console.log(`[LinkedIn] Uploading media first: ${imagePath}`);
+                const mediaUrn = await this.uploadImage(urn, imagePath);
+                if (mediaUrn) {
+                    media = [{
+                        media: mediaUrn,
+                        status: 'READY',
+                        title: { text: 'Nexus Creative' }
+                    }];
+                }
+            }
+
+            console.log(`[LinkedIn] Publishing organic post for URN: ${urn}`);
             const response = await axios.post(
                 'https://api.linkedin.com/v2/ugcPosts',
                 {
@@ -26,7 +33,8 @@ class LinkedInAdsTool {
                     specificContent: {
                         'com.linkedin.ugc.ShareContent': {
                             shareCommentary: { text: text },
-                            shareMediaCategory: 'NONE'
+                            shareMediaCategory: media.length ? 'IMAGE' : 'NONE',
+                            media: media
                         }
                     },
                     visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' }
@@ -43,6 +51,46 @@ class LinkedInAdsTool {
         } catch (error) {
             return { error: "LinkedIn post failed", details: error.response?.data || error.message };
         }
+    }
+
+    async uploadImage(urn, filePath) {
+        const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
+        if (!fs.existsSync(filePath)) throw new Error(`Image file not found: ${filePath}`);
+
+        // Step 1: Register Upload
+        const registerRes = await axios.post(
+            'https://api.linkedin.com/v2/assets?action=registerUpload',
+            {
+                registerUploadRequest: {
+                    recipes: ['urn:li:digitalmediaRecipe:feedshare-image'],
+                    owner: `urn:li:organization:${urn}`,
+                    serviceRelationships: [{
+                        relationshipType: 'OWNER',
+                        identifier: 'urn:li:userGeneratedContent'
+                    }]
+                }
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'X-Restli-Protocol-Version': '2.0.0'
+                }
+            }
+        );
+
+        const uploadUrl = registerRes.data.value.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
+        const assetUrn = registerRes.data.value.asset;
+
+        // Step 2: PUT Binary
+        const imageBuffer = fs.readFileSync(filePath);
+        await axios.put(uploadUrl, imageBuffer, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/octet-stream'
+            }
+        });
+
+        return assetUrn;
     }
 
     async getMemberInfo() {

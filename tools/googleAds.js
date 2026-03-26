@@ -163,6 +163,23 @@ class GoogleAdsTool {
         }
     }
 
+    async createImageAsset(customerId, imagePath, assetName) {
+        try {
+            const customer = await this.getCustomer(customerId);
+            const imageBuffer = fs.readFileSync(imagePath);
+            const result = await customer.assets.create([{
+                name: assetName || `Asset_${Date.now()}`,
+                type: 'IMAGE',
+                image_asset: {
+                    data: imageBuffer.toString('base64')
+                }
+            }]);
+            return Array.isArray(result) ? result[0] : result;
+        } catch (error) {
+            return { error: 'Failed to create Google Ads image asset', details: error.message };
+        }
+    }
+
     async getSetupStatus() {
         const clientId = await ConfigService.get('GOOGLE_ADS_CLIENT_ID');
         const clientSecret = await ConfigService.get('GOOGLE_ADS_CLIENT_SECRET');
