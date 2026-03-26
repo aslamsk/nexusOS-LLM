@@ -13,16 +13,25 @@ const MissionMode = require('../core/missionMode');
 const SelfHealing = require('../core/selfHealing');
 const NexusOrchestrator = require('../index');
 const LLMService = require('../core/llm');
+const MemoryService = require('../core/memory');
+const ConfigService = require('../core/config');
+const MetaAdsTool = require('../tools/metaAds');
+const GoogleAdsTool = require('../tools/googleAds');
+const LinkedInAdsTool = require('../tools/linkedinAds');
+const pendingRuns = [];
 
 function run(name, fn) {
-    try {
-        fn();
-        console.log(`PASS ${name}`);
-    } catch (error) {
-        console.error(`FAIL ${name}`);
-        console.error(error);
-        process.exitCode = 1;
-    }
+    const wrapped = Promise.resolve()
+        .then(fn)
+        .then(() => {
+            console.log(`PASS ${name}`);
+        })
+        .catch((error) => {
+            console.error(`FAIL ${name}`);
+            console.error(error);
+            process.exitCode = 1;
+        });
+    pendingRuns.push(wrapped);
 }
 
 run('workflow detection recognizes audit prompts', () => {
@@ -211,6 +220,7 @@ Discover incredible fashion that won't break the bank!
     assert.match(draft.message, /Starting at Just Rs\.99/i);
     assert.equal(draft.link, 'https://mkfashion.in/p/G9SUj2Rv4x');
     assert.equal(draft.imagePath, 'https://example.com/product.jpg');
+    assert.deepEqual(draft.channels, ['facebook', 'instagram']);
 });
 
 run('commercial quote detector ignores organic meta publish prompts', () => {
@@ -237,6 +247,19 @@ run('organic publish requests trigger auto approval handoff', () => {
     assert.equal(shouldAutoApprove, true);
 });
 
+run('organic publish workflow state also triggers approval handoff', () => {
+    const orchestrator = new NexusOrchestrator();
+    orchestrator.currentWorkflowState = {
+        mode: 'organic_publish',
+        stage: 'draft_ready'
+    };
+    const shouldAutoApprove = orchestrator._shouldAutoRequestOrganicApproval(
+        `Publish an ORGANIC Facebook and Instagram Meta post for this product.`,
+        `Please let me know if you approve this content for publication.`
+    );
+    assert.equal(shouldAutoApprove, true);
+});
+
 run('workflow state enters quote planning for quote requests', () => {
     const orchestrator = new NexusOrchestrator();
     orchestrator._applyWorkflowIntent('Create a quote plan for Meta Ads for this client');
@@ -248,6 +271,17 @@ run('workflow state enters organic publish flow for promote requests', () => {
     const orchestrator = new NexusOrchestrator();
     orchestrator._applyWorkflowIntent('promote it on facebook and instagram organic');
     assert.equal(orchestrator.currentWorkflowState.mode, 'organic_publish');
+});
+
+run('yes is treated as organic publish continuation when a draft exists', () => {
+    const orchestrator = new NexusOrchestrator();
+    orchestrator.currentOrganicMetaDraft = {
+        message: 'hello',
+        link: 'https://example.com',
+        imagePath: 'https://example.com/image.jpg',
+        channels: ['facebook', 'instagram']
+    };
+    assert.equal(orchestrator._isOrganicPublishIntent('YES'), true);
 });
 
 run('meta publish success detector requires actual api success payload', () => {
@@ -286,6 +320,99 @@ run('meta auth error detector recognizes expired token response', () => {
         error: 'Error validating access token',
         details: { code: 190, error_subcode: 463 }
     }), true);
+});
+
+run('external action confirmation rejects linkedin errors', () => {
+    const orchestrator = new NexusOrchestrator();
+    assert.equal(orchestrator._isExternalActionConfirmed('linkedinPublishPost', { error: 'bad token' }), false);
+    assert.equal(orchestrator._isExternalActionConfirmed('linkedinPublishPost', { success: true, id: '123' }), true);
+});
+
+run('memory sanitizer skips ephemeral payload blobs', () => {
+    const result = MemoryService._sanitizeContent(JSON.stringify({
+        media_url: 'https://example.com/image.png',
+        call_to_action: { type: 'SHOP_NOW' },
+        boss_approved: true
+    }), 'client_preference');
+    assert.equal(result.skip, true);
+});
+
+run('meta ad account id is normalized with act_ prefix', async () => {
+    const originalGet = ConfigService.get;
+    ConfigService.get = async (key) => key === 'META_AD_ACCOUNT_ID' ? '123456789' : null;
+    try {
+        const value = await MetaAdsTool._getAdAccountId();
+        assert.equal(value, 'act_123456789');
+    } finally {
+        ConfigService.get = originalGet;
+    }
+});
+
+run('google ads normalizes customer ids by stripping formatting', () => {
+    assert.equal(GoogleAdsTool._normalizeCustomerId('123-456-7890'), '1234567890');
+});
+
+run('linkedin setup status reports missing token cleanly', async () => {
+    const originalGet = ConfigService.get;
+    ConfigService.get = async () => null;
+    try {
+        const status = await LinkedInAdsTool.getSetupStatus();
+        assert.equal(status.ok, false);
+        assert.equal(status.hasAccessToken, false);
+    } finally {
+        ConfigService.get = originalGet;
+    }
+});
+
+run('setup doctor flags missing linkedin config for linkedin publishing tasks', () => {
+    const report = SetupDoctor.buildSetupDoctor({
+        has: () => false,
+        firestoreReady: true,
+        prompt: 'Publish this on LinkedIn for the client'
+    });
+    assert.ok(report.blockers.some((item) => item.code === 'linkedin'));
+});
+
+run('preflight blocks meta paid action without ad account id', async () => {
+    const orchestrator = new NexusOrchestrator();
+    orchestrator.tools.metaAds.getSetupStatus = async () => ({
+        hasAccessToken: true,
+        hasAdAccountId: false,
+        hasPageId: true
+    });
+    const result = await orchestrator._preflightExternalAction({
+        name: 'metaAds',
+        args: { action: 'createCampaign' }
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /META_AD_ACCOUNT_ID/);
+});
+
+run('preflight blocks instagram publish without instagram business account id', async () => {
+    const orchestrator = new NexusOrchestrator();
+    orchestrator.tools.metaAds.getSetupStatus = async () => ({
+        hasAccessToken: true,
+        hasAdAccountId: true,
+        hasPageId: true,
+        hasInstagramBusinessAccountId: false
+    });
+    const result = await orchestrator._preflightExternalAction({
+        name: 'metaAds',
+        args: { action: 'publishOrganicPost', channels: ['facebook', 'instagram'] }
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /INSTAGRAM_BUSINESS_ACCOUNT_ID/);
+});
+
+run('preflight blocks linkedin publish without token', async () => {
+    const orchestrator = new NexusOrchestrator();
+    orchestrator.tools.linkedinAds.getSetupStatus = async () => ({ hasAccessToken: false });
+    const result = await orchestrator._preflightExternalAction({
+        name: 'linkedinPublishPost',
+        args: { urn: '123', text: 'hello' }
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /LINKEDIN_ACCESS_TOKEN/);
 });
 
 run('plan mode openrouter models prefer free planning order', () => {
@@ -327,6 +454,8 @@ run('setup doctor flags missing meta config for meta publishing tasks', () => {
     assert.ok(report.blockers.some((item) => item.code === 'meta_ads'));
 });
 
-if (process.exitCode) {
-    process.exit(process.exitCode);
-}
+Promise.allSettled(pendingRuns).then(() => {
+    if (process.exitCode) {
+        process.exit(process.exitCode);
+    }
+});

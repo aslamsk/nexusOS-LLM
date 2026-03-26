@@ -9,6 +9,12 @@ class LinkedInAdsTool {
         if (!accessToken) {
             return { error: "LINKEDIN_ACCESS_TOKEN missing in Firestore" };
         }
+        if (!urn) {
+            return { error: "LinkedIn organization URN is required." };
+        }
+        if (!text || !String(text).trim()) {
+            return { error: "LinkedIn post text is required." };
+        }
 
         console.log(`[LinkedIn] Publishing organic post for URN: ${urn}`);
         try {
@@ -50,6 +56,15 @@ class LinkedInAdsTool {
         } catch (error) {
             return { error: "Failed to fetch LinkedIn info", details: error.message };
         }
+    }
+
+    async getSetupStatus() {
+        const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
+        return {
+            ok: Boolean(accessToken),
+            provider: 'linkedin',
+            hasAccessToken: Boolean(accessToken)
+        };
     }
 }
 

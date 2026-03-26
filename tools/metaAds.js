@@ -13,6 +13,21 @@ class MetaAdsTool {
         this.apiVersion = 'v19.0';
     }
 
+    async _getAdAccountId() {
+        let adAccountId = await ConfigService.get('META_AD_ACCOUNT_ID');
+        if (this._isBlankValue(adAccountId)) {
+            return null;
+        }
+        adAccountId = String(adAccountId).trim();
+        return adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+    }
+
+    async _getInstagramBusinessAccountId() {
+        const accountId = await ConfigService.get('INSTAGRAM_BUSINESS_ACCOUNT_ID') || await ConfigService.get('META_INSTAGRAM_BUSINESS_ACCOUNT_ID');
+        if (this._isBlankValue(accountId)) return null;
+        return String(accountId).trim();
+    }
+
     _isBlankValue(value) {
         const normalized = String(value ?? '').trim().toLowerCase();
         return !normalized || ['null', 'undefined', 'none', 'n/a', 'na'].includes(normalized);
@@ -98,7 +113,11 @@ class MetaAdsTool {
      */
     async createCampaign(name, objective = 'OUTCOME_TRAFFIC', status = 'PAUSED') {
         console.log(`[MetaAds] Creating campaign: ${name}...`);
-        const endpoint = `${this.adAccountId}/campaigns`;
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        const endpoint = `${adAccountId}/campaigns`;
         return await this._request('POST', endpoint, {
             name: name,
             objective: objective,
@@ -113,7 +132,11 @@ class MetaAdsTool {
      */
     async createAdSet(campaignId, name, dailyBudget, targeting = {}) {
         console.log(`[MetaAds] Creating ad set: ${name} in campaign ${campaignId}...`);
-        const endpoint = `${this.adAccountId}/adsets`;
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        const endpoint = `${adAccountId}/adsets`;
 
         // --- Normalization ---
         // 1. Budget: Meta expects integers in the smallest currency unit (e.g., paise for INR)
@@ -153,8 +176,12 @@ class MetaAdsTool {
      * Get Ad Account Information (to check currency, business_id, etc.)
      */
     async getAccountInfo() {
-        console.log(`[MetaAds] Fetching account info: ${this.adAccountId}...`);
-        return await this._request('GET', this.adAccountId, { fields: 'name,currency,business' });
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        console.log(`[MetaAds] Fetching account info: ${adAccountId}...`);
+        return await this._request('GET', adAccountId, { fields: 'name,currency,business' });
     }
 
     /**
@@ -188,7 +215,11 @@ class MetaAdsTool {
     async uploadImage(imagePathRaw) {
         const imagePath = await this._resolveMedia(imagePathRaw);
         console.log(`[MetaAds] Uploading image: ${imagePath}...`);
-        const endpoint = `${this.adAccountId}/adimages`;
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        const endpoint = `${adAccountId}/adimages`;
 
         const token = await ConfigService.get('META_ACCESS_TOKEN');
         if (!token) {
@@ -201,7 +232,7 @@ class MetaAdsTool {
             const args = [
                 '-s',
                 '-X', 'POST',
-                `https://graph.facebook.com/${this.apiVersion}/${this.adAccountId}/adimages`,
+                `https://graph.facebook.com/${this.apiVersion}/${adAccountId}/adimages`,
                 '-F', `access_token=${token}`,
                 '-F', `filename=@${imagePath}`
             ];
@@ -227,11 +258,15 @@ class MetaAdsTool {
     /**
      * Create an Ad Creative
      */
-    async createAdCreative(name, title, body, imageHash, pageId, cta = 'SHOP_NOW') {
+    async createAdCreative(name, title, body, imageHash, pageId, cta = 'SHOP_NOW', link = '') {
         const activePageId = pageId || await ConfigService.get('META_PAGE_ID');
 
         console.log(`[MetaAds] Creating ad creative: ${name} for Page ${activePageId} with CTA ${cta}...`);
-        const endpoint = `${this.adAccountId}/adcreatives`;
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        const endpoint = `${adAccountId}/adcreatives`;
 
         if (!imageHash || imageHash.includes('/') || imageHash.includes('\\')) {
             return { error: "Invalid image hash. Please use 'metaUploadImage' first to get a valid hash." };
@@ -247,7 +282,7 @@ class MetaAdsTool {
                 page_id: activePageId,
                 link_data: {
                     image_hash: imageHash,
-                    link: 'https://mkfashion.in', // Default to site
+                    link: this._isBlankValue(link) ? 'https://example.com' : link,
                     message: body,
                     name: title,
                     call_to_action: { type: cta }
@@ -333,7 +368,11 @@ class MetaAdsTool {
      */
     async createAd(adSetId, creativeId, name) {
         console.log(`[MetaAds] Creating ad: ${name} in ad set ${adSetId}...`);
-        const endpoint = `${this.adAccountId}/ads`;
+        const adAccountId = await this._getAdAccountId();
+        if (!adAccountId) {
+            return { error: "Missing META_AD_ACCOUNT_ID in Firestore." };
+        }
+        const endpoint = `${adAccountId}/ads`;
         return await this._request('POST', endpoint, {
             name: name,
             adset_id: adSetId,
@@ -434,6 +473,85 @@ class MetaAdsTool {
         }
     }
 
+    async publishInstagramPhoto(message, imagePathRaw) {
+        const imageUrl = await this._resolveMedia(imagePathRaw);
+        const igUserId = await this._getInstagramBusinessAccountId();
+        const accessToken = await ConfigService.get('META_ACCESS_TOKEN');
+
+        if (this._isBlankValue(igUserId)) {
+            return { error: 'Missing INSTAGRAM_BUSINESS_ACCOUNT_ID for Instagram publish.' };
+        }
+        if (this._isBlankValue(accessToken)) {
+            return { error: 'Missing META_ACCESS_TOKEN for Instagram publish.' };
+        }
+        if (this._isBlankValue(message)) {
+            return { error: 'Missing message for Instagram publish.' };
+        }
+        if (this._isBlankValue(imageUrl) || !/^https?:\/\//i.test(String(imageUrl))) {
+            return { error: 'Instagram publish requires a public image URL.' };
+        }
+
+        const createRes = await this._request('POST', `${igUserId}/media`, {
+            image_url: imageUrl,
+            caption: message
+        });
+        if (createRes?.error) return createRes;
+
+        const creationId = createRes?.id;
+        if (!creationId) {
+            return { error: 'Instagram media creation did not return an id.', details: createRes };
+        }
+
+        const publishRes = await this._request('POST', `${igUserId}/media_publish`, {
+            creation_id: creationId
+        });
+        if (publishRes?.error) return publishRes;
+
+        return {
+            success: true,
+            id: publishRes?.id || creationId,
+            creation_id: creationId
+        };
+    }
+
+    async publishOrganicPostSurfaces({
+        pageId,
+        message,
+        link = '',
+        imagePath = null,
+        channels = ['facebook']
+    }) {
+        const requestedChannels = Array.isArray(channels) && channels.length
+            ? [...new Set(channels.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean))]
+            : ['facebook'];
+
+        const results = {};
+
+        if (requestedChannels.includes('facebook')) {
+            results.facebook = imagePath
+                ? await this.publishPagePhoto(pageId, message, imagePath)
+                : await this.publishPagePost(pageId, message, link);
+        }
+
+        if (requestedChannels.includes('instagram')) {
+            results.instagram = await this.publishInstagramPhoto(message, imagePath);
+        }
+
+        const hasRequestedErrors = Object.values(results).some((value) => value?.error);
+        if (hasRequestedErrors) {
+            return {
+                error: 'One or more Meta surfaces failed to publish.',
+                details: results
+            };
+        }
+
+        return {
+            success: true,
+            id: results.facebook?.id || results.facebook?.post_id || results.instagram?.id || null,
+            surfaces: results
+        };
+    }
+
     /**
      * Verify the current Meta Access Token
      */
@@ -488,6 +606,21 @@ class MetaAdsTool {
             period: 'day',
             access_token: pageToken || await ConfigService.get('META_ACCESS_TOKEN')
         });
+    }
+
+    async getSetupStatus() {
+        const accessToken = await ConfigService.get('META_ACCESS_TOKEN');
+        const pageId = await ConfigService.get('META_PAGE_ID');
+        const adAccountId = await this._getAdAccountId();
+        const instagramBusinessAccountId = await this._getInstagramBusinessAccountId();
+        return {
+            ok: Boolean(accessToken && (pageId || adAccountId)),
+            provider: 'meta',
+            hasAccessToken: Boolean(accessToken),
+            hasPageId: Boolean(pageId),
+            hasAdAccountId: Boolean(adAccountId),
+            hasInstagramBusinessAccountId: Boolean(instagramBusinessAccountId)
+        };
     }
 }
 

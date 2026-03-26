@@ -34,6 +34,14 @@ const TASK_REQUIREMENTS = [
         impact: 'Google Ads listing and campaign actions will fail until OAuth and developer token are configured.'
     },
     {
+        id: 'linkedin',
+        match: /\blinkedin\b/,
+        keysAny: [],
+        keysAll: ['LINKEDIN_ACCESS_TOKEN'],
+        title: 'LinkedIn setup incomplete',
+        impact: 'LinkedIn publishing actions will fail until the LinkedIn access token is configured.'
+    },
+    {
         id: 'email',
         match: /\bemail\b|\bgmail\b/,
         keysAny: [],

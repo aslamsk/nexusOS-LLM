@@ -413,12 +413,101 @@ class LLMService {
                         targeting: { type: "OBJECT" },
                         title: { type: "STRING" },
                         body: { type: "STRING" },
+                        imageHash: { type: "STRING" },
+                        imageUrl: { type: "STRING" },
+                        link: { type: "STRING" },
                         cta: { type: "STRING" },
                         adSetId: { type: "STRING" },
                         creativeId: { type: "STRING" },
                         boss_approved: { type: "BOOLEAN", description: "MANDATORY FOR PUBLISHING/SPENDING ACTIONS. If you are creating a campaign, ad, or publishing a post, you MUST first ask The Boss for approval. If you have NOT explicitly asked for and received permission for this specific payload, this must be false (or omitted) and the system will block you. If The Boss has already approved the preview, set this to true." }
                     },
                     required: ["action"]
+                }
+            },
+            {
+                name: "googleAdsListCampaigns",
+                description: "List Google Ads campaigns for a customer account.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING", description: "Google Ads customer ID." }
+                    },
+                    required: ["customerId"]
+                }
+            },
+            {
+                name: "googleAdsCreateBudget",
+                description: "Create a Google Ads campaign budget resource.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING" },
+                        name: { type: "STRING" },
+                        amountMicros: { type: "NUMBER", description: "Budget amount in micros." },
+                        deliveryMethod: { type: "STRING" }
+                    },
+                    required: ["customerId", "name", "amountMicros"]
+                }
+            },
+            {
+                name: "googleAdsCreateCampaign",
+                description: "Create a paused Google Ads campaign using an existing budget resource.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING" },
+                        campaignData: { type: "OBJECT" }
+                    },
+                    required: ["customerId", "campaignData"]
+                }
+            },
+            {
+                name: "googleAdsCreateAdGroup",
+                description: "Create a Google Ads ad group inside a campaign.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING" },
+                        adGroupData: { type: "OBJECT" }
+                    },
+                    required: ["customerId", "adGroupData"]
+                }
+            },
+            {
+                name: "googleAdsAddKeywords",
+                description: "Add keywords to a Google Ads ad group.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING" },
+                        adGroupResourceName: { type: "STRING" },
+                        keywords: { type: "ARRAY", items: { type: "STRING" } }
+                    },
+                    required: ["customerId", "adGroupResourceName", "keywords"]
+                }
+            },
+            {
+                name: "googleAdsCreateResponsiveSearchAd",
+                description: "Create a paused responsive search ad in Google Ads.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        customerId: { type: "STRING" },
+                        adData: { type: "OBJECT" }
+                    },
+                    required: ["customerId", "adData"]
+                }
+            },
+            {
+                name: "linkedinPublishPost",
+                description: "Publish an organic post to a LinkedIn organization page.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        urn: { type: "STRING", description: "LinkedIn organization URN without the urn:li:organization: prefix." },
+                        text: { type: "STRING", description: "Post text." }
+                    },
+                    required: ["urn", "text"]
                 }
             },
             {

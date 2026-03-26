@@ -58,11 +58,11 @@ class VideoGenTool {
             // Robust version fetching: Try models.get first, then fallback to listing versions
             let versionHash;
             try {
-                const model = await this.replicate.models.get("anotherjesse/zeroscope-v2-xl");
+                const model = await replicate.models.get("anotherjesse/zeroscope-v2-xl");
                 versionHash = model.latest_version ? model.latest_version.id : null;
                 
                 if (!versionHash) {
-                    const versions = await this.replicate.models.versions.list("anotherjesse", "zeroscope-v2-xl");
+                    const versions = await replicate.models.versions.list("anotherjesse", "zeroscope-v2-xl");
                     versionHash = versions.results[0].id;
                 }
             } catch (err) {
@@ -103,42 +103,26 @@ class VideoGenTool {
         console.log(`[VideoGen] Initiating Google Veo generation: "${prompt}" ${imagePath ? '(Image-to-Video)' : '(Text-to-Video)'}`);
         try {
             const { GoogleGenAI } = require('@google/genai');
-            const apiKey = await ConfigService.get('GEMINI_API_KEY');
+            const apiKey = await ConfigService.get('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
             if (!apiKey) throw new Error("GEMINI_API_KEY missing in Firestore");
             const genAI = new GoogleGenAI({ apiKey });
-            
-            // In 2026, Veo 3.1 is the latest cinematic model
-            const model = genAI.getGenerativeModel({ model: "veo-3.1-generate-001" });
-
-            const parts = [{ text: prompt }];
+            const payload = {
+                model: 'veo-3.1-generate-001',
+                prompt
+            };
             if (imagePath) {
                 const fs = require('fs');
-                parts.push({
-                    inlineData: {
-                        data: fs.readFileSync(imagePath).toString('base64'),
-                        mimeType: 'image/png' // Assuming PNG
-                    }
-                });
+                payload.image = {
+                    imageBytes: fs.readFileSync(imagePath).toString('base64'),
+                    mimeType: 'image/png'
+                };
             }
+            const result = await genAI.models.generateVideos(payload);
+            const generatedVideo = result?.generatedVideos?.[0] || result?.videos?.[0] || null;
+            const videoBytes = generatedVideo?.video?.videoBytes || generatedVideo?.videoBytes || generatedVideo?.bytes || null;
+            if (!videoBytes) throw new Error("Veo failed to return video data.");
 
-            const result = await model.generateContent({
-                contents: [{ role: 'user', parts }],
-                generationConfig: {
-                    videoGenerationConfig: {
-                        durationSeconds: 10,
-                        aspectRatio: "9:16", // Commercial/Reel format
-                        fps: 30
-                    }
-                }
-            });
-
-            const videoPart = result.response.candidates[0].content.parts.find(p => p.videoMetadata);
-            if (!videoPart) throw new Error("Veo failed to return video data.");
-
-            // Download the generated video bytes
-            const videoBytes = videoPart.inlineData.data;
             const fs = require('fs');
-            const path = require('path');
             
             const dir = path.dirname(outputPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

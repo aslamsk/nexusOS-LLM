@@ -298,6 +298,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             link,
             imagePath: image || null,
             tags: tagsBlock || '',
+            channels: ['facebook', 'instagram'],
             preparedAt: new Date().toISOString()
         };
     }
@@ -339,7 +340,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     _isOrganicPublishIntent(text = '') {
         const value = String(text || '').trim().toLowerCase();
         if (!value) return false;
-        if (['continue', 'proceed', 'publish', 'promote it', 'post it', 'launch it', 'go live'].includes(value)) return true;
+        if (['continue', 'proceed', 'publish', 'promote it', 'post it', 'launch it', 'go live', 'yes', 'y', 'approve', 'approved', 'boss approved'].includes(value)) return true;
         return /\b(promote|publish|post|go live|launch)\b/.test(value) && /\bfacebook|instagram|meta\b/.test(value);
     }
 
@@ -353,6 +354,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             message: this.currentOrganicMetaDraft.message,
             link: this.currentOrganicMetaDraft.link,
             imagePath: this.currentOrganicMetaDraft.imagePath || this.lastUploadedFile || null,
+            channels: this.currentOrganicMetaDraft.channels || ['facebook', 'instagram'],
             cta: this.currentOrganicMetaDraft.cta,
             boss_approved: false
         };
@@ -407,7 +409,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         const responseRequestsApproval =
             /\bapprove\b/.test(response) &&
             /\bpublish\b/.test(response);
-        return wantsOrganicPublish && (askedForApproval || responseRequestsApproval);
+        const workflowReadyForApproval =
+            this.currentWorkflowState?.mode === 'organic_publish' ||
+            /\bpublish-ready\b/.test(request) ||
+            /\bpublish-ready\b/.test(response);
+        return wantsOrganicPublish && (askedForApproval || responseRequestsApproval || workflowReadyForApproval);
     }
 
     async _queueOrganicDraftApprovalFromDraft() {
@@ -420,6 +426,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             message: this.currentOrganicMetaDraft.message,
             link: this.currentOrganicMetaDraft.link,
             imagePath: this.currentOrganicMetaDraft.imagePath || this.lastUploadedFile || null,
+            channels: this.currentOrganicMetaDraft.channels || ['facebook', 'instagram'],
             cta: this.currentOrganicMetaDraft.cta,
             boss_approved: false
         };
@@ -753,7 +760,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         }
 
         if (name === 'metaAds') return 'Execution engine: Meta Graph API.';
-        if (name === 'googleAdsCreateCampaign' || name === 'googleAdsListCampaigns') return 'Execution engine: Google Ads API.';
+        if (['googleAdsCreateCampaign', 'googleAdsListCampaigns', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) return 'Execution engine: Google Ads API.';
         if (name === 'linkedinPublishPost') return 'Execution engine: LinkedIn API.';
         if (name === 'sendEmail' || name === 'readEmail') return 'Execution engine: Gmail SMTP/IMAP.';
         if (name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') return 'Execution engine: WhatsApp Cloud API.';
@@ -1081,8 +1088,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             const messageMissing = this._isBlankValue(args.message);
             const imagePathMissing = this._isBlankValue(args.imagePath) && this._isBlankValue(this.lastUploadedFile);
             const linkMissing = this._isBlankValue(args.link);
+            const requestedChannels = Array.isArray(args.channels) ? args.channels.map((item) => String(item || '').toLowerCase()) : [];
             if (messageMissing) missing.push('message');
             if (imagePathMissing && linkMissing) missing.push('imagePath or link');
+            if (requestedChannels.includes('instagram') && imagePathMissing) missing.push('imagePath');
         }
 
         if (action === 'publishOrganicPhoto' && this._isBlankValue(args.imagePath) && this._isBlankValue(this.lastUploadedFile)) {
@@ -1118,6 +1127,81 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         return code === 190 || subcode === 463 || message.includes('access token') || message.includes('oauth');
     }
 
+    _isExternalActionConfirmed(name, result) {
+        if (!name) return false;
+        if (name === 'metaAds') return this._isSuccessfulMetaPublishResult(result);
+        if (name === 'linkedinPublishPost') {
+            return Boolean(result && typeof result === 'object' && (result.success === true || result.id));
+        }
+        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
+            if (Array.isArray(result) && result.length > 0) return true;
+            return Boolean(result && typeof result === 'object' && (result.resource_name || result.id || result.success === true));
+        }
+        if (name === 'sendEmail' || name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') {
+            const serialized = typeof result === 'string' ? result.toLowerCase() : JSON.stringify(result || {}).toLowerCase();
+            return !serialized.startsWith('error') && !serialized.includes('"error"');
+        }
+        return true;
+    }
+
+    async _preflightExternalAction(toolCall = {}) {
+        const { name, args = {} } = toolCall;
+        if (name === 'metaAds') {
+            const status = await this.tools.metaAds.getSetupStatus();
+            const action = String(args.action || '');
+            const needsPaidSetup = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'uploadImage', 'getAccountInfo'].includes(action);
+            const needsOrganicSetup = ['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel', 'getPageInsights'].includes(action);
+            const requestedChannels = Array.isArray(args.channels) ? args.channels.map((item) => String(item || '').trim().toLowerCase()) : [];
+            const missing = [];
+            if (!status.hasAccessToken) missing.push('META_ACCESS_TOKEN');
+            if (needsPaidSetup && !status.hasAdAccountId) missing.push('META_AD_ACCOUNT_ID');
+            if (needsOrganicSetup && !status.hasPageId) missing.push('META_PAGE_ID');
+            if (requestedChannels.includes('instagram') && !status.hasInstagramBusinessAccountId) missing.push('INSTAGRAM_BUSINESS_ACCOUNT_ID');
+            if (missing.length) {
+                return {
+                    ok: false,
+                    error: `Meta action ${action} is blocked by missing setup: ${missing.join(', ')}.`,
+                    missingKeys: missing,
+                    provider: 'meta'
+                };
+            }
+            return { ok: true };
+        }
+
+        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'googleAdsListCampaigns'].includes(name)) {
+            const status = await this.tools.googleAds.getSetupStatus();
+            const missing = [];
+            if (!status.hasClientId) missing.push('GOOGLE_ADS_CLIENT_ID');
+            if (!status.hasClientSecret) missing.push('GOOGLE_ADS_CLIENT_SECRET');
+            if (!status.hasDeveloperToken) missing.push('GOOGLE_ADS_DEVELOPER_TOKEN');
+            if (!status.hasRefreshToken) missing.push('GOOGLE_ADS_REFRESH_TOKEN');
+            if (missing.length) {
+                return {
+                    ok: false,
+                    error: `Google Ads action ${name} is blocked by missing setup: ${missing.join(', ')}.`,
+                    missingKeys: missing,
+                    provider: 'google_ads'
+                };
+            }
+            return { ok: true };
+        }
+
+        if (name === 'linkedinPublishPost') {
+            const status = await this.tools.linkedinAds.getSetupStatus();
+            if (!status.hasAccessToken) {
+                return {
+                    ok: false,
+                    error: 'LinkedIn publish is blocked by missing setup: LINKEDIN_ACCESS_TOKEN.',
+                    missingKeys: ['LINKEDIN_ACCESS_TOKEN'],
+                    provider: 'linkedin'
+                };
+            }
+            return { ok: true };
+        }
+
+        return { ok: true };
+    }
+
     _formatMetaPublishSuccess(result, draft = null) {
         const postId = result?.id || result?.post_id || 'unknown';
         const lines = [
@@ -1139,7 +1223,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             this.currentRun.toolsUsed[name] = (this.currentRun.toolsUsed[name] || 0) + 1;
         }
         try {
-            const executionOnlyTools = new Set(['generate_image', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia']);
+            const preflight = await this._preflightExternalAction(normalizedToolCall);
+            if (!preflight.ok) {
+                return preflight;
+            }
+            const executionOnlyTools = new Set(['generate_image', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia']);
             const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']);
             if (!options.skipGovernance && this.currentMissionMode !== 'execute' && executionOnlyTools.has(name)) {
                 const engineHint = await this._describeExecutionEngine(normalizedToolCall);
@@ -1275,13 +1363,16 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     switch(args.action) {
                         case 'createCampaign': return await this.tools.metaAds.createCampaign(args.name, args.objective);
                         case 'createAdSet': return await this.tools.metaAds.createAdSet(args.campaignId, args.name, args.budget || 1000, args.targeting);
-                        case 'createAdCreative': return await this.tools.metaAds.createAdCreative(args.name, args.title, args.body, args.imageHash || args.imageUrl, args.pageId, args.cta);
+                        case 'createAdCreative': return await this.tools.metaAds.createAdCreative(args.name, args.title, args.body, args.imageHash || args.imageUrl, args.pageId, args.cta, args.link);
                         case 'createAd': return await this.tools.metaAds.createAd(args.adSetId, args.creativeId, args.name);
                         case 'publishOrganicPost':
-                            if (args.imagePath || this.lastUploadedFile) {
-                                return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath || this.lastUploadedFile);
-                            }
-                            return await this.tools.metaAds.publishPagePost(args.pageId, args.message, args.link);
+                            return await this.tools.metaAds.publishOrganicPostSurfaces({
+                                pageId: args.pageId,
+                                message: args.message,
+                                link: args.link,
+                                imagePath: args.imagePath || this.lastUploadedFile,
+                                channels: args.channels || ['facebook']
+                            });
                         case 'publishOrganicPhoto': return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath);
                         case 'publishOrganicVideo': return await this.tools.metaAds.publishPageVideo(args.pageId, args.title, args.description, args.videoPath);
                         case 'publishOrganicReel': return await this.tools.metaAds.publishPageReel(args.pageId, args.description, args.videoPath);
@@ -1301,12 +1392,10 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                         }
                         
                         // 2. Fallback to Replicate if Veo fails and token exists
-                        if (process.env.REPLICATE_API_TOKEN) {
-                            const repResult = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                            if (!repResult.error) {
-                                await this._recordMediaUsage('Replicate', 'anotherjesse/zeroscope-v2-xl', 'paid', 0.01);
-                                return `SUCCESS: Generative Video created at ${args.outputPath}`;
-                            }
+                        const repResult = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                        if (!repResult.error) {
+                            await this._recordMediaUsage('Replicate', 'anotherjesse/zeroscope-v2-xl', 'paid', 0.01);
+                            return `SUCCESS: Generative Video created at ${args.outputPath}`;
                         }
 
                         // 3. Last fallback: Gemini Image + Manual FFmpeg (Free Mode)
@@ -1329,7 +1418,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     return await this._createAgencyQuoteArtifacts(args);
                 case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
                 case 'googleAdsListCampaigns': return await this.tools.googleAds.listCampaigns(args.customerId);
+                case 'googleAdsCreateBudget': return await this.tools.googleAds.createCampaignBudget(args.customerId, args.name, args.amountMicros, args.deliveryMethod);
                 case 'googleAdsCreateCampaign': return await this.tools.googleAds.createCampaign(args.customerId, args.campaignData);
+                case 'googleAdsCreateAdGroup': return await this.tools.googleAds.createAdGroup(args.customerId, args.adGroupData);
+                case 'googleAdsAddKeywords': return await this.tools.googleAds.addKeywords(args.customerId, args.adGroupResourceName, args.keywords);
+                case 'googleAdsCreateResponsiveSearchAd': return await this.tools.googleAds.createResponsiveSearchAd(args.customerId, args.adData);
                 case 'linkedinPublishPost': return await this.tools.linkedinAds.publishOrganicPost(args.urn, args.text);
                 case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
                 case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
@@ -1456,6 +1549,12 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     return;
                 }
                 this.onUpdate({ type: 'error', message: `Organic Meta publish failed.\n${this._formatToolResult(result).slice(0, 5000)}` });
+                this.isWaitingForInput = true;
+                this._finishRun('paused');
+                return;
+            }
+            if (!this._isExternalActionConfirmed(approvedCall.name, result)) {
+                this.onUpdate({ type: 'error', message: `${approvedCall.name} did not return a confirmed success response.\n${this._formatToolResult(result).slice(0, 5000)}` });
                 this.isWaitingForInput = true;
                 this._finishRun('paused');
                 return;

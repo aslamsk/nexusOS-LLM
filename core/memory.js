@@ -5,16 +5,50 @@ const { db } = require('./firebase');
  * Persists key facts and learned information across sessions in Firestore.
  */
 class MemoryService {
+    _normalizeContent(content) {
+        if (content === null || content === undefined) return '';
+        return typeof content === 'string' ? content : JSON.stringify(content);
+    }
+
+    _sanitizeContent(content, category = 'general') {
+        const normalized = this._normalizeContent(content).trim();
+        if (!normalized) return { skip: true, reason: 'empty' };
+
+        const categoryValue = String(category || '').toLowerCase();
+        const likelyEphemeralPayload =
+            normalized.length > 4000 ||
+            /"boss_approved"\s*:/.test(normalized) ||
+            /"media_url"\s*:/.test(normalized) ||
+            /"call_to_action"\s*:/.test(normalized) ||
+            /agency-quote-\d+/i.test(normalized) ||
+            /download pdf quote|download csv quote|download markdown quote/i.test(normalized);
+
+        if (categoryValue === 'decision_log' && normalized.length > 500) {
+            return { skip: true, reason: 'decision_log_too_large' };
+        }
+        if (likelyEphemeralPayload) {
+            return { skip: true, reason: 'ephemeral_payload' };
+        }
+        if (/^error: /i.test(normalized) && normalized.length > 500) {
+            return { skip: true, reason: 'raw_error_blob' };
+        }
+
+        return { skip: false, content: normalized.slice(0, 2000) };
+    }
+
     /**
      * Store a fact or piece of information.
      */
     async saveMemory(content, category = 'general') {
-        console.log(`[Memory] Saving memory: "${content.substring(0, 50)}..." [${category}]`);
+        const prepared = this._sanitizeContent(content, category);
+        const preview = this._normalizeContent(content).slice(0, 50);
+        console.log(`[Memory] Saving memory: "${preview}..." [${category}]`);
         if (!db) return "Error: Firebase not initialized.";
+        if (prepared.skip) return `SKIPPED: Memory not persisted (${prepared.reason}).`;
 
         try {
             await db.collection('memories').add({
-                content,
+                content: prepared.content,
                 category,
                 timestamp: new Date(),
                 importance: 1
@@ -37,11 +71,12 @@ class MemoryService {
             const memories = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                if (data.content.toLowerCase().includes(query.toLowerCase())) {
-                    memories.push(data.content);
+                const content = String(data.content || '');
+                if (content.toLowerCase().includes(query.toLowerCase())) {
+                    memories.push(content);
                 }
             });
-            return memories.length > 0 ? memories.join('\n---\n') : "No relevant memories found.";
+            return memories.length > 0 ? memories.slice(0, 10).join('\n---\n') : "No relevant memories found.";
         } catch (e) {
             return `Error searching memory: ${e.message}`;
         }

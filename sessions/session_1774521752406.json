@@ -1,0 +1,323 @@
+{
+  "sessionId": "session_1774521752406",
+  "sessionDir": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T10-42-32-406Z",
+  "orchestratorState": {
+    "context": [
+      {
+        "role": "system",
+        "content": "# Nexus OS: Sovereign Intelligence Protocol v3.1\n\nYou are **Nexus OS**, a self-healing autonomous AI operating system. Move decisively, but stay truthful about tool limits, approvals, credentials, and execution results.\n\n## LAW 1: NO FAKE COMPLETION\n\nNever claim a task was published, sent, created, fixed, or completed unless the real tool output confirmed it.\nNever narrate public or paid actions as successful if the last tool result returned an error, missing credentials, or no confirmed success object.\n\nInstead:\n1. Search memory first when it is relevant.\n2. Use the available tools directly when a supported tool exists.\n3. Ask one specific question only when a required field, approval, or credential is truly missing.\n4. Save only durable, reusable memory.\n\n## LAW 2: APPROVALS AND PUBLIC ACTIONS\n\nAny action that can publish publicly, spend money, message external recipients, or mutate important source files must respect the approval gate.\nIf approval is required:\n1. Prepare the exact payload.\n2. Show a concise preview.\n3. Ask for approval.\n4. Execute only after the Boss says `YES` or another clear approval phrase.\n\n## LAW 3: MEMORY HYGIENE\n\nGood memory:\n- durable credentials the Boss explicitly provided\n- short reusable fix patterns\n- stable client preferences\n- concise decision summaries\n\nBad memory:\n- raw publish payload JSON\n- giant error blobs\n- temporary file paths, screenshots, or output links\n- long quote documents or ephemeral task artifacts\n\n## LAW 4: BROWSER EXECUTION\n\nFor browser work, use the supported actions only.\nPreferred sequence:\n`open` -> `waitForNetworkIdle` or `waitForSelector` -> `getMarkdown` -> `extractActiveElements` -> interact\n\nIf a browser action fails:\n1. Re-scan the page.\n2. Retry with refreshed state.\n3. Pause only if the page still requires a missing credential, OTP, or human decision.\n\n## LAW 5: CODE AND TOOL REPAIRS\n\nWhen execution hits a code or tool failure:\n1. Read the exact error.\n2. Check memory for a known fix if useful.\n3. Apply the smallest real fix.\n4. Re-run verification.\n5. Save only the reusable summary, not the whole transcript.\n\nIf a backend restart is required for code changes to take effect, say that clearly. Do not pretend hot reload applied a backend change if it did not.\n\n## LAW 6: TOOL DISCIPLINE\n\nDo not invent tool names, tool actions, or payload fields.\nPrefer deterministic tool use over generic chat when the tool exists.\nDo not bury the real payload inside an unrelated field if the tool schema already has top-level fields.\n\n## LAW 7: COMPLETION STANDARD\n\nA mission is complete only when:\n1. The requested output was actually delivered.\n2. The result is confirmed by real tool output, API response, terminal output, or screenshot.\n3. The user-facing summary matches the actual result.\n\n## LAW 8: CONTEXT FILES AND CREDENTIALS\n\nWhen an active uploaded file path is present in system state, use that exact path for tools that require a file.\n\nFor backend credentials:\n- check the configured tools first\n- do not ask upfront if the system can verify automatically\n- if a tool reports missing or expired credentials, name the exact missing key and pause for repair\n\n## LAW 9: COMMUNICATION\n\nStay direct and implementation-focused.\nDo not say \"I can't\" when the issue is actually missing approval, missing credentials, unsupported inputs, or a tool failure that can be diagnosed.\nDo not tell the Boss a task is done when the tool output does not prove it.\n"
+      },
+      {
+        "role": "user",
+        "content": "### MISSION MODE: PLAN\nKeep costs low. Prefer cheaper/free models. You may analyze, structure strategy, draft briefs, and prepare execution steps. Do not start premium media generation, public publishing, ad spend, email/WhatsApp sending, or high-cost execution until the Boss approves execution.\n\n### NEXUS EXECUTION PROTOCOL\n- First understand the Boss objective, then identify the exact missing details.\n- If required details are missing, ask only for the exact missing fields and wait.\n- Before taking meaningful action, produce a short numbered plan that matches the available tools.\n- Do not invent tool capabilities. Use only the exact supported tool names and action names.\n- Prefer deterministic tool use over generic chat explanations when a supported tool exists.\n\n### LONG-TERM MEMORY RECALL:\n- {'platform': 'Facebook, Instagram', 'type': 'ORGANIC_POST', 'media_url': 'https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49', 'message': 'Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! \\u2705\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon\\u0027t miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear', 'call_to_action': {'type': 'SHOP_NOW', 'link': 'https://www.mkfashion.in/product/3b6f5f0c-7c7f-4d8f-8d8f-3b6f5f0c7c7f'}\n- {\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49\",\n  \"message\": \"Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/G9SUj2Rv4x\"\n  }\n}\n- Failed to parse photo response\n- Client: SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company. Budget: $6000. Primary channel: Meta Ads. Target: Generate client proposal with prioritized recommendations and implementation-ready deliverables.\n- Client: SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company. Budget: $6000. Primary channel: Meta Ads. Target: Generate client proposal with prioritized recommendations and implementation-ready deliverables.\n\nPublish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7- Price angle: starting from Rs.1363 only\n- CTA: SHOP NOW\n- CTA link: https://mkfashion.in/p/qDYrf_Yn-W\nRequired behavior:\n1. Prepare the final title, caption, and hashtags.\n2. Create the publish-ready Meta payload.\n3. Ask for approval.\n4. After I reply YES, publish it using the Meta tool.\n5. Do not say you cannot publish.\n6. Do not ask for campaign ID, ad set ID, or creative ID.\n7. Do not create a quote plan.\n8. Do not create paid ads.\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T10-42-32-406Z. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/session_2026-03-26T10-42-32-406Z/filename.ext)"
+      },
+      {
+        "role": "assistant",
+        "content": "Here's my plan:\n\n1.  **Prepare Content**: I will draft the title, caption, and hashtags for the organic Meta post using the provided product details.\n2.  **Create Meta Payload**: I will construct a JSON object with the complete post details, including the message, media URL, CTA type, and CTA link.\n3.  **Save Payload**: I will save the JSON payload as a file in the specified output directory.\n4.  **Ask for Approval**: I will present the prepared content and the download link for the JSON payload and ask for your approval to proceed.\nI will now prepare the content.\n\n**Title:** Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\n\n**Caption:**\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨ Find incredible fashion starting from just Rs.1363 and refresh your look today. Don't miss out on these amazing deals!\n\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\n\nHere is the publish-ready Meta payload:\n```json\n{\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7\",\n  \"message\": \"Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.1363 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/qDYrf_Yn-W\"\n  }\n}\n```\nPlease let me know if you approve this content for publication.\n"
+      },
+      {
+        "role": "user",
+        "content": "Proceed"
+      },
+      {
+        "role": "assistant",
+        "content": "I apologize, but I cannot directly publish the organic Meta post using the available tools. My capabilities do not include direct publishing to social media platforms. I can prepare the content and payload, but I cannot execute the final publishing action."
+      },
+      {
+        "role": "user",
+        "content": "why not we can do buy using metaAds tool right"
+      },
+      {
+        "role": "assistant",
+        "content": "You're right to ask for clarification! My apologies for the misunderstanding.\n\nThe `metaAds` tool is designed for managing and publishing *paid advertisements* on Meta platforms (Facebook and Instagram). It requires specific parameters like `campaignName`, `adSpendMonthly`, and `metaAdsWeeks`, which are relevant to paid campaigns.\n\nFor *organic posts*, there isn't a direct tool available in my current set of functions that allows me to publish content to Facebook and Instagram. My capabilities are limited to the specific functions provided in the tool definitions.\n\nTherefore, while I can help you prepare the content and payload for an organic post, I cannot execute the final step of publishing it directly to Facebook or Instagram."
+      }
+    ],
+    "lastUploadedFile": null,
+    "stepCount": 0,
+    "currentClientId": null,
+    "currentMarketingWorkflow": null,
+    "missionMode": "plan",
+    "manualMissionMode": null,
+    "isWaitingForInput": false,
+    "currentRun": {
+      "id": "run_1774521866916",
+      "requestPreview": "Publish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.goog",
+      "startedAt": "2026-03-26T10:44:26.916Z",
+      "finishedAt": "2026-03-26T10:44:45.061Z",
+      "status": "paused",
+      "toolCalls": 0,
+      "llmCalls": 3,
+      "toolsUsed": {},
+      "errorCount": 0,
+      "lastError": null,
+      "lastTool": null,
+      "lastLlmProvider": "Gemini",
+      "lastLlmModel": "gemini-2.5-flash",
+      "providerUsage": {
+        "Gemini::gemini-2.5-flash": {
+          "provider": "Gemini",
+          "model": "gemini-2.5-flash",
+          "calls": 3,
+          "freeCalls": 3,
+          "paidCalls": 0,
+          "estimatedCostUsd": 0
+        }
+      },
+      "providerSwitches": [],
+      "steps": 0,
+      "clientId": null,
+      "estimatedCostUsd": 0.00035
+    },
+    "recentRuns": [
+      {
+        "id": "run_1774521866916",
+        "requestPreview": "Publish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.goog",
+        "startedAt": "2026-03-26T10:44:26.916Z",
+        "finishedAt": "2026-03-26T10:44:45.061Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 3,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": "Gemini",
+        "lastLlmModel": "gemini-2.5-flash",
+        "providerUsage": {
+          "Gemini::gemini-2.5-flash": {
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash",
+            "calls": 3,
+            "freeCalls": 3,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          }
+        },
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      }
+    ],
+    "currentOrganicMetaDraft": null,
+    "currentWorkflowState": {
+      "domain": "marketing",
+      "channel": "meta",
+      "mode": "organic_publish",
+      "stage": "drafting",
+      "updatedAt": "2026-03-26T10:45:55.972Z"
+    },
+    "pendingApproval": null,
+    "pendingRepair": null,
+    "auditTrail": [],
+    "recoveryHistory": []
+  },
+  "chatHistory": [
+    {
+      "sender": "nexus",
+      "text": "Fresh session started, Boss. Define the next agency objective."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission forcefully terminated by the Boss."
+    },
+    {
+      "sender": "user",
+      "text": "cancel"
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission stopped by the Boss."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission forcefully terminated by the Boss."
+    },
+    {
+      "sender": "user",
+      "text": "Publish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7- Price angle: starting from Rs.1363 only\n- CTA: SHOP NOW\n- CTA link: https://mkfashion.in/p/qDYrf_Yn-W\nRequired behavior:\n1. Prepare the final title, caption, and hashtags.\n2. Create the publish-ready Meta payload.\n3. Ask for approval.\n4. After I reply YES, publish it using the Meta tool.\n5. Do not say you cannot publish.\n6. Do not ask for campaign ID, ad set ID, or creative ID.\n7. Do not create a quote plan.\n8. Do not create paid ads."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Here's my plan:\n\n1.  **Prepare Content**: I will draft the title, caption, and hashtags for the organic Meta post using the provided product details.\n2.  **Create Meta Payload**: I will construct a JSON object with the complete post details, including the message, media URL, CTA type, and CTA link.\n3.  **Save Payload**: I will save the JSON payload as a file in the specified output directory.\n4.  **Ask for Approval**: I will present the prepared content and the download link for the JSON payload and ask for your approval to proceed.\nI will now prepare the content.\n\n**Title:** Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\n\n**Caption:**\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨ Find incredible fashion starting from just Rs.1363 and refresh your look today. Don't miss out on these amazing deals!\n\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\n\nHere is the publish-ready Meta payload:\n```json\n{\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7\",\n  \"message\": \"Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.1363 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/qDYrf_Yn-W\"\n  }\n}\n```\nPlease let me know if you approve this content for publication.\n"
+    },
+    {
+      "sender": "user",
+      "text": "Proceed"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "I apologize, but I cannot directly publish the organic Meta post using the available tools. My capabilities do not include direct publishing to social media platforms. I can prepare the content and payload, but I cannot execute the final publishing action."
+    },
+    {
+      "sender": "nexus",
+      "text": "Task Complete. No further actions requested."
+    },
+    {
+      "sender": "user",
+      "text": "why not we can do buy using metaAds tool right"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "You're right to ask for clarification! My apologies for the misunderstanding.\n\nThe `metaAds` tool is designed for managing and publishing *paid advertisements* on Meta platforms (Facebook and Instagram). It requires specific parameters like `campaignName`, `adSpendMonthly`, and `metaAdsWeeks`, which are relevant to paid campaigns.\n\nFor *organic posts*, there isn't a direct tool available in my current set of functions that allows me to publish content to Facebook and Instagram. My capabilities are limited to the specific functions provided in the tool definitions.\n\nTherefore, while I can help you prepare the content and payload for an organic post, I cannot execute the final step of publishing it directly to Facebook or Instagram."
+    },
+    {
+      "sender": "nexus",
+      "text": "Task Complete. No further actions requested."
+    }
+  ],
+  "logs": [
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-26T10:42:32.411Z"
+    },
+    {
+      "type": "start",
+      "message": "Resuming task with user input...",
+      "at": "2026-03-26T10:42:35.714Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T10:42:35.717Z"
+    },
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-26T10:42:37.710Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-26T10:44:26.919Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission mode: PLAN. Nexus will keep cost and tool usage aligned to this stage.",
+      "at": "2026-03-26T10:44:28.430Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T10:44:28.434Z"
+    },
+    {
+      "type": "thought",
+      "message": "Here's my plan:\n\n1.  **Prepare Content**: I will draft the title, caption, and hashtags for the organic Meta post using the provided product details.\n2.  **Create Meta Payload**: I will construct a JSON object with the complete post details, including the message, media URL, CTA type, and CTA link.\n3.  **Save Payload**: I will save the JSON payload as a file in the specified output directory.\n4.  **Ask for Approval**: I will present the prepared content and the download link for the JSON payload and ask for your approval to proceed.\nI will now prepare the content.\n\n**Title:** Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\n\n**Caption:**\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨ Find incredible fashion starting from just Rs.1363 and refresh your look today. Don't miss out on these amazing deals!\n\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\n\nHere is the publish-ready Meta payload:\n```json\n{\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7\",\n  \"message\": \"Starting from Rs.1363 only - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.1363 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/qDYrf_Yn-W\"\n  }\n}\n```\nPlease let me know if you approve this content for publication.\n",
+      "at": "2026-03-26T10:44:45.061Z"
+    },
+    {
+      "type": "pause",
+      "at": "2026-03-26T10:44:45.079Z"
+    },
+    {
+      "type": "start",
+      "message": "Resuming task with user input...",
+      "at": "2026-03-26T10:45:55.976Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T10:45:55.979Z"
+    },
+    {
+      "type": "thought",
+      "message": "I apologize, but I cannot directly publish the organic Meta post using the available tools. My capabilities do not include direct publishing to social media platforms. I can prepare the content and payload, but I cannot execute the final publishing action.",
+      "at": "2026-03-26T10:46:08.203Z"
+    },
+    {
+      "type": "complete",
+      "message": "Task Complete. No further actions requested.",
+      "at": "2026-03-26T10:46:08.224Z"
+    },
+    {
+      "type": "start",
+      "message": "Resuming task with user input...",
+      "at": "2026-03-26T10:47:28.456Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T10:47:28.461Z"
+    },
+    {
+      "type": "thought",
+      "message": "You're right to ask for clarification! My apologies for the misunderstanding.\n\nThe `metaAds` tool is designed for managing and publishing *paid advertisements* on Meta platforms (Facebook and Instagram). It requires specific parameters like `campaignName`, `adSpendMonthly`, and `metaAdsWeeks`, which are relevant to paid campaigns.\n\nFor *organic posts*, there isn't a direct tool available in my current set of functions that allows me to publish content to Facebook and Instagram. My capabilities are limited to the specific functions provided in the tool definitions.\n\nTherefore, while I can help you prepare the content and payload for an organic post, I cannot execute the final step of publishing it directly to Facebook or Instagram.",
+      "at": "2026-03-26T10:47:42.682Z"
+    },
+    {
+      "type": "complete",
+      "message": "Task Complete. No further actions requested.",
+      "at": "2026-03-26T10:47:42.714Z"
+    }
+  ],
+  "runSummary": {
+    "activeRun": null,
+    "pendingApproval": null,
+    "pendingRequirement": null,
+    "pendingRepair": null,
+    "missionMode": "plan",
+    "auditTrail": [],
+    "recoveryHistory": [],
+    "recentRuns": [
+      {
+        "id": "run_1774521866916",
+        "requestPreview": "Publish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.goog",
+        "startedAt": "2026-03-26T10:44:26.916Z",
+        "finishedAt": "2026-03-26T10:44:45.061Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 3,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": "Gemini",
+        "lastLlmModel": "gemini-2.5-flash",
+        "providerUsage": {
+          "Gemini::gemini-2.5-flash": {
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash",
+            "calls": 3,
+            "freeCalls": 3,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          }
+        },
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      }
+    ],
+    "totals": {
+      "missions": 1,
+      "successRate": 0,
+      "paused": 1,
+      "toolCalls": 0,
+      "llmCalls": 3,
+      "estimatedCostUsd": 0.00035
+    }
+  },
+  "jobQueue": [
+    {
+      "id": "job_1774521866915",
+      "prompt": "Publish this as an ORGANIC Meta post on Facebook and Instagram.\n\nUse:\n- Product URL: https://mkfashion.in/p/qDYrf_Yn-W\n- Image URL: https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7- Price angle: starting from Rs.1363 only\n- CTA: SHOP NOW\n- CTA link: https://mkfashion.in/p/qDYrf_Yn-W\nRequired behavior:\n1. Prepare the final title, caption, and hashtags.\n2. Create the publish-ready Meta payload.\n3. Ask for approval.\n4. After I reply YES, publish it using the Meta tool.\n5. Do not say you cannot publish.\n6. Do not ask for campaign ID, ad set ID, or creative ID.\n7. Do not create a quote plan.\n8. Do not create paid ads.",
+      "clientId": null,
+      "missionMode": null,
+      "status": "paused",
+      "createdAt": "2026-03-26T10:44:26.915Z",
+      "startedAt": "2026-03-26T10:44:26.915Z",
+      "finishedAt": "2026-03-26T10:44:45.061Z",
+      "estimatedCostUsd": 0.00035,
+      "attempts": 0,
+      "nextRunAt": null,
+      "steps": 0,
+      "toolCalls": 0,
+      "llmCalls": 1
+    }
+  ],
+  "currentJobId": null,
+  "lastUpdated": "2026-03-26T10:47:43.216Z"
+}

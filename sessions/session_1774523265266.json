@@ -1,0 +1,325 @@
+{
+  "sessionId": "session_1774523265266",
+  "sessionDir": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T11-07-45-266Z",
+  "orchestratorState": {
+    "context": [
+      {
+        "role": "system",
+        "content": "# Nexus OS: Sovereign Intelligence Protocol v3.1\n\nYou are **Nexus OS**, a self-healing autonomous AI operating system. Move decisively, but stay truthful about tool limits, approvals, credentials, and execution results.\n\n## LAW 1: NO FAKE COMPLETION\n\nNever claim a task was published, sent, created, fixed, or completed unless the real tool output confirmed it.\nNever narrate public or paid actions as successful if the last tool result returned an error, missing credentials, or no confirmed success object.\n\nInstead:\n1. Search memory first when it is relevant.\n2. Use the available tools directly when a supported tool exists.\n3. Ask one specific question only when a required field, approval, or credential is truly missing.\n4. Save only durable, reusable memory.\n\n## LAW 2: APPROVALS AND PUBLIC ACTIONS\n\nAny action that can publish publicly, spend money, message external recipients, or mutate important source files must respect the approval gate.\nIf approval is required:\n1. Prepare the exact payload.\n2. Show a concise preview.\n3. Ask for approval.\n4. Execute only after the Boss says `YES` or another clear approval phrase.\n\n## LAW 3: MEMORY HYGIENE\n\nGood memory:\n- durable credentials the Boss explicitly provided\n- short reusable fix patterns\n- stable client preferences\n- concise decision summaries\n\nBad memory:\n- raw publish payload JSON\n- giant error blobs\n- temporary file paths, screenshots, or output links\n- long quote documents or ephemeral task artifacts\n\n## LAW 4: BROWSER EXECUTION\n\nFor browser work, use the supported actions only.\nPreferred sequence:\n`open` -> `waitForNetworkIdle` or `waitForSelector` -> `getMarkdown` -> `extractActiveElements` -> interact\n\nIf a browser action fails:\n1. Re-scan the page.\n2. Retry with refreshed state.\n3. Pause only if the page still requires a missing credential, OTP, or human decision.\n\n## LAW 5: CODE AND TOOL REPAIRS\n\nWhen execution hits a code or tool failure:\n1. Read the exact error.\n2. Check memory for a known fix if useful.\n3. Apply the smallest real fix.\n4. Re-run verification.\n5. Save only the reusable summary, not the whole transcript.\n\nIf a backend restart is required for code changes to take effect, say that clearly. Do not pretend hot reload applied a backend change if it did not.\n\n## LAW 6: TOOL DISCIPLINE\n\nDo not invent tool names, tool actions, or payload fields.\nPrefer deterministic tool use over generic chat when the tool exists.\nDo not bury the real payload inside an unrelated field if the tool schema already has top-level fields.\n\n## LAW 7: COMPLETION STANDARD\n\nA mission is complete only when:\n1. The requested output was actually delivered.\n2. The result is confirmed by real tool output, API response, terminal output, or screenshot.\n3. The user-facing summary matches the actual result.\n\n## LAW 8: CONTEXT FILES AND CREDENTIALS\n\nWhen an active uploaded file path is present in system state, use that exact path for tools that require a file.\n\nFor backend credentials:\n- check the configured tools first\n- do not ask upfront if the system can verify automatically\n- if a tool reports missing or expired credentials, name the exact missing key and pause for repair\n\n## LAW 9: COMMUNICATION\n\nStay direct and implementation-focused.\nDo not say \"I can't\" when the issue is actually missing approval, missing credentials, unsupported inputs, or a tool failure that can be diagnosed.\nDo not tell the Boss a task is done when the tool output does not prove it.\n"
+      },
+      {
+        "role": "user",
+        "content": "### MISSION MODE: DISCUSS\nKeep costs as low as possible. Stay conversational, clarify goals, and shape the task. Do not start browser research, premium media generation, public publishing, ad spend, or outbound actions unless the Boss explicitly asks to move into planning or execution.\n\n### NEXUS EXECUTION PROTOCOL\n- First understand the Boss objective, then identify the exact missing details.\n- If required details are missing, ask only for the exact missing fields and wait.\n- Before taking meaningful action, produce a short numbered plan that matches the available tools.\n- Do not invent tool capabilities. Use only the exact supported tool names and action names.\n- Prefer deterministic tool use over generic chat explanations when a supported tool exists.\n\n### LONG-TERM MEMORY RECALL:\n- # AD-CAMPAIGNS.md - Mk Fashion Organic Meta Strategy\n\n## Campaign Overview\n- **Client:** SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company\n- **Primary Channel:** Meta (Facebook & Instagram) - Organic\n- **Budget:** $0 (Organic-first approach)\n- **Target Product:** https://mkfashion.in/p/qDYrf_Yn-W\n- **Price Angle:** Starting from Rs.1363 only\n\n## Organic Meta Post - Ready to Publish\n\n### Post Details\n- **Title:** Starting from Rs.1363 - Elevate Your Style with Mk Fashion!\n- **Caption:** Discover exquisite fashion that doesn't break the bank! ✨ Mk Fashion brings you stunning new arrivals, with prices starting from just Rs.1363. Refresh your wardrobe and express your unique style today. Don't miss out on these incredible deals!\n- **Hashtags:** #MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\n- **Media URL:** https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FWw1ITe6fsP8UXpY5LGka%2Fimages%2F17731087833600gli9krvousu.jpg?alt=media&token=8831bf18-b281-4fb9-8bf4-5a4fff1fc0c7\n- **Call to Action:** SHOP NOW\n- **CTA Link:** https://mkfashion.in/p/qDYrf_Yn-W\n\n### Implementation Notes\n- Post to both Facebook Page and Instagram Feed\n- Ensure image displays clearly on both platforms\n- CTA button should be set to \"Shop Now\" linking to product page\n- Optimal posting times: 12-2 PM and 7-9 PM IST for maximum reach\n\n## Additional Organic Recommendations\n\n### Content Strategy\n1. **Carousel Posts:** Create 3-5 image carousels showcasing different product angles (detail shots, lifestyle, price highlights)\n2. **Reels Strategy:** 15-30 second reels with trending audio, showing product transformations or \"unboxing\" style content\n3. **User-Generated Content:** Encourage customers to tag @mkfashion for reposts and community building\n4. **Stories Series:** Use polls, questions, and countdowns to drive engagement\n\n### Hashtag Strategy\n- Mix of broad (#Fashion, #Style) and\n- {'platform': 'Facebook, Instagram', 'type': 'ORGANIC_POST', 'media_url': 'https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49', 'message': 'Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! \\u2705\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon\\u0027t miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear', 'call_to_action': {'type': 'SHOP_NOW', 'link': 'https://www.mkfashion.in/product/3b6f5f0c-7c7f-4d8f-8d8f-3b6f5f0c7c7f'}\n- {\n  \"platform\": \"Facebook, Instagram\",\n  \"type\": \"ORGANIC_POST\",\n  \"media_url\": \"https://firebasestorage.googleapis.com/v0/b/mk-fashions.appspot.com/o/products%2FwWJ1zjsprGsJzf0PQT3V%2Fimages%2F1774258285441stycgy38qi.jpg?alt=media&token=de03cde2-41f6-423b-8119-6b8298d8cd49\",\n  \"message\": \"Starting from Rs.99 - Discover Your Style at Mk Fashion!\\n\\nElevate your wardrobe with stunning new arrivals from Mk Fashion! ✨\\nFind incredible fashion starting from just Rs.99 and refresh your look today.\\nDon't miss out on these amazing deals!\\n\\n#MkFashion #AffordableFashion #ShopNow #NewArrivals #FashionDeals #StyleOnABudget #IndianFashion #FashionForEveryone #EthnicWear #WesternWear\",\n  \"call_to_action\": {\n    \"type\": \"SHOP_NOW\",\n    \"link\": \"https://mkfashion.in/p/G9SUj2Rv4x\"\n  }\n}\n- Failed to parse photo response\n- Client: SHAIK ASLAM - Mk Fashion Fashion Ecommerce Company. Budget: $6000. Primary channel: Meta Ads. Target: Generate client proposal with prioritized recommendations and implementation-ready deliverables.\n\ngenerate a 3d cartoon image doing namaz small kid\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-03-26T11-07-45-266Z. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/session_2026-03-26T11-07-45-266Z/filename.ext)"
+      },
+      {
+        "role": "assistant",
+        "content": "I understand you'd like a 3D cartoon image of a small kid doing namaz. However, I need to clarify my capabilities: I don't have an image generation tool available in my current toolkit. I cannot create or generate images directly.\n\n**What I can do instead:**\n- Search the web for existing images or references\n- Provide detailed text prompts that you could use with an external AI image generator (like DALL-E, Midjourney, etc.)\n- Help you describe the image in detail for a designer\n- Assist with other aspects of your project that don't require image generation\n\n**To move forward effectively, could you clarify:**\n1. Are you looking for an existing image to reference or download?\n2. Do you need a detailed prompt to generate this image using another tool?\n3. Is this part of a larger design or marketing project where I can help with strategy, copy, or planning?\n\nOnce I understand your actual goal, I can provide the most helpful assistance within my available capabilities."
+      },
+      {
+        "role": "user",
+        "content": "continue with the most relevant audience and proceed"
+      },
+      {
+        "role": "assistant",
+        "content": "I apologize, but I'm still unable to generate images as I don't have that capability.\n\nRegarding \"continue with the most relevant audience and proceed,\" could you please clarify what specific task you'd like to perform related to an audience?\n\nAre you referring to:\n1.  The audience for the Mk Fashion campaign (from the long-term memory)? If so, what specifically about the audience would you like to discuss or analyze (e.g., target demographics, content preferences, channel analysis)?\n2.  An audience for a different product or service? If yes, please provide details about the product/service.\n3.  Something else entirely?\n\nOnce I understand your objective, I can suggest appropriate next steps using the available tools."
+      },
+      {
+        "role": "user",
+        "content": "continue with the most relevant audience and proceed"
+      },
+      {
+        "role": "assistant",
+        "content": "Understood. Since you've mentioned \"Mk Fashion Fashion Ecommerce Company\" and an \"Organic Meta Strategy\" in the long-term memory, I will assume you'd like to proceed with identifying and analyzing the most relevant audience for Mk Fashion's organic Meta (Facebook & Instagram) strategy.\n\nTo best help you, could you please specify what kind of analysis you're looking for regarding this audience? For example, would you like to:\n\n1.  **Analyze the marketing page** for the target product to understand its appeal to an audience? (e.g., `analyzeMarketingPage` for https://mkfashion.in/p/qDYrf_Yn-W)\n2.  **Scan competitors** to see how they target their audience and what segments they focus on? (e.g., `scanCompetitors`)\n3.  **Generate a social calendar** with content tailored to a specific audience segment? (e.g., `generateSocialCalendar`)\n4.  Or something else related to understanding the Mk Fashion audience?\n\nPlease clarify your goal so I can use the most appropriate tool."
+      }
+    ],
+    "lastUploadedFile": null,
+    "stepCount": 0,
+    "currentClientId": null,
+    "currentMarketingWorkflow": null,
+    "missionMode": "discuss",
+    "manualMissionMode": null,
+    "isWaitingForInput": true,
+    "currentRun": {
+      "id": "run_1774523303390",
+      "requestPreview": "generate a 3d cartoon image doing namaz small kid",
+      "startedAt": "2026-03-26T11:08:23.390Z",
+      "finishedAt": "2026-03-26T11:08:45.779Z",
+      "status": "paused",
+      "toolCalls": 0,
+      "llmCalls": 3,
+      "toolsUsed": {},
+      "errorCount": 0,
+      "lastError": null,
+      "lastTool": null,
+      "lastLlmProvider": "Gemini",
+      "lastLlmModel": "gemini-2.5-flash",
+      "providerUsage": {
+        "OpenRouter::stepfun/step-3.5-flash:free": {
+          "provider": "OpenRouter",
+          "model": "stepfun/step-3.5-flash:free",
+          "calls": 1,
+          "freeCalls": 1,
+          "paidCalls": 0,
+          "estimatedCostUsd": 0
+        },
+        "Gemini::gemini-2.5-flash": {
+          "provider": "Gemini",
+          "model": "gemini-2.5-flash",
+          "calls": 2,
+          "freeCalls": 2,
+          "paidCalls": 0,
+          "estimatedCostUsd": 0
+        }
+      },
+      "providerSwitches": [
+        {
+          "at": "2026-03-26T11:09:20.834Z",
+          "from": "OpenRouter",
+          "to": "Gemini",
+          "model": "gemini-2.5-flash"
+        }
+      ],
+      "steps": 0,
+      "clientId": null,
+      "estimatedCostUsd": 0.00035
+    },
+    "recentRuns": [
+      {
+        "id": "run_1774523303390",
+        "requestPreview": "generate a 3d cartoon image doing namaz small kid",
+        "startedAt": "2026-03-26T11:08:23.390Z",
+        "finishedAt": "2026-03-26T11:08:45.779Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 3,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": "Gemini",
+        "lastLlmModel": "gemini-2.5-flash",
+        "providerUsage": {
+          "OpenRouter::stepfun/step-3.5-flash:free": {
+            "provider": "OpenRouter",
+            "model": "stepfun/step-3.5-flash:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          },
+          "Gemini::gemini-2.5-flash": {
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          }
+        },
+        "providerSwitches": [
+          {
+            "at": "2026-03-26T11:09:20.834Z",
+            "from": "OpenRouter",
+            "to": "Gemini",
+            "model": "gemini-2.5-flash"
+          }
+        ],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      }
+    ],
+    "currentOrganicMetaDraft": null,
+    "currentWorkflowState": null,
+    "pendingApproval": null,
+    "pendingRepair": null,
+    "auditTrail": [],
+    "recoveryHistory": []
+  },
+  "chatHistory": [
+    {
+      "sender": "nexus",
+      "text": "Fresh session started, Boss. Define the next agency objective."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission forcefully terminated by the Boss."
+    },
+    {
+      "sender": "user",
+      "text": "generate a 3d cartoon image doing namaz small kid"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "I understand you'd like a 3D cartoon image of a small kid doing namaz. However, I need to clarify my capabilities: I don't have an image generation tool available in my current toolkit. I cannot create or generate images directly.\n\n**What I can do instead:**\n- Search the web for existing images or references\n- Provide detailed text prompts that you could use with an external AI image generator (like DALL-E, Midjourney, etc.)\n- Help you describe the image in detail for a designer\n- Assist with other aspects of your project that don't require image generation\n\n**To move forward effectively, could you clarify:**\n1. Are you looking for an existing image to reference or download?\n2. Do you need a detailed prompt to generate this image using another tool?\n3. Is this part of a larger design or marketing project where I can help with strategy, copy, or planning?\n\nOnce I understand your actual goal, I can provide the most helpful assistance within my available capabilities."
+    },
+    {
+      "sender": "user",
+      "text": "continue with the most relevant audience and proceed"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "I apologize, but I'm still unable to generate images as I don't have that capability.\n\nRegarding \"continue with the most relevant audience and proceed,\" could you please clarify what specific task you'd like to perform related to an audience?\n\nAre you referring to:\n1.  The audience for the Mk Fashion campaign (from the long-term memory)? If so, what specifically about the audience would you like to discuss or analyze (e.g., target demographics, content preferences, channel analysis)?\n2.  An audience for a different product or service? If yes, please provide details about the product/service.\n3.  Something else entirely?\n\nOnce I understand your objective, I can suggest appropriate next steps using the available tools."
+    },
+    {
+      "sender": "user",
+      "text": "continue with the most relevant audience and proceed"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Understood. Since you've mentioned \"Mk Fashion Fashion Ecommerce Company\" and an \"Organic Meta Strategy\" in the long-term memory, I will assume you'd like to proceed with identifying and analyzing the most relevant audience for Mk Fashion's organic Meta (Facebook & Instagram) strategy.\n\nTo best help you, could you please specify what kind of analysis you're looking for regarding this audience? For example, would you like to:\n\n1.  **Analyze the marketing page** for the target product to understand its appeal to an audience? (e.g., `analyzeMarketingPage` for https://mkfashion.in/p/qDYrf_Yn-W)\n2.  **Scan competitors** to see how they target their audience and what segments they focus on? (e.g., `scanCompetitors`)\n3.  **Generate a social calendar** with content tailored to a specific audience segment? (e.g., `generateSocialCalendar`)\n4.  Or something else related to understanding the Mk Fashion audience?\n\nPlease clarify your goal so I can use the most appropriate tool."
+    }
+  ],
+  "logs": [
+    {
+      "type": "error",
+      "message": "Mission forcefully terminated by the Boss.",
+      "at": "2026-03-26T11:07:45.271Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-03-26T11:08:23.393Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission mode: DISCUSS. Nexus will keep cost and tool usage aligned to this stage.",
+      "at": "2026-03-26T11:08:24.910Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T11:08:24.915Z"
+    },
+    {
+      "type": "thought",
+      "message": "I understand you'd like a 3D cartoon image of a small kid doing namaz. However, I need to clarify my capabilities: I don't have an image generation tool available in my current toolkit. I cannot create or generate images directly.\n\n**What I can do instead:**\n- Search the web for existing images or references\n- Provide detailed text prompts that you could use with an external AI image generator (like DALL-E, Midjourney, etc.)\n- Help you describe the image in detail for a designer\n- Assist with other aspects of your project that don't require image generation\n\n**To move forward effectively, could you clarify:**\n1. Are you looking for an existing image to reference or download?\n2. Do you need a detailed prompt to generate this image using another tool?\n3. Is this part of a larger design or marketing project where I can help with strategy, copy, or planning?\n\nOnce I understand your actual goal, I can provide the most helpful assistance within my available capabilities.",
+      "at": "2026-03-26T11:08:45.779Z"
+    },
+    {
+      "type": "pause",
+      "at": "2026-03-26T11:08:45.795Z"
+    },
+    {
+      "type": "start",
+      "message": "Resuming task with user input...",
+      "at": "2026-03-26T11:09:06.471Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T11:09:06.475Z"
+    },
+    {
+      "type": "thought",
+      "message": "I apologize, but I'm still unable to generate images as I don't have that capability.\n\nRegarding \"continue with the most relevant audience and proceed,\" could you please clarify what specific task you'd like to perform related to an audience?\n\nAre you referring to:\n1.  The audience for the Mk Fashion campaign (from the long-term memory)? If so, what specifically about the audience would you like to discuss or analyze (e.g., target demographics, content preferences, channel analysis)?\n2.  An audience for a different product or service? If yes, please provide details about the product/service.\n3.  Something else entirely?\n\nOnce I understand your objective, I can suggest appropriate next steps using the available tools.",
+      "at": "2026-03-26T11:09:21.179Z"
+    },
+    {
+      "type": "pause",
+      "at": "2026-03-26T11:09:21.219Z"
+    },
+    {
+      "type": "start",
+      "message": "Resuming task with user input...",
+      "at": "2026-03-26T11:09:26.784Z"
+    },
+    {
+      "type": "step",
+      "message": "--- Step 1 ---",
+      "at": "2026-03-26T11:09:26.792Z"
+    },
+    {
+      "type": "thought",
+      "message": "Understood. Since you've mentioned \"Mk Fashion Fashion Ecommerce Company\" and an \"Organic Meta Strategy\" in the long-term memory, I will assume you'd like to proceed with identifying and analyzing the most relevant audience for Mk Fashion's organic Meta (Facebook & Instagram) strategy.\n\nTo best help you, could you please specify what kind of analysis you're looking for regarding this audience? For example, would you like to:\n\n1.  **Analyze the marketing page** for the target product to understand its appeal to an audience? (e.g., `analyzeMarketingPage` for https://mkfashion.in/p/qDYrf_Yn-W)\n2.  **Scan competitors** to see how they target their audience and what segments they focus on? (e.g., `scanCompetitors`)\n3.  **Generate a social calendar** with content tailored to a specific audience segment? (e.g., `generateSocialCalendar`)\n4.  Or something else related to understanding the Mk Fashion audience?\n\nPlease clarify your goal so I can use the most appropriate tool.",
+      "at": "2026-03-26T11:09:40.493Z"
+    },
+    {
+      "type": "pause",
+      "at": "2026-03-26T11:09:40.531Z"
+    }
+  ],
+  "runSummary": {
+    "activeRun": null,
+    "pendingApproval": null,
+    "pendingRequirement": null,
+    "pendingRepair": null,
+    "missionMode": "discuss",
+    "auditTrail": [],
+    "recoveryHistory": [],
+    "recentRuns": [
+      {
+        "id": "run_1774523303390",
+        "requestPreview": "generate a 3d cartoon image doing namaz small kid",
+        "startedAt": "2026-03-26T11:08:23.390Z",
+        "finishedAt": "2026-03-26T11:08:45.779Z",
+        "status": "paused",
+        "toolCalls": 0,
+        "llmCalls": 3,
+        "toolsUsed": {},
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": null,
+        "lastLlmProvider": "Gemini",
+        "lastLlmModel": "gemini-2.5-flash",
+        "providerUsage": {
+          "OpenRouter::stepfun/step-3.5-flash:free": {
+            "provider": "OpenRouter",
+            "model": "stepfun/step-3.5-flash:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          },
+          "Gemini::gemini-2.5-flash": {
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0
+          }
+        },
+        "providerSwitches": [
+          {
+            "at": "2026-03-26T11:09:20.834Z",
+            "from": "OpenRouter",
+            "to": "Gemini",
+            "model": "gemini-2.5-flash"
+          }
+        ],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.00035
+      }
+    ],
+    "totals": {
+      "missions": 1,
+      "successRate": 0,
+      "paused": 1,
+      "toolCalls": 0,
+      "llmCalls": 3,
+      "estimatedCostUsd": 0.00035
+    }
+  },
+  "jobQueue": [
+    {
+      "id": "job_1774523303388",
+      "prompt": "generate a 3d cartoon image doing namaz small kid",
+      "clientId": null,
+      "missionMode": null,
+      "status": "paused",
+      "createdAt": "2026-03-26T11:08:23.388Z",
+      "startedAt": "2026-03-26T11:08:23.389Z",
+      "finishedAt": "2026-03-26T11:08:45.779Z",
+      "estimatedCostUsd": 0.00035,
+      "attempts": 0,
+      "nextRunAt": null,
+      "steps": 0,
+      "toolCalls": 0,
+      "llmCalls": 1
+    }
+  ],
+  "currentJobId": null,
+  "lastUpdated": "2026-03-26T11:10:13.359Z"
+}

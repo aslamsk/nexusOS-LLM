@@ -5,6 +5,10 @@ class GovernanceService {
             'sendWhatsApp',
             'sendWhatsAppMedia',
             'googleAdsCreateCampaign',
+            'googleAdsCreateBudget',
+            'googleAdsCreateAdGroup',
+            'googleAdsAddKeywords',
+            'googleAdsCreateResponsiveSearchAd',
             'linkedinPublishPost'
         ]);
         this.commandRiskPatterns = [
@@ -174,16 +178,16 @@ class GovernanceService {
             };
         }
 
-        if (name === 'googleAdsCreateCampaign') {
+        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
             return {
                 requiresApproval: true,
-                reason: 'This action will create a paid Google Ads campaign.',
-                preview: `Google Ads campaign for customer ${args.customerId}`,
+                reason: 'This action will create or modify paid Google Ads entities.',
+                preview: `${name} for customer ${args.customerId}`,
                 details: {
                     type: 'google_ads_campaign',
                     customerId: args.customerId || null,
                     campaignName: args.campaignData?.name || null,
-                    budgetResource: args.campaignData?.budget_resource_name || null
+                    budgetResource: args.campaignData?.budget_resource_name || args.amountMicros || null
                 }
             };
         }

@@ -1,5 +1,5 @@
-require('dotenv').config();
 const { GoogleGenAI } = require('@google/genai');
+const ConfigService = require('../core/config');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,13 +9,21 @@ const path = require('path');
  */
 class ImageGenTool {
     constructor() {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            throw new Error("GEMINI_API_KEY is not set in the environment.");
-        }
-        this.ai = new GoogleGenAI({ apiKey: apiKey });
-        // Use Imagen 4 (adjust if needed)
         this.modelName = 'imagen-4.0-generate-001';
+        this.ai = null;
+        this.activeApiKey = null;
+    }
+
+    async _getClient() {
+        const apiKey = await ConfigService.get('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            throw new Error("GEMINI_API_KEY is not configured in Firestore or .env.");
+        }
+        if (!this.ai || this.activeApiKey !== apiKey) {
+            this.ai = new GoogleGenAI({ apiKey });
+            this.activeApiKey = apiKey;
+        }
+        return this.ai;
     }
 
     /**
@@ -23,8 +31,9 @@ class ImageGenTool {
      */
     async generateImage(prompt, savePath) {
         try {
+            const ai = await this._getClient();
             console.log(`[ImageGen] Generating image with prompt: "${prompt}"...`);
-            const response = await this.ai.models.generateImages({
+            const response = await ai.models.generateImages({
                 model: this.modelName,
                 prompt: prompt,
                 parameters: {
@@ -53,8 +62,8 @@ class ImageGenTool {
      */
     async improveImage(prompt, referenceImagePath, savePath) {
         try {
+            const ai = await this._getClient();
             console.log(`[ImageGen] Improving image at ${referenceImagePath} with prompt: "${prompt}"...`);
-            const fs = require('fs');
             const referenceImage = {
                 inlineData: {
                     data: fs.readFileSync(referenceImagePath).toString('base64'),
@@ -62,7 +71,7 @@ class ImageGenTool {
                 }
             };
 
-            const response = await this.ai.models.generateImages({
+            const response = await ai.models.generateImages({
                 model: this.modelName,
                 prompt: prompt, // The improvement instructions
                 images: [referenceImage], // The guide image
