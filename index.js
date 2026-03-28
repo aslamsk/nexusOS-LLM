@@ -72,9 +72,9 @@ class NexusOrchestrator {
             n8nSearch: (args) => N8nDiscoverTool.searchWorkflows(args.query),
             getN8nWorkflow: (args) => N8nDiscoverTool.getWorkflow(args.id),
             removeBg: (args) => BackgroundRemovalTool.removeBg(args.inputPath, args.outputPath),
-            metaAds: (args) => MetaAdsTool.executeAction(args),
-            googleAds: (args) => GoogleAdsTool.executeAction(args),
-            linkedinAds: (args) => LinkedInAdsTool.executeAction(args),
+            metaAds: (args) => this._runMetaAdsAction(args),
+            googleAds: (args) => this._runGoogleAdsAction(args),
+            linkedinAds: (args) => this._runLinkedInAdsAction(args),
             openRouter: (args) => OpenRouterTool.executeAction(args),
             searchWeb: (args) => SearchTool.search(args.query),
             codeMap: (args) => CodeAwarenessTool.mapCodebase(args.absolutePath, args.maxDepth),
@@ -112,10 +112,14 @@ class NexusOrchestrator {
         this.currentMarketingWorkflow = null;
         this.pendingRequirement = null;
         this.currentSessionId = null;
-        this.currentMissionMode = 'discuss';
+        this.currentMissionMode = 'execute';
         this.manualMissionMode = null;
         this.currentWorkflowState = null;
         this.isStopped = false;
+    }
+
+    _isChatOnlyMode() {
+        return String(this.currentMissionMode || '').toLowerCase() === 'chat';
     }
 
     /**
@@ -259,7 +263,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 message: 'Commercial quote request detected. Nexus is switching to direct finance planning instead of search.'
             });
         }
-        this.onUpdate({ type: 'thought', message: `Mission mode: ${this.currentMissionMode.toUpperCase()}. Nexus will keep cost and tool usage aligned to this stage.` });
+        this.onUpdate({ type: 'thought', message: `Mission mode: ${this.currentMissionMode.toUpperCase()}. Nexus will execute directly and still pause only for real approvals or missing setup.` });
 
         // Inject the active working directory into the prompt if specified
         let augmentedRequest = memoryPrompt + userRequest;
@@ -278,7 +282,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         this.stepCount = 0;
 
         try {
-            await this._runLoop(userRequest);
+            if (this._isChatOnlyMode()) {
+                await this._runChatLoop(userRequest);
+            } else {
+                await this._runLoop(userRequest);
+            }
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
             }
@@ -324,7 +332,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         }
 
         try {
-            await this._runLoop(null);
+            if (this._isChatOnlyMode()) {
+                await this._runChatLoop(null);
+            } else {
+                await this._runLoop(null);
+            }
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
             }
@@ -896,7 +908,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                         clientId: this.currentClientId || null,
                         sessionId: this.currentSessionId || null,
                         runId: this.currentRun.id,
-                        requestPreview: this.currentRun.requestPreview
+                        requestPreview: this.currentRun.requestPreview,
+                        mode: this.currentMissionMode,
+                        inputTokens: response.usage?.inputTokens || 0,
+                        outputTokens: response.usage?.outputTokens || 0,
+                        totalTokens: response.usage?.totalTokens || 0
                     });
                     const usageKey = `${usageEvent.provider}::${usageEvent.model}`;
                     const currentEntry = this.currentRun.providerUsage?.[usageKey] || {
@@ -906,11 +922,18 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                         freeCalls: 0,
                         paidCalls: 0,
                         estimatedCostUsd: 0
+                        ,
+                        inputTokens: 0,
+                        outputTokens: 0,
+                        totalTokens: 0
                     };
                     currentEntry.calls += 1;
                     currentEntry.freeCalls += usageEvent.usageTier === 'free' ? 1 : 0;
                     currentEntry.paidCalls += usageEvent.usageTier === 'paid' ? 1 : 0;
                     currentEntry.estimatedCostUsd = Number((currentEntry.estimatedCostUsd + Number(usageEvent.estimatedCostUsd || 0)).toFixed(6));
+                    currentEntry.inputTokens += Number(usageEvent.inputTokens || 0);
+                    currentEntry.outputTokens += Number(usageEvent.outputTokens || 0);
+                    currentEntry.totalTokens += Number(usageEvent.totalTokens || 0);
                     this.currentRun.providerUsage = this.currentRun.providerUsage || {};
                     this.currentRun.providerUsage[usageKey] = currentEntry;
                 }
@@ -1113,6 +1136,34 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             };
         }
 
+        if (toolCall.name === 'googleAdsCreateBudget') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createBudget' } };
+        }
+
+        if (toolCall.name === 'googleAdsCreateCampaign') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createCampaign' } };
+        }
+
+        if (toolCall.name === 'googleAdsCreateAdGroup') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createAdGroup' } };
+        }
+
+        if (toolCall.name === 'googleAdsAddKeywords') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'addKeywords' } };
+        }
+
+        if (toolCall.name === 'googleAdsCreateResponsiveSearchAd') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createResponsiveSearchAd' } };
+        }
+
+        if (toolCall.name === 'googleAdsListCampaigns') {
+            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'listCampaigns' } };
+        }
+
+        if (toolCall.name === 'linkedinPublishPost') {
+            return { name: 'linkedinAds', args: { ...(toolCall.args || {}), action: 'publishPost' } };
+        }
+
         return toolCall;
     }
 
@@ -1194,7 +1245,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     async _preflightExternalAction(toolCall = {}) {
         const { name, args = {} } = toolCall;
         if (name === 'metaAds') {
-            const status = await this.tools.metaAds.getSetupStatus();
+            const status = await MetaAdsTool.getSetupStatus();
             const action = String(args.action || '');
             const needsPaidSetup = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'uploadImage', 'getAccountInfo'].includes(action);
             const needsOrganicSetup = ['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel', 'getPageInsights'].includes(action);
@@ -1215,8 +1266,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             return { ok: true };
         }
 
-        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'googleAdsListCampaigns'].includes(name)) {
-            const status = await this.tools.googleAds.getSetupStatus();
+        if (name === 'googleAds' || ['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'googleAdsListCampaigns'].includes(name)) {
+            const status = await GoogleAdsTool.getSetupStatus();
             const missing = [];
             if (!status.hasClientId) missing.push('GOOGLE_ADS_CLIENT_ID');
             if (!status.hasClientSecret) missing.push('GOOGLE_ADS_CLIENT_SECRET');
@@ -1225,7 +1276,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             if (missing.length) {
                 return {
                     ok: false,
-                    error: `Google Ads action ${name} is blocked by missing setup: ${missing.join(', ')}.`,
+                    error: `Google Ads action ${args.action || name} is blocked by missing setup: ${missing.join(', ')}.`,
                     missingKeys: missing,
                     provider: 'google_ads'
                 };
@@ -1233,8 +1284,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             return { ok: true };
         }
 
-        if (name === 'linkedinPublishPost') {
-            const status = await this.tools.linkedinAds.getSetupStatus();
+        if (name === 'linkedinAds' || name === 'linkedinPublishPost') {
+            const status = await LinkedInAdsTool.getSetupStatus();
             if (!status.hasAccessToken) {
                 return {
                     ok: false,
@@ -1261,6 +1312,78 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         return lines.join('\n');
     }
 
+    async _runMetaAdsAction(args = {}) {
+        const action = String(args.action || '');
+        switch (action) {
+            case 'createCampaign':
+                return await MetaAdsTool.createCampaign(args.name, args.objective);
+            case 'createAdSet':
+                return await MetaAdsTool.createAdSet(args.campaignId, args.name, args.budget || 1000, args.targeting);
+            case 'createAdCreative':
+                return await MetaAdsTool.createAdCreative(args.name, args.title, args.body, args.imageHash || args.imageUrl, args.pageId, args.cta, args.link);
+            case 'createAd':
+                return await MetaAdsTool.createAd(args.adSetId, args.creativeId, args.name);
+            case 'publishOrganicPost':
+                return await MetaAdsTool.publishOrganicPostSurfaces({
+                    pageId: args.pageId,
+                    message: args.message,
+                    link: args.link,
+                    imagePath: args.imagePath || this.lastUploadedFile,
+                    channels: args.channels || ['facebook']
+                });
+            case 'publishOrganicPhoto':
+                return await MetaAdsTool.publishPagePhoto(args.pageId, args.message, args.imagePath || this.lastUploadedFile);
+            case 'publishOrganicVideo':
+                return await MetaAdsTool.publishPageVideo(args.pageId, args.title, args.description, args.videoPath);
+            case 'publishOrganicReel':
+                return await MetaAdsTool.publishPageReel(args.pageId, args.description, args.videoPath);
+            case 'getPageInsights':
+                return await MetaAdsTool.getPageInsights(args.pageId);
+            case 'getAccountInfo':
+                return await MetaAdsTool.getAccountInfo();
+            case 'uploadImage':
+                return await MetaAdsTool.uploadImage(args.imagePath);
+            case 'metaGetComments':
+                return await MetaAdsTool.getComments(args.objectId);
+            case 'metaSetCredentials':
+                return await MetaAdsTool.setCredentials(args.accessToken, args.adAccountId, args.pageId);
+            case 'metaReplyToComment':
+                return await MetaAdsTool.replyToComment(args.commentId, args.message);
+            default:
+                return `Unknown metaAds action: ${action}`;
+        }
+    }
+
+    async _runGoogleAdsAction(args = {}) {
+        const action = String(args.action || '');
+        switch (action) {
+            case 'listCampaigns':
+                return await GoogleAdsTool.listCampaigns(args.customerId);
+            case 'createBudget':
+                return await GoogleAdsTool.createCampaignBudget(args.customerId, args.name, args.amountMicros, args.deliveryMethod);
+            case 'createCampaign':
+                return await GoogleAdsTool.createCampaign(args.customerId, args.campaignData);
+            case 'createAdGroup':
+                return await GoogleAdsTool.createAdGroup(args.customerId, args.adGroupData);
+            case 'addKeywords':
+                return await GoogleAdsTool.addKeywords(args.customerId, args.adGroupResourceName, args.keywords);
+            case 'createResponsiveSearchAd':
+                return await GoogleAdsTool.createResponsiveSearchAd(args.customerId, args.adData);
+            default:
+                return `Unknown googleAds action: ${action}`;
+        }
+    }
+
+    async _runLinkedInAdsAction(args = {}) {
+        const action = String(args.action || '');
+        switch (action) {
+            case 'publishPost':
+                return await LinkedInAdsTool.publishOrganicPost(args.urn, args.text, args.imagePath || this.lastUploadedFile || null);
+            default:
+                return `Unknown linkedinAds action: ${action}`;
+        }
+    }
+
     async _dispatchTool(toolCall, options = {}) {
         const normalizedToolCall = this._normalizeToolCall(toolCall);
         const { name, args } = normalizedToolCall;
@@ -1274,37 +1397,6 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         try {
             const preflight = await this._preflightExternalAction(normalizedToolCall);
             if (!preflight.ok) return preflight;
-
-            const executionOnlyTools = new Set(['generateImage', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia', 'removeBg', 'createSkill', 'executeSkill']);
-            const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'scanNiche', 'proposeCampaign', 'listSkills', 'delegateToAgent']);
-
-            // Mode Governance
-            if (!options.skipGovernance && this.currentMissionMode !== 'execute' && executionOnlyTools.has(name)) {
-                const engineHint = await this._describeExecutionEngine(normalizedToolCall);
-                this.pendingApproval = {
-                    requestedAt: new Date().toISOString(),
-                    toolCall: normalizedToolCall,
-                    reason: `Plan is ready. Nexus wants to move from ${this.currentMissionMode.toUpperCase()} to EXECUTE before using ${name}.`,
-                    preview: `Approve EXECUTE mode to continue with ${name}.`,
-                    details: { requestedMode: 'execute', currentMode: this.currentMissionMode, tool: name, estimatedTools: [name], likelyEngine: engineHint }
-                };
-                this.onUpdate({ type: 'approval_requested', message: `Plan ready. Approve EXECUTE mode to continue with ${name}. Reply YES to continue or NO to keep planning.` });
-                this.isWaitingForInput = true;
-                return `APPROVAL REQUIRED: Nexus is ready to execute. Approve EXECUTE mode to continue with ${name}.`;
-            }
-
-            if (!options.skipGovernance && this.currentMissionMode === 'discuss' && planningTools.has(name)) {
-                this.pendingApproval = {
-                    requestedAt: new Date().toISOString(),
-                    toolCall,
-                    reason: 'Nexus wants to move from DISCUSS to PLAN before doing live research.',
-                    preview: `Approve PLAN mode to continue with ${name}.`,
-                    details: { requestedMode: 'plan', currentMode: this.currentMissionMode, tool: name }
-                };
-                this.onUpdate({ type: 'approval_requested', message: `Discussion complete. Approve PLAN mode to continue with ${name}.` });
-                this.isWaitingForInput = true;
-                return `APPROVAL REQUIRED: Nexus is ready to move into PLAN mode for ${name}.`;
-            }
 
             const governance = GovernanceService.evaluate(normalizedToolCall);
             if (!options.skipGovernance && governance.requiresApproval && args?.boss_approved !== true) {
@@ -1335,7 +1427,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 if (!String(normalizedBrowserArgs.action || '').trim()) normalizedBrowserArgs.action = normalizedBrowserArgs.url ? 'open' : 'getMarkdown';
                 const result = await this.tools.browserAction(normalizedBrowserArgs);
                 const visualActions = ['open', 'click', 'clickPixel', 'type', 'keyPress', 'clickText', 'scroll', 'hover'];
-                if (visualActions.includes(normalizedBrowserArgs.action)) {
+                if (visualActions.includes(normalizedBrowserArgs.action) && this.taskDir) {
                     const screenshotName = `screenshot_${Date.now()}.png`;
                     const screenshotPath = require('path').join(this.taskDir, screenshotName);
                     await this.tools.browserAction({ action: 'annotateAndScreenshot', savePath: screenshotPath });
@@ -1398,6 +1490,71 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             }
             return `Error executing tool: ${error.message}`;
         }
+    }
+
+    async _runChatLoop(originalRequest = null) {
+        if (this.currentRun) this.currentRun.llmCalls += 1;
+        const response = await this.llmService.generateResponse(this.context, { mode: 'chat', enableTools: false });
+        if (this.isStopped) return;
+
+        if (this.currentRun) {
+            if (response.provider) this.currentRun.lastLlmProvider = response.provider;
+            if (response.model) this.currentRun.lastLlmModel = response.model;
+            const usage = response.usage || {};
+            const usageEvent = await UsageTracker.recordLlmUsage({
+                provider: response.provider,
+                model: response.model,
+                clientId: this.currentClientId || null,
+                sessionId: this.currentSessionId || null,
+                runId: this.currentRun.id,
+                requestPreview: this.currentRun.requestPreview,
+                mode: 'chat',
+                inputTokens: usage.inputTokens || 0,
+                outputTokens: usage.outputTokens || 0,
+                totalTokens: usage.totalTokens || 0
+            });
+            const usageKey = `${usageEvent.provider}::${usageEvent.model}`;
+            const currentEntry = this.currentRun.providerUsage?.[usageKey] || {
+                provider: usageEvent.provider,
+                model: usageEvent.model,
+                calls: 0,
+                freeCalls: 0,
+                paidCalls: 0,
+                estimatedCostUsd: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+                totalTokens: 0
+            };
+            currentEntry.calls += 1;
+            currentEntry.freeCalls += usageEvent.usageTier === 'free' ? 1 : 0;
+            currentEntry.paidCalls += usageEvent.usageTier === 'paid' ? 1 : 0;
+            currentEntry.estimatedCostUsd = Number((currentEntry.estimatedCostUsd + Number(usageEvent.estimatedCostUsd || 0)).toFixed(6));
+            currentEntry.inputTokens += Number(usageEvent.inputTokens || 0);
+            currentEntry.outputTokens += Number(usageEvent.outputTokens || 0);
+            currentEntry.totalTokens += Number(usageEvent.totalTokens || 0);
+            this.currentRun.providerUsage = this.currentRun.providerUsage || {};
+            this.currentRun.providerUsage[usageKey] = currentEntry;
+        }
+
+        const text = String(response.text || '').trim() || 'No response generated.';
+        this.onUpdate({ type: 'thought', message: text });
+        this.context.push({ role: 'assistant', content: text });
+
+        const textLower = text.toLowerCase();
+        const isAskingQuestion = textLower.includes('?') ||
+            textLower.includes('please provide') ||
+            textLower.includes('i need your') ||
+            textLower.includes('tell me');
+
+        if (isAskingQuestion) {
+            this.onUpdate({ type: 'pause' });
+            this.isWaitingForInput = true;
+            this._finishRun('paused');
+            return;
+        }
+
+        this.onUpdate({ type: 'complete', message: 'Chat response complete.' });
+        this._finishRun('completed');
     }
 
     async _handleApprovalResponse(userInput) {
@@ -1763,7 +1920,11 @@ ${toolSource}`
             providerSwitches: [],
             steps: 0,
             clientId: this.currentClientId || null,
-            estimatedCostUsd: 0
+            estimatedCostUsd: 0,
+            mode: this.currentMissionMode,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0
         };
     }
 
@@ -1773,6 +1934,9 @@ ${toolSource}`
         this.currentRun.status = status;
         this.currentRun.steps = this.stepCount;
         const providerCostUsd = Object.values(this.currentRun.providerUsage || {}).reduce((sum, entry) => sum + Number(entry.estimatedCostUsd || 0), 0);
+        this.currentRun.inputTokens = Object.values(this.currentRun.providerUsage || {}).reduce((sum, entry) => sum + Number(entry.inputTokens || 0), 0);
+        this.currentRun.outputTokens = Object.values(this.currentRun.providerUsage || {}).reduce((sum, entry) => sum + Number(entry.outputTokens || 0), 0);
+        this.currentRun.totalTokens = Object.values(this.currentRun.providerUsage || {}).reduce((sum, entry) => sum + Number(entry.totalTokens || 0), 0);
         const fallbackCostUsd = (this.currentRun.llmCalls * 0.00035) + (this.currentRun.toolCalls * 0.0001);
         this.currentRun.estimatedCostUsd = Number((providerCostUsd > 0 ? providerCostUsd : fallbackCostUsd).toFixed(6));
         this.recentRuns.unshift(this.currentRun);
@@ -1790,6 +1954,7 @@ ${toolSource}`
         const pausedRuns = completedRuns.filter((run) => run.status === 'paused');
         const totalEstimatedCostUsd = completedRuns.reduce((sum, run) => sum + Number(run.estimatedCostUsd || 0), 0);
         const totalLlmCalls = completedRuns.reduce((sum, run) => sum + Number(run.llmCalls || 0), 0);
+        const totalTokens = completedRuns.reduce((sum, run) => sum + Number(run.totalTokens || 0), 0);
 
         return {
             activeRun: this.currentRun && !this.currentRun.finishedAt ? { ...this.currentRun, steps: this.stepCount } : null,
@@ -1806,7 +1971,8 @@ ${toolSource}`
                 paused: pausedRuns.length,
                 toolCalls: completedRuns.reduce((sum, run) => sum + (run.toolCalls || 0), 0),
                 llmCalls: totalLlmCalls,
-                estimatedCostUsd: Number(totalEstimatedCostUsd.toFixed(6))
+                estimatedCostUsd: Number(totalEstimatedCostUsd.toFixed(6)),
+                totalTokens
             }
         };
     }

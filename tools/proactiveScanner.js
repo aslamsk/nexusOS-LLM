@@ -1,6 +1,7 @@
 const SearchTool = require('./search');
 const BrowserTool = require('./browser');
 const path = require('path');
+const browser = new BrowserTool();
 
 /**
  * Proactive Scanner Tool
@@ -30,7 +31,7 @@ class ProactiveScannerTool {
             if (links.length > 0) {
                 const targetUrl = links[0];
                 console.log(`[Scanner] Analyzing competitor: ${targetUrl}`);
-                competitorInsights = await BrowserTool.executeAction({
+                competitorInsights = await browser.executeAction({
                     action: 'getMarkdown',
                     url: targetUrl
                 });

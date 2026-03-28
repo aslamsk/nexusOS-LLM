@@ -56,6 +56,32 @@ class LLMService {
         }));
     }
 
+    _extractUsage(usage = {}) {
+        if (!usage || typeof usage !== 'object') {
+            return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+        }
+        const inputTokens = Number(
+            usage.prompt_tokens ??
+            usage.input_tokens ??
+            usage.promptTokenCount ??
+            usage.inputTokenCount ??
+            0
+        );
+        const outputTokens = Number(
+            usage.completion_tokens ??
+            usage.output_tokens ??
+            usage.candidatesTokenCount ??
+            usage.outputTokenCount ??
+            0
+        );
+        const totalTokens = Number(
+            usage.total_tokens ??
+            usage.totalTokenCount ??
+            (inputTokens + outputTokens)
+        );
+        return { inputTokens, outputTokens, totalTokens };
+    }
+
     _formatMessagesForOpenAI(messages) {
         const formatted = [];
         let lastToolCallId = null;
@@ -104,7 +130,7 @@ class LLMService {
         return formatted;
     }
 
-    async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute' }) {
+    async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute', enableTools = true }) {
         if (!apiKey || !model) return null;
         if (this.stopRequested) {
             return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: providerName, model };
@@ -118,15 +144,17 @@ class LLMService {
             response = await axios.post(`${baseUrl}/chat/completions`, {
                 model,
                 messages: this._formatMessagesForOpenAI(messages),
-                tools: this.getToolDefinitions(mode).map((tool) => ({
-                    type: 'function',
-                    function: {
-                        name: tool.name,
-                        description: tool.description,
-                        parameters: tool.parameters
-                    }
-                })),
-                tool_choice: 'auto',
+                ...(enableTools ? {
+                    tools: this.getToolDefinitions(mode).map((tool) => ({
+                        type: 'function',
+                        function: {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: tool.parameters
+                        }
+                    })),
+                    tool_choice: 'auto'
+                } : {}),
                 temperature: 0.2
             }, {
                 headers: {
@@ -159,7 +187,8 @@ class LLMService {
             text: choice.content || '',
             toolCall: toolCall ? { name: toolCall.function.name, args: parsedArgs } : null,
             provider: providerName,
-            model: response.data?.model || model
+            model: response.data?.model || model,
+            usage: this._extractUsage(response.data?.usage || {})
         };
     }
 
@@ -718,6 +747,7 @@ class LLMService {
         try {
             this.resetStop();
             const mode = String(options.mode || 'execute').toLowerCase();
+            const enableTools = options.enableTools !== false && mode !== 'chat';
             let formattedContents = messages.map(msg => {
                 if (msg.role === 'system') {
                     return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
@@ -825,7 +855,8 @@ class LLMService {
                             model: candidateModel,
                             headers: provider.headers,
                             messages,
-                            mode
+                            mode,
+                            enableTools
                         });
                         if (fallbackResponse) return fallbackResponse;
                     } catch (error) {
@@ -858,7 +889,7 @@ class LLMService {
                         systemInstruction: systemInstruction,
                         contents: formattedContents,
                         config: {
-                            tools: [{ functionDeclarations: this.getToolDefinitions(mode) }],
+                            ...(enableTools ? { tools: [{ functionDeclarations: this.getToolDefinitions(mode) }] } : {}),
                             generationConfig: { temperature: 0.2 }
                         }
                     });
@@ -881,7 +912,8 @@ class LLMService {
                         text: textContent,
                         toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null,
                         provider: 'Gemini',
-                        model: this.modelName
+                        model: this.modelName,
+                        usage: this._extractUsage(response.usageMetadata || response.usage || {})
                     };
                 } catch (error) {
                     if (this.stopRequested) {

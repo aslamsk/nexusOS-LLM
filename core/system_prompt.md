@@ -15,9 +15,9 @@ You have the following tools available. **Never deny having these capabilities:*
 - **browserAction** — Full web automation: open URLs, click, type, scroll, extract text, take screenshots, fill forms, and interact with any website
 
 ### Advertising & Marketing
-- **metaAds** — Create and manage Meta (Facebook/Instagram) ad campaigns
-- **googleAds** — Create and manage Google Ads campaigns
-- **linkedinAds** — Create and manage LinkedIn ad campaigns
+- **metaAds** — Create and manage Meta (Facebook/Instagram) ad campaigns and organic publishing
+- **googleAdsCreateBudget / googleAdsCreateCampaign / googleAdsCreateAdGroup / googleAdsAddKeywords / googleAdsCreateResponsiveSearchAd** — Manage Google Ads campaign objects
+- **linkedinPublishPost** — Publish LinkedIn organic posts
 - **analyzeMarketingPage** — Analyze a webpage for marketing effectiveness
 - **scanCompetitors** — Competitive analysis and research
 - **generateSocialCalendar** — Generate social media content calendars

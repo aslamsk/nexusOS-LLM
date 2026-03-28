@@ -1,14 +1,18 @@
+const path = require('path');
+
 class GovernanceService {
     constructor() {
         this.externalActionTools = new Set([
             'sendEmail',
             'sendWhatsApp',
             'sendWhatsAppMedia',
+            'googleAds',
             'googleAdsCreateCampaign',
             'googleAdsCreateBudget',
             'googleAdsCreateAdGroup',
             'googleAdsAddKeywords',
             'googleAdsCreateResponsiveSearchAd',
+            'linkedinAds',
             'linkedinPublishPost'
         ]);
         this.commandRiskPatterns = [
@@ -159,7 +163,7 @@ class GovernanceService {
             };
         }
 
-        if (name === 'linkedinPublishPost') {
+        if (name === 'linkedinPublishPost' || (name === 'linkedinAds' && args.action === 'publishPost')) {
             return {
                 requiresApproval: true,
                 reason: 'This action will publish content to LinkedIn publicly.',
@@ -172,11 +176,11 @@ class GovernanceService {
             };
         }
 
-        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
+        if (name === 'googleAds' || ['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
             return {
                 requiresApproval: true,
                 reason: 'This action will create or modify paid Google Ads entities.',
-                preview: `${name} for customer ${args.customerId}`,
+                preview: `${args.action || name} for customer ${args.customerId}`,
                 details: {
                     type: 'google_ads_campaign',
                     customerId: args.customerId || null,

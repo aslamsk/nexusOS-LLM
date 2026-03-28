@@ -298,15 +298,18 @@ function buildUsageCsv(summary) {
         ['Total Calls', summary.totals?.calls || 0],
         ['Free Calls', summary.totals?.freeCalls || 0],
         ['Paid Calls', summary.totals?.paidCalls || 0],
+        ['Input Tokens', summary.totals?.inputTokens || 0],
+        ['Output Tokens', summary.totals?.outputTokens || 0],
+        ['Total Tokens', summary.totals?.totalTokens || 0],
         ['Estimated Paid Cost USD', summary.totals?.estimatedCostUsd || 0],
         [],
         ['Providers'],
-        ['Provider', 'Calls', 'Free Calls', 'Paid Calls', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
-        ...(summary.providers || []).map((entry) => [entry.provider, entry.calls, entry.freeCalls, entry.paidCalls, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || '']),
+        ['Provider', 'Calls', 'Free Calls', 'Paid Calls', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
+        ...(summary.providers || []).map((entry) => [entry.provider, entry.calls, entry.freeCalls, entry.paidCalls, entry.inputTokens || 0, entry.outputTokens || 0, entry.totalTokens || 0, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || '']),
         [],
         ['Models'],
-        ['Provider', 'Model', 'Calls', 'Free Calls', 'Paid Calls', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
-        ...(summary.models || []).map((entry) => [entry.provider, entry.model, entry.calls, entry.freeCalls, entry.paidCalls, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || ''])
+        ['Provider', 'Model', 'Mode', 'Calls', 'Free Calls', 'Paid Calls', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
+        ...(summary.models || []).map((entry) => [entry.provider, entry.model, entry.mode || 'execute', entry.calls, entry.freeCalls, entry.paidCalls, entry.inputTokens || 0, entry.outputTokens || 0, entry.totalTokens || 0, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || ''])
     ];
 
     return providerRows.map((row) => row.map((cell) => {
@@ -324,13 +327,16 @@ function buildUsagePdfBuffer(summary) {
         `Total Calls: ${summary.totals?.calls || 0}`,
         `Free Calls: ${summary.totals?.freeCalls || 0}`,
         `Paid Calls: ${summary.totals?.paidCalls || 0}`,
+        `Input Tokens: ${summary.totals?.inputTokens || 0}`,
+        `Output Tokens: ${summary.totals?.outputTokens || 0}`,
+        `Total Tokens: ${summary.totals?.totalTokens || 0}`,
         `Estimated Paid Cost: ${formatCurrencyValue(summary.totals?.estimatedCostUsd || 0, 'USD')}`,
         '',
         'Providers',
-        ...(summary.providers || []).slice(0, 10).map((entry) => `${entry.provider} | ${entry.calls} calls | ${entry.freeCalls} free | ${entry.paidCalls} paid | ${formatCurrencyValue(entry.estimatedCostUsd || 0, 'USD')} | ${entry.resetCadence || ''}`),
+        ...(summary.providers || []).slice(0, 10).map((entry) => `${entry.provider} | ${entry.calls} calls | ${entry.totalTokens || 0} tokens | ${entry.freeCalls} free | ${entry.paidCalls} paid | ${formatCurrencyValue(entry.estimatedCostUsd || 0, 'USD')} | ${entry.resetCadence || ''}`),
         '',
         'Models',
-        ...(summary.models || []).slice(0, 12).map((entry) => `${entry.provider} / ${entry.model} | ${entry.calls} calls | ${entry.freeCalls} free | ${entry.paidCalls} paid`)
+        ...(summary.models || []).slice(0, 12).map((entry) => `${entry.provider} / ${entry.model} / ${entry.mode || 'execute'} | ${entry.calls} calls | ${entry.totalTokens || 0} tokens | ${entry.freeCalls} free | ${entry.paidCalls} paid`)
     ].filter(Boolean);
 
     const content = ['BT', '/F1 11 Tf', '50 790 Td'];

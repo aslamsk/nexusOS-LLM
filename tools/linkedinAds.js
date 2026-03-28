@@ -1,5 +1,6 @@
 const ConfigService = require('../core/config');
 const axios = require('axios');
+const fs = require('fs');
 
 class LinkedInAdsTool {
     constructor() {}

@@ -79,7 +79,11 @@ class UsageTracker {
         sessionId = null,
         runId = null,
         requestPreview = '',
-        quotaMode = null
+        quotaMode = null,
+        mode = 'execute',
+        inputTokens = 0,
+        outputTokens = 0,
+        totalTokens = 0
     }) {
         const normalizedProvider = normalizeProvider(provider);
         const normalizedModel = String(model || '').trim() || 'unknown-model';
@@ -95,9 +99,13 @@ class UsageTracker {
             sessionId: sessionId || null,
             runId: runId || null,
             requestPreview: String(requestPreview || '').slice(0, 160),
+            mode: String(mode || 'execute'),
             usageTier,
             quotaMode: String(effectiveQuotaMode || 'FREE').toUpperCase(),
             estimatedCostUsd,
+            inputTokens: Number(inputTokens || 0),
+            outputTokens: Number(outputTokens || 0),
+            totalTokens: Number(totalTokens || 0),
             timestamp: new Date()
         };
 
@@ -151,6 +159,10 @@ class UsageTracker {
                 freeCalls: 0,
                 paidCalls: 0,
                 estimatedCostUsd: 0
+                ,
+                inputTokens: 0,
+                outputTokens: 0,
+                totalTokens: 0
             },
             providers: [],
             models: [],
@@ -185,6 +197,9 @@ class UsageTracker {
                 const model = String(data.model || 'unknown-model');
                 const usageTier = data.usageTier === 'free' ? 'free' : 'paid';
                 const estimatedCostUsd = Number(data.estimatedCostUsd || 0);
+                const inputTokens = Number(data.inputTokens || 0);
+                const outputTokens = Number(data.outputTokens || 0);
+                const totalTokens = Number(data.totalTokens || 0);
                 const timestamp = timestampDate?.toISOString?.() || null;
                 const resetCadence = estimateResetCadence(provider, model, data.quotaMode || 'FREE');
                 const dayKey = timestampDate ? timestampDate.toISOString().slice(0, 10) : 'unknown';
@@ -194,6 +209,9 @@ class UsageTracker {
                     freeCalls: 0,
                     paidCalls: 0,
                     estimatedCostUsd: 0,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    totalTokens: 0,
                     lastUsedAt: null,
                     kinds: {},
                     resetCadence
@@ -202,11 +220,15 @@ class UsageTracker {
                 providerEntry.freeCalls += usageTier === 'free' ? 1 : 0;
                 providerEntry.paidCalls += usageTier === 'paid' ? 1 : 0;
                 providerEntry.estimatedCostUsd += estimatedCostUsd;
+                providerEntry.inputTokens += inputTokens;
+                providerEntry.outputTokens += outputTokens;
+                providerEntry.totalTokens += totalTokens;
                 providerEntry.kinds[data.kind] = (providerEntry.kinds[data.kind] || 0) + 1;
                 providerEntry.lastUsedAt = providerEntry.lastUsedAt && providerEntry.lastUsedAt > timestamp ? providerEntry.lastUsedAt : timestamp;
                 providerMap.set(provider, providerEntry);
 
-                const modelKey = `${provider}::${model}`;
+                const modelMode = String(data.mode || 'execute');
+                const modelKey = `${provider}::${model}::${modelMode}`;
                 const modelEntry = modelMap.get(modelKey) || {
                     provider,
                     model,
@@ -214,14 +236,21 @@ class UsageTracker {
                     freeCalls: 0,
                     paidCalls: 0,
                     estimatedCostUsd: 0,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    totalTokens: 0,
                     lastUsedAt: null,
                     kind: data.kind,
-                    resetCadence
+                    resetCadence,
+                    mode: modelMode
                 };
                 modelEntry.calls += 1;
                 modelEntry.freeCalls += usageTier === 'free' ? 1 : 0;
                 modelEntry.paidCalls += usageTier === 'paid' ? 1 : 0;
                 modelEntry.estimatedCostUsd += estimatedCostUsd;
+                modelEntry.inputTokens += inputTokens;
+                modelEntry.outputTokens += outputTokens;
+                modelEntry.totalTokens += totalTokens;
                 modelEntry.lastUsedAt = modelEntry.lastUsedAt && modelEntry.lastUsedAt > timestamp ? modelEntry.lastUsedAt : timestamp;
                 modelMap.set(modelKey, modelEntry);
 
@@ -229,6 +258,9 @@ class UsageTracker {
                 summary.totals.freeCalls += usageTier === 'free' ? 1 : 0;
                 summary.totals.paidCalls += usageTier === 'paid' ? 1 : 0;
                 summary.totals.estimatedCostUsd += estimatedCostUsd;
+                summary.totals.inputTokens += inputTokens;
+                summary.totals.outputTokens += outputTokens;
+                summary.totals.totalTokens += totalTokens;
 
                 const dayEntry = dailyMap.get(dayKey) || {
                     date: dayKey,

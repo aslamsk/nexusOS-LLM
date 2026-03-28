@@ -1,5 +1,6 @@
 const ConfigService = require('../core/config');
 const { GoogleAdsApi } = require('google-ads-api');
+const fs = require('fs');
 
 class GoogleAdsTool {
     constructor() {
