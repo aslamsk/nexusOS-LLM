@@ -10,6 +10,13 @@ const path = require('path');
 class ImageGenTool {
     constructor() {
         this.modelName = 'imagen-3.0-generate-001';
+        this.alternateModels = [
+            'imagen-3.0-generate-001',
+            'imagen-3.0-generate-002',
+            'veo-3.1-fast-generate-preview',
+            'image-generation-001',
+            'imagen-3.0-fast-generate-001'
+        ];
         this.ai = null;
         this.activeApiKey = null;
     }
@@ -30,31 +37,40 @@ class ImageGenTool {
      * Generates a new image from a text prompt using Imagen.
      */
     async generateImage(prompt, savePath) {
-        try {
-            const ai = await this._getClient();
-            console.log(`[ImageGen] Generating image with prompt: "${prompt}"...`);
-            const response = await ai.models.generateImages({
-                model: this.modelName,
-                prompt: prompt,
-                parameters: {
-                    sampleCount: 1,
-                    aspectRatio: "1:1",
-                    outputMimeType: "image/png"
-                }
-            });
+        const candidates = [this.modelName, ...this.alternateModels];
+        let lastError = null;
 
-            let imageData = this._extractImageData(response);
-            if (!imageData) throw new Error("No images were generated.");
+        for (const modelId of candidates) {
+            try {
+                const ai = await this._getClient();
+                console.log(`[ImageGen] Attempting generation with model: ${modelId}...`);
+                const response = await ai.models.generateImages({
+                    model: modelId,
+                    prompt: prompt,
+                    parameters: {
+                        sampleCount: 1,
+                        aspectRatio: "1:1",
+                        outputMimeType: "image/png"
+                    }
+                });
 
-            const dir = path.dirname(savePath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                let imageData = this._extractImageData(response);
+                if (!imageData) continue;
 
-            fs.writeFileSync(savePath, Buffer.from(imageData, 'base64'));
-            return `Success: Image saved to ${savePath}`;
-        } catch (error) {
-            console.error("[ImageGen Error]", error);
-            return `Error generating image: ${error.message}`;
+                const dir = path.dirname(savePath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+                fs.writeFileSync(savePath, Buffer.from(imageData, 'base64'));
+                this.modelName = modelId; // Stick with the working one
+                return `Success: Image saved to ${savePath}`;
+            } catch (error) {
+                console.warn(`[ImageGen Warning] Model ${modelId} failed: ${error.message}`);
+                lastError = error;
+            }
         }
+
+        console.error("[ImageGen Final Error]", lastError);
+        return `Error generating image: All models failed. Last error: ${lastError.message}`;
     }
 
     /**

@@ -103,27 +103,57 @@ let voiceRecognition = null
 
 function startVoiceInput() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    showToast('Voice not supported in this browser', 'error'); return
+    showToast('Voice recognition not supported in this browser. Try Chrome or Edge, Boss.', 'error'); return
   }
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-  voiceRecognition = new SpeechRecognition()
-  voiceRecognition.continuous = false
-  voiceRecognition.interimResults = false
-  voiceRecognition.lang = 'en-US'
-  voiceRecognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript
-    promptInput.value = (promptInput.value ? promptInput.value + ' ' : '') + transcript
+  
+  try {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    voiceRecognition = new SpeechRecognition()
+    voiceRecognition.continuous = false
+    voiceRecognition.interimResults = false
+    // Use Indian English for better accuracy in target region, fallback to US
+    voiceRecognition.lang = 'en-IN'
+    
+    voiceRecognition.onstart = () => {
+      isVoiceListening.value = true
+      showToast('I am listening, Boss...', 'success')
+    }
+
+    voiceRecognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript
+      promptInput.value = (promptInput.value ? promptInput.value.trim() + ' ' : '') + transcript
+      showToast('Voice captured: ' + transcript.slice(0, 40) + '...', 'success')
+    }
+
+    voiceRecognition.onerror = (event) => {
+      isVoiceListening.value = false
+      const errorMap = {
+        'not-allowed': 'Microphone access denied, Boss.',
+        'no-speech': 'No speech detected. Try again?',
+        'network': 'Voice network error. Check connection.',
+        'aborted': 'Listening cancelled.'
+      }
+      showToast(errorMap[event.error] || 'Voice error: ' + event.error, 'error')
+    }
+
+    voiceRecognition.onend = () => {
+      isVoiceListening.value = false
+    }
+
+    voiceRecognition.start()
+  } catch (err) {
+    console.error('Voice start failed:', err)
     isVoiceListening.value = false
-    showToast('Voice captured: ' + transcript.slice(0, 50), 'success')
+    showToast('Could not start microphone.', 'error')
   }
-  voiceRecognition.onerror = () => { isVoiceListening.value = false }
-  voiceRecognition.onend = () => { isVoiceListening.value = false }
-  isVoiceListening.value = true
-  voiceRecognition.start()
 }
 
 function stopVoiceInput() {
-  if (voiceRecognition) voiceRecognition.stop()
+  try {
+    if (voiceRecognition) voiceRecognition.stop()
+  } catch (err) {
+    console.warn('Voice stop error:', err)
+  }
   isVoiceListening.value = false
 }
 

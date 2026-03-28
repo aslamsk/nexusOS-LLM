@@ -4,6 +4,7 @@ const FileSystemTool = require('./tools/fileSystem');
 const TerminalTool = require('./tools/terminal');
 const BrowserTool = require('./tools/browser');
 const ImageGenTool = require('./tools/imageGen');
+const SkillGenerator = require('./tools/skillGenerator');
 const N8nDiscoverTool = require('./tools/n8nDiscover');
 const MetaAdsTool = require('./tools/metaAds');
 const GoogleAdsTool = require('./tools/googleAds');
@@ -38,45 +39,59 @@ const ConfigService = require('./core/config');
  */
 class NexusOrchestrator {
     constructor(onUpdate = null, taskDir = null) {
+        this.taskDir = taskDir;
         this._systemPromptPath = path.join(__dirname, 'core', 'system_prompt.md');
-        // Dynamic system prompt: read fresh from disk every task so changes take effect without restart
+        // Dynamic system prompt
         Object.defineProperty(this, 'systemPrompt', {
             get: () => fs.readFileSync(this._systemPromptPath, 'utf8'),
             enumerable: true
         });
         this.context = [{ role: 'system', content: this.systemPrompt }];
+        
+        // Instantiate SkillGenerator
+        const browserProfile = taskDir ? path.join(taskDir, '.browser_profile') : null;
+        this.browserInstance = new BrowserTool(browserProfile);
+        this.skillGen = new SkillGenerator(taskDir ? path.join(taskDir, 'skills') : null);
+
         this.tools = {
-            readFile: FileSystemTool.readFile,
-            writeFile: FileSystemTool.writeFile,
-            listDir: FileSystemTool.listDir,
-            replaceFileContent: FileSystemTool.replaceFileContent,
-            multiReplaceFileContent: FileSystemTool.multiReplaceFileContent,
-            runCommand: TerminalTool.runCommand,
-            browserAction: BrowserTool.executeAction.bind(BrowserTool),
-            generateImage: ImageGenTool.generateImage.bind(ImageGenTool),
-            n8nSearch: N8nDiscoverTool.searchWorkflows.bind(N8nDiscoverTool),
-            getN8nWorkflow: N8nDiscoverTool.getWorkflow.bind(N8nDiscoverTool),
-            removeBg: BackgroundRemovalTool.removeBg.bind(BackgroundRemovalTool),
-            metaAds: MetaAdsTool,
-            googleAds: GoogleAdsTool,
-            linkedinAds: LinkedInAdsTool,
-            openRouter: OpenRouterTool,
-            searchWeb: SearchTool.search.bind(SearchTool),
-            codeMap: CodeAwarenessTool.mapCodebase.bind(CodeAwarenessTool),
-            codeSearch: CodeAwarenessTool.searchInCode.bind(CodeAwarenessTool),
-            codeFindFn: CodeAwarenessTool.findFunction.bind(CodeAwarenessTool),
-            sendEmail: EmailTool.sendEmail.bind(EmailTool),
-            readEmail: EmailTool.readInbox.bind(EmailTool),
-            sendWhatsApp: WhatsAppTool.sendMessage.bind(WhatsAppTool),
-            sendWhatsAppMedia: WhatsAppTool.sendMedia.bind(WhatsAppTool),
-            analyzeMarketingPage: MarketingUtilsTool.analyzePage.bind(MarketingUtilsTool),
-            scanCompetitors: MarketingUtilsTool.scanCompetitors.bind(MarketingUtilsTool),
-            generateSocialCalendar: MarketingUtilsTool.generateSocialCalendar.bind(MarketingUtilsTool),
-            saveMemory: MemoryService.saveMemory.bind(MemoryService),
-            searchMemory: MemoryService.searchMemory.bind(MemoryService),
-            scanNiche: ProactiveScannerTool.scanNiche.bind(ProactiveScannerTool),
-            proposeCampaign: ProactiveScannerTool.proposeCampaign.bind(ProactiveScannerTool),
-            delegateToAgent: SquadSystem.delegate.bind(SquadSystem)
+            readFile: (args) => FileSystemTool.readFile(args.absolutePath),
+            writeFile: (args) => FileSystemTool.writeFile(args.absolutePath, args.content),
+            listDir: (args) => FileSystemTool.listDir(args.absolutePath),
+            replaceFileContent: (args) => FileSystemTool.replaceFileContent(args.absolutePath, args.startLine, args.endLine, args.targetContent, args.replacementContent),
+            multiReplaceFileContent: (args) => FileSystemTool.multiReplaceFileContent(args.absolutePath, args.chunks),
+            runCommand: (args) => TerminalTool.runCommand(args.command, args.cwd),
+            browserAction: (args) => this.browserInstance.executeAction(args),
+            generateImage: (args) => ImageGenTool.generateImage(args.prompt, args.savePath),
+            createSkill: (args) => this.skillGen.createSkill(args.name, args.code, args.description),
+            listSkills: () => this.skillGen.listSkills(),
+            executeSkill: async (args) => {
+                const skill = this.skillGen.loadSkill(args.name);
+                if (!skill) return `Error: Skill '${args.name}' not found.`;
+                return await skill.main(args.params || {});
+            },
+            n8nSearch: (args) => N8nDiscoverTool.searchWorkflows(args.query),
+            getN8nWorkflow: (args) => N8nDiscoverTool.getWorkflow(args.id),
+            removeBg: (args) => BackgroundRemovalTool.removeBg(args.inputPath, args.outputPath),
+            metaAds: (args) => MetaAdsTool.executeAction(args),
+            googleAds: (args) => GoogleAdsTool.executeAction(args),
+            linkedinAds: (args) => LinkedInAdsTool.executeAction(args),
+            openRouter: (args) => OpenRouterTool.executeAction(args),
+            searchWeb: (args) => SearchTool.search(args.query),
+            codeMap: (args) => CodeAwarenessTool.mapCodebase(args.absolutePath, args.maxDepth),
+            codeSearch: (args) => CodeAwarenessTool.searchInCode(args.absolutePath, args.query),
+            codeFindFn: (args) => CodeAwarenessTool.findFunction(args.absolutePath, args.functionName),
+            sendEmail: (args) => EmailTool.sendEmail(args.to, args.subject, args.body),
+            readEmail: (args) => EmailTool.readInbox(args.limit),
+            sendWhatsApp: (args) => WhatsAppTool.sendMessage(args.phone, args.text),
+            sendWhatsAppMedia: (args) => WhatsAppTool.sendMedia(args.phone, args.mediaUrl, args.caption),
+            analyzeMarketingPage: (args) => MarketingUtilsTool.analyzePage(args.target, args.channels),
+            scanCompetitors: (args) => MarketingUtilsTool.scanCompetitors(args.target, args.competitors, args.notes),
+            generateSocialCalendar: (args) => MarketingUtilsTool.generateSocialCalendar(args.target, args.channels, args.weeks, args.theme, args.notes),
+            saveMemory: (args) => MemoryService.saveMemory(args.content, args.category),
+            searchMemory: (args) => MemoryService.searchMemory(args.query),
+            scanNiche: (args) => ProactiveScannerTool.scanNiche(args.niche),
+            proposeCampaign: (args) => ProactiveScannerTool.proposeCampaign(args.opportunityId),
+            delegateToAgent: (args) => SquadSystem.delegate(args.agentType, args.task)
         };
         this.llmService = new LLMService();
         this.maxSteps = 40;
@@ -174,6 +189,15 @@ class NexusOrchestrator {
         // CRITICAL FIX: Reset context for a fresh mission to prevent "stale failure" baggage.
         // This ensures the AI starts with a clean slate (System Prompt + New Request).
         this.context = [{ role: 'system', content: this.systemPrompt }];
+        
+        // MISSION STABILITY: Reset transient state for every fresh mission to prevent pollution.
+        // If the user isn't explicitly continuing a previous draft, we purge the old baggage.
+        if (!this._isOrganicPublishIntent(userRequest)) {
+            this.currentOrganicMetaDraft = null;
+            this.currentWorkflowState = null;
+            this.currentMarketingWorkflow = null;
+        }
+
         // Recall Long-Term Memories
         const memories = await MemoryService.recallRecent(5);
         const recoveryPatterns = await MemoryService.findRecoveryPatterns(userRequest, 3);
@@ -360,13 +384,16 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         }
 
         if (wantsOrganicPromote || this._isOrganicPublishIntent(text)) {
-            this._setWorkflowState({
-                domain: 'marketing',
-                channel: 'meta',
-                mode: 'organic_publish',
-                stage: this.currentOrganicMetaDraft ? 'draft_ready' : 'drafting'
-            });
-            return true;
+            // Only transition if we are NOT already specialized in another modes (like browser actions)
+            if (this.currentMissionMode === 'discuss' || this.currentMissionMode === 'marketing') {
+                this._setWorkflowState({
+                    domain: 'marketing',
+                    channel: 'meta',
+                    mode: 'organic_publish',
+                    stage: this.currentOrganicMetaDraft ? 'draft_ready' : 'drafting'
+                });
+                return true;
+            }
         }
 
         return false;
@@ -375,7 +402,14 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     _isOrganicPublishIntent(text = '') {
         const value = String(text || '').trim().toLowerCase();
         if (!value) return false;
-        if (['continue', 'proceed', 'publish', 'promote it', 'post it', 'launch it', 'go live', 'yes', 'y', 'approve', 'approved', 'boss approved'].includes(value)) return true;
+        
+        // HARDENED CHECK: Only accept generic "continue/yes" if the system is ALREADY in an organic publish state.
+        // This stops "continue" from hijacking unrelated browser tasks.
+        const isGenericProceed = ['continue', 'proceed', 'publish', 'promote it', 'post it', 'launch it', 'go live', 'yes', 'y', 'approve', 'approved', 'boss approved'].includes(value);
+        if (isGenericProceed) {
+            return this.currentWorkflowState?.mode === 'organic_publish' || !!this.currentOrganicMetaDraft;
+        }
+
         return /\b(promote|publish|post|go live|launch)\b/.test(value) && /\bfacebook|instagram|meta\b/.test(value);
     }
 
@@ -552,13 +586,19 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     _detectCommercialQuoteRequest(text) {
         const value = String(text || '').toLowerCase();
+        
+        // Explicitly exclude browser-centric missions that sometimes overlap with commercial terms
+        const isBrowserMission = /\b(open|browser|login|sign in|signup|quiz|form|submit|fill|navigate|read questions?)\b/.test(value);
+        if (isBrowserMission) return false;
+
         const isOrganicPublishRequest =
             /\b(publish|post|promote|organic)\b/.test(value) &&
             /\b(meta|facebook|instagram)\b/.test(value);
         if (isOrganicPublishRequest) return false;
 
-        const hasCommercialIntent = /\b(quote|quotation|commercial quote|invoice|pricing|estimate|cost breakdown|proposal)\b/.test(value);
-        const hasScopedWork = /\b(meta ads?|google ads?|linkedin ads?|banner|creative|month|weeks?|management|deliverables?)\b/.test(value);
+        const hasCommercialIntent = /\b(commercial quote|quotation|invoice|pricing|cost breakdown|agency proposal)\b/.test(value);
+        const hasScopedWork = /\b(meta ads?|google ads?|linkedin ads?|banner pack|creative set|management retainer|deliverables?)\b/.test(value);
+        
         return hasCommercialIntent && hasScopedWork;
     }
 
@@ -1007,7 +1047,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         const shouldClose = !this.isWaitingForInput && (usedBrowser || /auto[- ]?close(d)?/i.test(requestToCheck));
         if (shouldClose) {
             this.onUpdate({ type: 'step', message: 'Auto-closing browser as requested...' });
-            await BrowserTool.close();
+            await this.browserInstance.close();
         }
     }
 
@@ -1224,18 +1264,21 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     async _dispatchTool(toolCall, options = {}) {
         const normalizedToolCall = this._normalizeToolCall(toolCall);
         const { name, args } = normalizedToolCall;
+        
         if (this.currentRun) {
             this.currentRun.toolCalls += 1;
             this.currentRun.lastTool = name;
             this.currentRun.toolsUsed[name] = (this.currentRun.toolsUsed[name] || 0) + 1;
         }
+
         try {
             const preflight = await this._preflightExternalAction(normalizedToolCall);
-            if (!preflight.ok) {
-                return preflight;
-            }
-            const executionOnlyTools = new Set(['generate_image', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia']);
-            const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']);
+            if (!preflight.ok) return preflight;
+
+            const executionOnlyTools = new Set(['generateImage', 'improveImage', 'generateVideo', 'metaAds', 'googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'linkedinPublishPost', 'sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia', 'removeBg', 'createSkill', 'executeSkill']);
+            const planningTools = new Set(['browserAction', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'scanNiche', 'proposeCampaign', 'listSkills', 'delegateToAgent']);
+
+            // Mode Governance
             if (!options.skipGovernance && this.currentMissionMode !== 'execute' && executionOnlyTools.has(name)) {
                 const engineHint = await this._describeExecutionEngine(normalizedToolCall);
                 this.pendingApproval = {
@@ -1243,48 +1286,26 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     toolCall: normalizedToolCall,
                     reason: `Plan is ready. Nexus wants to move from ${this.currentMissionMode.toUpperCase()} to EXECUTE before using ${name}.`,
                     preview: `Approve EXECUTE mode to continue with ${name}.`,
-                    details: {
-                        requestedMode: 'execute',
-                        currentMode: this.currentMissionMode,
-                        tool: name,
-                        estimatedTools: [name],
-                        likelyEngine: engineHint,
-                        estimatedCostBand: ['generateVideo', 'metaAds'].includes(name) ? 'medium-high' : 'low-medium'
-                    }
+                    details: { requestedMode: 'execute', currentMode: this.currentMissionMode, tool: name, estimatedTools: [name], likelyEngine: engineHint }
                 };
-                this.onUpdate({
-                    type: 'approval_requested',
-                    message: `Plan ready. Approve EXECUTE mode to continue with ${name}. Reply YES to continue or NO to keep planning.`
-                });
+                this.onUpdate({ type: 'approval_requested', message: `Plan ready. Approve EXECUTE mode to continue with ${name}. Reply YES to continue or NO to keep planning.` });
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: Nexus is ready to execute. Approve EXECUTE mode to continue with ${name}.`;
             }
+
             if (!options.skipGovernance && this.currentMissionMode === 'discuss' && planningTools.has(name)) {
                 this.pendingApproval = {
                     requestedAt: new Date().toISOString(),
                     toolCall,
-                    reason: 'Nexus wants to move from DISCUSS to PLAN before doing live research or structured planning actions.',
+                    reason: 'Nexus wants to move from DISCUSS to PLAN before doing live research.',
                     preview: `Approve PLAN mode to continue with ${name}.`,
-                    details: {
-                        requestedMode: 'plan',
-                        currentMode: this.currentMissionMode,
-                        tool: name,
-                        estimatedTools: [name],
-                        likelyEngine: await this._describeExecutionEngine(normalizedToolCall),
-                        estimatedCostBand: 'low'
-                    }
+                    details: { requestedMode: 'plan', currentMode: this.currentMissionMode, tool: name }
                 };
-                this.onUpdate({
-                    type: 'approval_requested',
-                    message: `Discussion is complete. Approve PLAN mode to continue with ${name}. Reply YES to continue or NO to stay in discussion.`
-                });
+                this.onUpdate({ type: 'approval_requested', message: `Discussion complete. Approve PLAN mode to continue with ${name}.` });
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: Nexus is ready to move into PLAN mode for ${name}.`;
             }
-            const metaOrganicValidation = name === 'metaAds' ? this._validateMetaOrganicArgs(args) : null;
-            if (metaOrganicValidation) {
-                return `Error: ${metaOrganicValidation}`;
-            }
+
             const governance = GovernanceService.evaluate(normalizedToolCall);
             if (!options.skipGovernance && governance.requiresApproval && args?.boss_approved !== true) {
                 this.pendingApproval = {
@@ -1294,181 +1315,81 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     preview: governance.preview,
                     details: governance.details || null
                 };
-                this._recordAudit('approval_requested', {
-                    tool: name,
-                    reason: governance.reason,
-                    preview: governance.preview
-                });
                 this.onUpdate({
                     type: 'approval_requested',
-                    message: `Approval required for ${name}. ${governance.reason}\n\nPreview:\n${governance.preview}\n\nReply with YES to approve or NO to cancel.`
+                    message: `Approval required for ${name}. ${governance.reason}\n\nPreview:\n${governance.preview}\n\nReply YES to approve.`
                 });
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: ${governance.reason}\n${governance.preview}`;
             }
+
             if (governance.requiresApproval && (options.skipGovernance || args?.boss_approved === true)) {
-                this._recordAudit('external_action_executed', {
-                    tool: name,
-                    preview: governance.preview
-                });
+                this._recordAudit('external_action_executed', { tool: name, preview: governance.preview });
             }
+
+            // --- DISPATCHER ---
+
+            // A. Special Handler: Browser Action
+            if (name === 'browserAction') {
+                const normalizedBrowserArgs = { ...(args || {}) };
+                if (!String(normalizedBrowserArgs.action || '').trim()) normalizedBrowserArgs.action = normalizedBrowserArgs.url ? 'open' : 'getMarkdown';
+                const result = await this.tools.browserAction(normalizedBrowserArgs);
+                const visualActions = ['open', 'click', 'clickPixel', 'type', 'keyPress', 'clickText', 'scroll', 'hover'];
+                if (visualActions.includes(normalizedBrowserArgs.action)) {
+                    const screenshotName = `screenshot_${Date.now()}.png`;
+                    const screenshotPath = require('path').join(this.taskDir, screenshotName);
+                    await this.tools.browserAction({ action: 'annotateAndScreenshot', savePath: screenshotPath });
+                    const folderName = require('path').basename(this.taskDir);
+                    this.onUpdate({ type: 'thought', message: `🖼️ **Browser Update:**\n![Browser View](/outputs/${folderName}/${screenshotName})` });
+                }
+                return result;
+            }
+
+            // B. Special Handler: Ads
+            if (['metaAds', 'googleAds', 'linkedinAds'].includes(name)) {
+                if (name === 'metaAds') {
+                    const dangerous = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'];
+                    if (dangerous.includes(args.action) && args.boss_approved !== true) return "⚠️ MISSION BREACH: Dangerous action attempted without approval.";
+                }
+                return await this.tools[name](args);
+            }
+
+            // C. Special Handler: Generative Media
+            if (name === 'generateImage') {
+                const result = await ImageGenTool.generateImage(args.prompt, args.savePath);
+                if (!String(result).toLowerCase().startsWith('error')) await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
+                return result;
+            }
+
+            if (name === 'generateVideo') {
+                if (args.prompt && !args.imagePath) {
+                    const veo = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath);
+                    if (!veo.error) return `SUCCESS: Video created via Veo at ${args.outputPath}`;
+                    const repl = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
+                    if (!repl.error) return `SUCCESS: Video created via Replicate at ${args.outputPath}`;
+                }
+                return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+            }
+
+            // D. Dynamic Generic Tools (File, Memory, Skills, Search)
+            if (this.tools[name]) {
+                try {
+                    return await this.tools[name](args);
+                } catch (e) {
+                    console.warn(`[Dispatcher] Legacy fallback for ${name}: ${e.message}`);
+                    if (name === 'readFile') return await this.tools.readFile(args.absolutePath);
+                    if (name === 'writeFile') return await this.tools.writeFile(args.absolutePath, args.content);
+                    if (name === 'saveMemory') return await this.tools.saveMemory(args.content, args.category);
+                    if (name === 'runCommand') return await this.tools.runCommand(args.command, args.cwd);
+                    throw e;
+                }
+            }
+
+            // E. Final Fallback
             switch (name) {
-                case 'readFile': return await this.tools.readFile(args.absolutePath);
-                case 'writeFile': return await this.tools.writeFile(args.absolutePath, args.content);
-                case 'listDir': return await this.tools.listDir(args.absolutePath);
-                case 'replaceFileContent': 
-                    return await this.tools.replaceFileContent(args.absolutePath, args.startLine, args.endLine, args.targetContent, args.replacementContent);
-                case 'multiReplaceFileContent':
-                    return await this.tools.multiReplaceFileContent(args.absolutePath, args.chunks);
-                case 'runCommand': return await this.tools.runCommand(args.command, args.cwd);
-                case 'browserAction': {
-                    const normalizedBrowserArgs = { ...(args || {}) };
-                    if (!String(normalizedBrowserArgs.action || '').trim()) {
-                        normalizedBrowserArgs.action = normalizedBrowserArgs.url ? 'open' : 'getMarkdown';
-                    }
-                    const browserResult = await this.tools.browserAction(normalizedBrowserArgs);
-                    
-                    // Visual Feedback: Auto-screenshot after every meaningful navigation or interaction
-                    const visualActions = ['open', 'click', 'clickPixel', 'type', 'keyPress', 'clickText', 'scroll', 'hover'];
-                    if (visualActions.includes(normalizedBrowserArgs.action)) {
-                        const screenshotName = `screenshot_${Date.now()}.png`;
-                        const screenshotPath = path.join(this.taskDir, screenshotName);
-                        await this.tools.browserAction({ action: 'annotateAndScreenshot', savePath: screenshotPath });
-                        
-                        // Relative URL for the frontend
-                        const folderName = path.basename(this.taskDir);
-                        const publicUrl = `/outputs/${folderName}/${screenshotName}`;
-                        this.onUpdate({ type: 'thought', message: `🖼️ **Browser Update:**\n![Browser View](${publicUrl})` });
-                    }
-                    return browserResult;
-                }
-                case 'generate_image': {
-                    const result = await ImageGenTool.generateImage(args.prompt, args.savePath);
-                    if (!String(result).toLowerCase().startsWith('error')) {
-                        await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
-                    }
-                    return result;
-                }
-                case 'improveImage': {
-                    const result = await ImageGenTool.improveImage(args.prompt, args.imagePath, args.savePath);
-                    if (!String(result).toLowerCase().startsWith('error')) {
-                        await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
-                    }
-                    return result;
-                }
-                case 'n8nSearch': return await this.tools.n8nSearch(args.query);
-                case 'getN8nWorkflow': return await this.tools.getN8nWorkflow(args.path);
-                case 'metaAds': {
-                    const dangerousActions = [
-                        'createCampaign', 'createAdSet', 'createAdCreative', 'createAd',
-                        'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'
-                    ];
-                    if (dangerousActions.includes(args.action) && args.boss_approved !== true) {
-                        return "⚠️ MISSION BREACH: You attempted a dangerous action (spending budget or publishing publicly) without explicit approval. You MUST use 'askUserForInput' to show The Boss a preview of exactly what you are going to post/create, and ask for their approval. Once they say YES, call this tool again with 'boss_approved: true'.";
-                    }
-
-                    switch(args.action) {
-                        case 'createCampaign': return await this.tools.metaAds.createCampaign(args.name, args.objective);
-                        case 'createAdSet': return await this.tools.metaAds.createAdSet(args.campaignId, args.name, args.budget || 1000, args.targeting);
-                        case 'createAdCreative': return await this.tools.metaAds.createAdCreative(args.name, args.title, args.body, args.imageHash || args.imageUrl, args.pageId, args.cta, args.link);
-                        case 'createAd': return await this.tools.metaAds.createAd(args.adSetId, args.creativeId, args.name);
-                        case 'publishOrganicPost':
-                            return await this.tools.metaAds.publishOrganicPostSurfaces({
-                                pageId: args.pageId,
-                                message: args.message,
-                                link: args.link,
-                                imagePath: args.imagePath || this.lastUploadedFile,
-                                channels: args.channels || ['facebook']
-                            });
-                        case 'publishOrganicPhoto': return await this.tools.metaAds.publishPagePhoto(args.pageId, args.message, args.imagePath);
-                        case 'publishOrganicVideo': return await this.tools.metaAds.publishPageVideo(args.pageId, args.title, args.description, args.videoPath);
-                        case 'publishOrganicReel': return await this.tools.metaAds.publishPageReel(args.pageId, args.description, args.videoPath);
-                        case 'getPageInsights': return await this.tools.metaAds.getPageInsights(args.pageId);
-                        case 'getAccountInfo': return await this.tools.metaAds.getAccountInfo();
-                        case 'uploadImage': return await this.tools.metaAds.uploadImage(args.imagePath);
-                        default: return `Unknown metaAds action: ${args.action}`;
-                    }
-                }
-                case 'generateVideo': 
-                    if (args.prompt) {
-                        // 1. Attempt High-Fidelity Google Veo (Ad Quality)
-                        const veoResult = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath, args.imagePath);
-                        if (!veoResult.error) {
-                            await this._recordMediaUsage('Gemini', 'veo-3.1-generate-001', 'paid', 0.02);
-                            return `SUCCESS: Ad-quality Veo created at ${args.outputPath}`;
-                        }
-                        
-                        // 2. Fallback to Replicate if Veo fails and token exists
-                        const repResult = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                        if (!repResult.error) {
-                            await this._recordMediaUsage('Replicate', 'anotherjesse/zeroscope-v2-xl', 'paid', 0.01);
-                            return `SUCCESS: Generative Video created at ${args.outputPath}`;
-                        }
-
-                        // 3. Last fallback: Gemini Image + Manual FFmpeg (Free Mode)
-                        const freeResult = await VideoGenTool.generateFromPromptFree(args.prompt, args.outputPath);
-                        if (!freeResult.error) {
-                            await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001 + ffmpeg', 'free', 0);
-                            return `SUCCESS: Free Video created at ${args.outputPath}`;
-                        }
-                        return `Error: ${freeResult.error}`;
-                    }
-                    const localResult = await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
-                    if (!localResult.error) {
-                        await this._recordMediaUsage('Local', 'ffmpeg image-to-video', 'free', 0);
-                        return `SUCCESS: Video created at ${args.outputPath}`;
-                    }
-                    return `Error: ${localResult.error}`;
-                case 'buildAgencyQuotePlan':
-                    return AgencyQuotePlanner.buildPlan(args);
-                case 'createAgencyQuoteArtifacts':
-                    return await this._createAgencyQuoteArtifacts(args);
-                case 'removeBg': return await this.tools.removeBg(args.inputPath, args.outputPath);
-                case 'googleAdsListCampaigns': return await this.tools.googleAds.listCampaigns(args.customerId);
-                case 'googleAdsCreateBudget': return await this.tools.googleAds.createCampaignBudget(args.customerId, args.name, args.amountMicros, args.deliveryMethod);
-                case 'googleAdsCreateCampaign': return await this.tools.googleAds.createCampaign(args.customerId, args.campaignData);
-                case 'googleAdsCreateAdGroup': return await this.tools.googleAds.createAdGroup(args.customerId, args.adGroupData);
-                case 'googleAdsAddKeywords': return await this.tools.googleAds.addKeywords(args.customerId, args.adGroupResourceName, args.keywords);
-                case 'googleAdsCreateResponsiveSearchAd': return await this.tools.googleAds.createResponsiveSearchAd(args.customerId, args.adData);
-                case 'linkedinPublishPost': return await this.tools.linkedinAds.publishOrganicPost(args.urn, args.text);
-                case 'metaGetComments': return await this.tools.metaAds.getComments(args.objectId);
-                case 'metaSetCredentials': return await this.tools.metaAds.setCredentials(args.accessToken, args.adAccountId, args.pageId);
-                case 'metaReplyToComment': return await this.tools.metaAds.replyToComment(args.commentId, args.message);
-                case 'openRouterChat': return await this.tools.openRouter.chat(args.prompt, args.model);
-                case 'searchWeb': return await this.tools.searchWeb(args.query);
-                case 'codeMap': return await this.tools.codeMap(args.absolutePath, args.maxDepth);
-                case 'codeSearch': return await this.tools.codeSearch(args.absolutePath, args.query);
-                case 'codeFindFn': return await this.tools.codeFindFn(args.absolutePath, args.functionName);
-                case 'sendEmail': {
-                    const activeMediaPath = this._getActiveMediaPath(args);
-                    const attachments = Array.isArray(args.attachments) ? args.attachments : [];
-                    const normalizedAttachments = attachments.length
-                        ? attachments
-                        : activeMediaPath ? [{ path: activeMediaPath }] : [];
-                    return await this.tools.sendEmail(args.to, args.subject, args.body, normalizedAttachments);
-                }
-                case 'readEmail': return await this.tools.readEmail(args.limit);
-                case 'sendWhatsApp': return await this.tools.sendWhatsApp(args.phone, args.text);
-                case 'sendWhatsAppMedia': {
-                    const activeMediaPath = this._getActiveMediaPath(args);
-                    const mediaUrl = args.mediaUrl || await this._toPublicMediaUrl(activeMediaPath);
-                    if (!mediaUrl) {
-                        return {
-                            error: 'WhatsApp media requires a public media URL or an uploaded file in the active context.',
-                            hint: 'Attach a file first or provide a mediaUrl so Nexus can continue with media sending.'
-                        };
-                    }
-                    return await this.tools.sendWhatsAppMedia(args.phone, mediaUrl, args.caption);
-                }
-                case 'analyzeMarketingPage': return await this.tools.analyzeMarketingPage(args);
-                case 'scanCompetitors': return await this.tools.scanCompetitors(args);
-                case 'generateSocialCalendar': return await this.tools.generateSocialCalendar(args);
-                case 'scanNiche': return await this.tools.scanNiche(args.niche);
-                case 'proposeCampaign': return await this.tools.proposeCampaign(args.niche, args.clientName);
-                case 'saveMemory': return await this.tools.saveMemory(args.content, args.category);
-                case 'searchMemory': return await this.tools.searchMemory(args.query);
-                case 'delegateToAgent': return await this.tools.delegateToAgent(args.agentType, args.task);
-                default: return `Error: Tool ${name} not found.`;
+                case 'buildAgencyQuotePlan': return AgencyQuotePlanner.buildPlan(args);
+                case 'createAgencyQuoteArtifacts': return await this._createAgencyQuoteArtifacts(args);
+                default: return `Error: Tool '${name}' not found in orchestrator mapping.`;
             }
         } catch (error) {
             if (this.currentRun) {

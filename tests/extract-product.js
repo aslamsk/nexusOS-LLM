@@ -1,4 +1,5 @@
-const browser = require('../tools/browser');
+const BrowserToolClass = require('../tools/browser');
+const browser = new BrowserToolClass();
 const fs = require('fs');
 
 (async () => {

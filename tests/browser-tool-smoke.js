@@ -4,7 +4,8 @@ const path = require('path');
 
 process.env.BROWSER_HEADLESS = process.env.BROWSER_HEADLESS || 'true';
 
-const BrowserTool = require('../tools/browser');
+const BrowserToolClass = require('../tools/browser');
+const BrowserTool = new BrowserToolClass();
 
 async function main() {
     const html = `

@@ -8,11 +8,11 @@ const puppeteer = require('puppeteer');
  * Provides web automation capabilities.
  */
 class BrowserTool {
-    constructor() {
+    constructor(profileDir = null) {
         this.browser = null;
         this.page = null;
         this.stopRequested = false;
-        this.profileDir = path.join(os.tmpdir(), 'nexus-chrome-profile');
+        this.profileDir = profileDir || path.join(os.tmpdir(), `nexus-chrome-profile-${Date.now()}`);
     }
 
     async init(isMobile = false, mobileDevice = 'ios') {
@@ -49,13 +49,13 @@ class BrowserTool {
             this.browser = await puppeteer.launch({
                 headless: headlessMode,
                 ignoreHTTPSErrors: true,
-                args: isProd ? [
+                args: [
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     ...commonArgs
-                ] : commonArgs
+                ]
             });
             this.page = await this.browser.newPage();
             await this._setupContext(isMobile, mobileDevice);
@@ -441,4 +441,4 @@ class BrowserTool {
     }
 }
 
-module.exports = new BrowserTool();
+module.exports = BrowserTool;
