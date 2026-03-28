@@ -1,0 +1,33 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/nexusos/nexusos:$COMMIT_SHA'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/nexusos/nexusos:$COMMIT_SHA'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'nexusos'
+      - '--image'
+      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/nexusos/nexusos:$COMMIT_SHA'
+      - '--region'
+      - 'europe-west1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--service-account'
+      - 'nexusos-gemini@gen-lang-client-0711125105.iam.gserviceaccount.com'
+      - '--port'
+      - '3000'
+
+images:
+  - 'europe-west1-docker.pkg.dev/$PROJECT_ID/nexusos/nexusos:$COMMIT_SHA'
