@@ -5,10 +5,12 @@ const TerminalTool = require('./tools/terminal');
 const BrowserTool = require('./tools/browser');
 const ImageGenTool = require('./tools/imageGen');
 const SkillGenerator = require('./tools/skillGenerator');
+const SkillReaderTool = require('./tools/skillReader');
 const N8nDiscoverTool = require('./tools/n8nDiscover');
 const MetaAdsTool = require('./tools/metaAds');
 const GoogleAdsTool = require('./tools/googleAds');
 const LinkedInAdsTool = require('./tools/linkedinAds');
+const XAdsTool = require('./tools/xAds');
 const BackgroundRemovalTool = require('./tools/backgroundRemoval');
 const OpenRouterTool = require('./tools/openRouter');
 const VideoGenTool = require('./tools/videoGen');
@@ -49,8 +51,13 @@ class NexusOrchestrator {
         this.context = [{ role: 'system', content: this.systemPrompt }];
         
         // Instantiate SkillGenerator
-        const browserProfile = taskDir ? path.join(taskDir, '.browser_profile') : null;
-        this.browserInstance = new BrowserTool(browserProfile);
+        this.taskDir = taskDir;
+        const os = require('os');
+        const profileDir = taskDir 
+            ? path.join(taskDir, '.browser_profile') 
+            : path.join(os.tmpdir(), 'nexus-browser-profiles', this.currentSessionId || 'default');
+        
+        this.browserInstance = new BrowserTool(profileDir);
         this.skillGen = new SkillGenerator(taskDir ? path.join(taskDir, 'skills') : null);
 
         this.tools = {
@@ -61,9 +68,12 @@ class NexusOrchestrator {
             multiReplaceFileContent: (args) => FileSystemTool.multiReplaceFileContent(args.absolutePath, args.chunks),
             runCommand: (args) => TerminalTool.runCommand(args.command, args.cwd),
             browserAction: (args) => this.browserInstance.executeAction(args),
-            generateImage: (args) => ImageGenTool.generateImage(args.prompt, args.savePath),
+            generateImage: (args) => ImageGenTool.generateImage(args.prompt, args.savePath, { aspectRatio: args.aspectRatio, refine: args.refine }),
             createSkill: (args) => this.skillGen.createSkill(args.name, args.code, args.description),
             listSkills: () => this.skillGen.listSkills(),
+            listAgenticSkills: () => SkillReaderTool.listSkills(),
+            readAgenticSkill: (args) => SkillReaderTool.readSkill(args.skillName),
+            findAgenticSkill: (args) => SkillReaderTool.findBestSkill(args.userIntent),
             executeSkill: async (args) => {
                 const skill = this.skillGen.loadSkill(args.name);
                 if (!skill) return `Error: Skill '${args.name}' not found.`;
@@ -80,7 +90,7 @@ class NexusOrchestrator {
             codeMap: (args) => CodeAwarenessTool.mapCodebase(args.absolutePath, args.maxDepth),
             codeSearch: (args) => CodeAwarenessTool.searchInCode(args.absolutePath, args.query),
             codeFindFn: (args) => CodeAwarenessTool.findFunction(args.absolutePath, args.functionName),
-            sendEmail: (args) => EmailTool.sendEmail(args.to, args.subject, args.body),
+            sendEmail: (args) => EmailTool.sendEmail(args.to, args.subject, args.body, args.attachments || []),
             readEmail: (args) => EmailTool.readInbox(args.limit),
             sendWhatsApp: (args) => WhatsAppTool.sendMessage(args.phone, args.text),
             sendWhatsAppMedia: (args) => WhatsAppTool.sendMedia(args.phone, args.mediaUrl, args.caption),
@@ -91,11 +101,11 @@ class NexusOrchestrator {
             searchMemory: (args) => MemoryService.searchMemory(args.query),
             scanNiche: (args) => ProactiveScannerTool.scanNiche(args.niche),
             proposeCampaign: (args) => ProactiveScannerTool.proposeCampaign(args.opportunityId),
-            delegateToAgent: (args) => SquadSystem.delegate(args.agentType, args.task)
+            delegateToAgent: (args) => SquadSystem.delegate(args.agentType, args.task),
+            xAds: async (args) => this._runXAdsAction(args)
         };
         this.llmService = new LLMService();
         this.maxSteps = 40;
-        this.taskDir = taskDir;
         // Callback to emit events to the frontend
         this.onUpdate = onUpdate || ((event) => console.log(`[${event.type.toUpperCase()}]`, event.message || event.args || ''));
         this.lastUploadedFile = null;
@@ -111,15 +121,19 @@ class NexusOrchestrator {
         this.recoveryHistory = [];
         this.currentMarketingWorkflow = null;
         this.pendingRequirement = null;
+        this.pendingClarification = null;
         this.currentSessionId = null;
         this.currentMissionMode = 'execute';
         this.manualMissionMode = null;
         this.currentWorkflowState = null;
+        this.currentMissionArtifact = null;
+        this.missionArtifactHistory = [];
+        this.pendingActionChain = [];
+        this.lastPublishedTargets = [];
+        this.activeMissionDomain = 'general';
+        this.missionTaskStack = [];
         this.isStopped = false;
-    }
-
-    _isChatOnlyMode() {
-        return String(this.currentMissionMode || '').toLowerCase() === 'chat';
+        this.currentTaskContract = null;
     }
 
     /**
@@ -132,6 +146,7 @@ class NexusOrchestrator {
         this.pendingApproval = null;
         this.pendingRepair = null;
         this.pendingRequirement = null;
+        this.pendingClarification = null;
         
         // Signal tools to stop
         if (this.llmService && typeof this.llmService.stop === 'function') {
@@ -153,6 +168,14 @@ class NexusOrchestrator {
         this.currentMarketingWorkflow = null;
         this.currentOrganicMetaDraft = null;
         this.currentWorkflowState = null;
+        this.currentMissionArtifact = null;
+        this.missionArtifactHistory = [];
+        this.pendingActionChain = [];
+        this.lastPublishedTargets = [];
+        this.activeMissionDomain = 'general';
+        this.missionTaskStack = [];
+        this.currentTaskContract = null;
+        this.pendingClarification = null;
         this.isStopped = false; // Prepare for next use
         this.onUpdate({ type: 'thought', message: "✨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives." });
     }
@@ -163,7 +186,10 @@ class NexusOrchestrator {
      */
     setClientContext(clientId, clientConfig) {
         const ConfigService = require('./core/config');
-        ConfigService.setClientOverrides(clientConfig);
+        ConfigService.setClientOverrides(clientConfig, {
+            strict: Boolean(clientId),
+            clientId: clientId || null
+        });
 
         if (this.currentClientId !== clientId) {
             this.currentClientId = clientId;
@@ -184,35 +210,44 @@ class NexusOrchestrator {
         this.isRunning = true;
         this.isStopped = false;
         this.isWaitingForInput = false;
-        this._beginRun(userRequest);
+        const isMissionFollowUp = this._isMissionFollowUpRequest(userRequest);
+        const augmentedRequest = isMissionFollowUp ? this._augmentFollowUpRequest(userRequest) : userRequest;
+        this._beginRun(augmentedRequest);
 
-        if (this._applyWorkflowIntent(userRequest)) {
-            this._beginRun(userRequest);
+        if (this._applyWorkflowIntent(augmentedRequest)) {
+            this._beginRun(augmentedRequest);
         }
 
         // CRITICAL FIX: Reset context for a fresh mission to prevent "stale failure" baggage.
         // This ensures the AI starts with a clean slate (System Prompt + New Request).
         this.context = [{ role: 'system', content: this.systemPrompt }];
+        this.currentTaskContract = this._buildTaskContract(augmentedRequest);
         
         // MISSION STABILITY: Reset transient state for every fresh mission to prevent pollution.
         // If the user isn't explicitly continuing a previous draft, we purge the old baggage.
-        if (!this._isOrganicPublishIntent(userRequest)) {
+        if (!this._isOrganicPublishIntent(augmentedRequest)) {
             this.currentOrganicMetaDraft = null;
             this.currentWorkflowState = null;
             this.currentMarketingWorkflow = null;
+            this.pendingActionChain = this._inferQueuedActionsFromRequest(augmentedRequest);
+            if (!this.pendingActionChain.length && !isMissionFollowUp) {
+                this.currentMissionArtifact = null;
+                this.missionArtifactHistory = [];
+                this.lastPublishedTargets = [];
+            }
         }
 
         // Recall Long-Term Memories
         const memories = await MemoryService.recallRecent(5);
-        const recoveryPatterns = await MemoryService.findRecoveryPatterns(userRequest, 3);
-        const detectedMarketingWorkflow = MarketingService.detectWorkflowFromText(userRequest);
-        const detectedGoal = GoalInterpreter.interpretGoal(userRequest);
-        const detectedCommercialQuote = this._detectCommercialQuoteRequest(userRequest);
-        this.currentMissionMode = MissionMode.detectMissionMode(userRequest, this.manualMissionMode);
+        const recoveryPatterns = await MemoryService.findRecoveryPatterns(augmentedRequest, 3);
+        const detectedMarketingWorkflow = MarketingService.detectWorkflowFromText(augmentedRequest);
+        const detectedGoal = GoalInterpreter.interpretGoal(augmentedRequest);
+        const detectedCommercialQuote = this._detectCommercialQuoteRequest(augmentedRequest);
+        this.currentMissionMode = MissionMode.detectMissionMode(augmentedRequest, this.manualMissionMode);
         this.currentMarketingWorkflow = detectedMarketingWorkflow ? detectedMarketingWorkflow.id : null;
         let memoryPrompt = "";
         memoryPrompt += MissionMode.buildModePrompt(this.currentMissionMode);
-        memoryPrompt += this._buildExecutionProtocol(userRequest);
+        memoryPrompt += this._buildExecutionProtocol(augmentedRequest);
         if (memories.length > 0) {
             memoryPrompt += `### LONG-TERM MEMORY RECALL:\n${memories.map(m => `- ${m}`).join('\n')}\n\n`;
         }
@@ -223,7 +258,7 @@ class NexusOrchestrator {
             const packId = ['audit', 'copy', 'ads', 'report'].includes(detectedMarketingWorkflow.id) ? detectedMarketingWorkflow.id : 'report';
             memoryPrompt += `${MarketingPrompts.buildPromptContext(packId, detectedMarketingWorkflow)}\n\n`;
             if (detectedMarketingWorkflow.id === 'ads') {
-                memoryPrompt += `${MarketingPrompts.buildAdsExecutionContext(userRequest)}\n\n`;
+                memoryPrompt += `${MarketingPrompts.buildAdsExecutionContext(augmentedRequest)}\n\n`;
             }
             memoryPrompt += `### MARKETING SPECIALISTS\n${detectedMarketingWorkflow.specialists.map((item) => `- ${item}`).join('\n')}\n\n`;
             if (detectedMarketingWorkflow.id === 'audit') {
@@ -245,7 +280,7 @@ class NexusOrchestrator {
             });
         }
         if (detectedCommercialQuote) {
-            const quoteDefaults = this._extractCommercialQuoteDefaults(userRequest);
+            const quoteDefaults = this._extractCommercialQuoteDefaults(augmentedRequest);
             memoryPrompt += `### COMMERCIAL QUOTE INTERPRETER
 COMMERCIAL QUOTE REQUEST DETECTED.
 - Do not use web search or browser research unless the Boss explicitly asks for benchmarking.
@@ -263,30 +298,41 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 message: 'Commercial quote request detected. Nexus is switching to direct finance planning instead of search.'
             });
         }
-        this.onUpdate({ type: 'thought', message: `Mission mode: ${this.currentMissionMode.toUpperCase()}. Nexus will execute directly and still pause only for real approvals or missing setup.` });
+        // ELITE SOVEREIGNTY: Specialist Role Assumption
+        // [RESILIENCE] Only auto-align specialists for non-browser missions to prevent "Proofreader" hijacking of automation.
+        const skillSearchRequest = String(userRequest || '');
+        const shouldAutoLoadSkill =
+            /\b(audit|architecture|refactor|deep|advanced|complex|specialist|expert|strategy|seo|security)\b/i.test(skillSearchRequest) ||
+            skillSearchRequest.split(/\s+/).length >= 18;
+        const suggestedSkills = shouldAutoLoadSkill ? SkillReaderTool.findBestSkill(userRequest) : [];
+        let expertRolePrompt = "";
+        const isBrowserMission = /\b(open|browser|url|http|click|search|quiz|form|submit|fill|navigate|read questions?)\b/.test(String(userRequest).toLowerCase());
+
+        if (!isBrowserMission && suggestedSkills.length > 0) {
+            const bestSkill = suggestedSkills[0];
+            const playbook = SkillReaderTool.readSkill(bestSkill);
+            const roleName = bestSkill.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            
+            this.onUpdate({ type: 'thought', message: `🧩 **Expert Alignment:** Activating the [${roleName}] specialist persona from standard agency playbook @${bestSkill}.` });
+            
+            expertRolePrompt = `### EXPERT ROLE ASSUMPTION\nYou are now acting as the **Elite ${roleName} Specialist** for Nexus OS. 
+You must strictly adhere to the following expert playbook and Standard Operating Procedures (SOPs):
+${playbook}\n\n`;
+        }
+
+        const missionDirective = this.currentMissionMode === 'execute' ? 
+            "\n\n### MISSION DIRECTIVE\nYou are in EXECUTE mode. Act decisively, but do not rush into unrelated tools. Re-state the exact requested outcome internally, choose only tools that directly advance it, and stop side quests. Your specialist persona is secondary to task relevance and delivery." : "";
 
         // Inject the active working directory into the prompt if specified
-        let augmentedRequest = memoryPrompt + userRequest;
-        if (this.taskDir) {
-            const folderName = path.basename(this.taskDir);
-            augmentedRequest += `\n\nIMPORTANT SYSTEM DIRECTIVE: You MUST save any and all generated files, images, or code for this specific task into the following absolute directory path ONLY: ${this.taskDir}. Do not save files to the root directory. Whenever you create a file, you MUST give the user a download link in your final message using this exact markdown format: [Download filename.ext](/outputs/${folderName}/filename.ext)`;
-        }
+        let executionPrompt = expertRolePrompt + memoryPrompt + augmentedRequest + missionDirective;
 
-        // Detect uploaded file paths in the request to maintain state
-        const filePathMatch = augmentedRequest.match(/Path: `([^`]+)`/);
-        if (filePathMatch) {
-            this.lastUploadedFile = filePathMatch[1];
-        }
-
-        this.context.push({ role: 'user', content: augmentedRequest });
-        this.stepCount = 0;
+        // Push the fully enriched request into context so the LLM sees it
+        this.context.push({ role: 'user', content: executionPrompt });
 
         try {
-            if (this._isChatOnlyMode()) {
-                await this._runChatLoop(userRequest);
-            } else {
-                await this._runLoop(userRequest);
-            }
+            // [RESILIENCE] Unified Mission Loop: Resume via the robust execution loop only.
+            await this._runLoop(userRequest);
+
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
             }
@@ -300,8 +346,23 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             console.warn("[Orchestrator] Task already running. Ignoring duplicate resume.");
             return;
         }
+        this.pendingClarification = null;
         if (this.pendingApproval) {
             await this._handleApprovalResponse(userInput);
+            return;
+        }
+        if (await this._handleQueuedActionContinuation(userInput)) {
+            this.isRunning = true;
+            this.isStopped = false;
+            this.isWaitingForInput = false;
+            try {
+                await this._runLoop(null);
+                if (this.currentRun && !this.currentRun.finishedAt) {
+                    this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
+                }
+            } finally {
+                this.isRunning = false;
+            }
             return;
         }
         if (this.pendingRepair) {
@@ -332,11 +393,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         }
 
         try {
-            if (this._isChatOnlyMode()) {
-                await this._runChatLoop(null);
-            } else {
-                await this._runLoop(null);
-            }
+            await this._runLoop(null);
             if (this.currentRun && !this.currentRun.finishedAt) {
                 this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
             }
@@ -347,7 +404,81 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     _extractOrganicMetaDraft(text = '') {
         const value = String(text || '');
+        const jsonBlock = value.match(/```json\s*([\s\S]*?)```/i)?.[1]?.trim() || '';
+        const candidateJson = jsonBlock || value.trim();
+        if (candidateJson.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(candidateJson);
+                const platform = String(parsed.platform || '').toLowerCase();
+                const type = String(parsed.type || '').toLowerCase();
+                const message = String(parsed.message || '').trim();
+                const link = String(parsed?.call_to_action?.link || parsed.link || '').trim();
+                const imagePath = String(parsed.media_url || parsed.image || '').trim() || null;
+                const channels = [];
+                if (platform.includes('facebook')) channels.push('facebook');
+                if (platform.includes('instagram')) channels.push('instagram');
+
+                if ((platform.includes('facebook') || platform.includes('instagram') || type.includes('organic')) && message && link) {
+                    return {
+                        channel: 'meta_organic',
+                        title: String(parsed.title || '').trim(),
+                        description: message,
+                        message,
+                        cta: /shop now/i.test(String(parsed?.call_to_action?.type || '')) ? 'SHOP_NOW' : 'LEARN_MORE',
+                        ctaLabel: String(parsed?.call_to_action?.type || parsed?.call_to_action?.label || 'SHOP NOW').trim() || 'SHOP NOW',
+                        link,
+                        imagePath,
+                        tags: Array.isArray(parsed.hashtags) ? parsed.hashtags.join(' ') : String(parsed.hashtags || '').trim(),
+                        channels: channels.length ? channels : ['facebook', 'instagram'],
+                        preparedAt: new Date().toISOString()
+                    };
+                }
+            } catch (error) {
+                // Fall through to the legacy markdown-style extractor below.
+            }
+        }
+
         const hasPromotionContext = /\bfacebook\b|\binstagram\b|\bmeta\b/i.test(value);
+
+        // Support "Proposed Meta Organic Post" drafts that are not in the Title/Description template.
+        // Example fields:
+        // - Platform: Facebook, Instagram
+        // - Media URL: https://...
+        // - Message: "..."
+        // - Call to Action: Type: SHOP_NOW, Link: https://...
+        const proposedBlock = /\bproposed meta organic post\b/i.test(value);
+        if (proposedBlock && hasPromotionContext) {
+            const platformLine = value.match(/\*\*Platform:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
+            const mediaUrl = value.match(/\*\*Media URL:\*\*\s*`?(https?:\/\/[^\s`]+)`?/i)?.[1]?.trim() || '';
+            const msgBlock = value.match(/\*\*Message:\*\*\s*([\s\S]*?)(?:\n\*\*Call to Action:|\n\*\*Call to Action|\n\*\*Type:|\nDo you approve|\nBoss|\nNexus|$)/i)?.[1]?.trim() || '';
+            const ctaType = value.match(/\*\*Type:\*\*\s*([A-Z_]+)/i)?.[1]?.trim() || '';
+            const ctaLink = value.match(/\*\*Link:\*\*\s*`?(https?:\/\/[^\s`]+)`?/i)?.[1]?.trim() || '';
+
+            const channels = [];
+            const p = platformLine.toLowerCase();
+            if (p.includes('facebook') || value.toLowerCase().includes('facebook')) channels.push('facebook');
+            if (p.includes('instagram') || value.toLowerCase().includes('instagram')) channels.push('instagram');
+
+            const message = msgBlock.replace(/^["“”]|["“”]$/g, '').trim();
+            const link = ctaLink;
+            const imagePath = mediaUrl || null;
+            if (message && link) {
+                return {
+                    channel: 'meta_organic',
+                    title: '',
+                    description: message,
+                    message,
+                    cta: /shop[_ ]?now/i.test(ctaType) ? 'SHOP_NOW' : 'LEARN_MORE',
+                    ctaLabel: ctaType || 'SHOP NOW',
+                    link,
+                    imagePath,
+                    tags: '',
+                    channels: channels.length ? channels : ['facebook', 'instagram'],
+                    preparedAt: new Date().toISOString()
+                };
+            }
+        }
+
         const title = value.match(/\*\*Title:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
         const description = value.match(/\*\*Description:\*\*\s*([\s\S]*?)\n\s*\*\*Call to Action:\*\*/i)?.[1]?.trim() || '';
         const ctaLine = value.match(/\*\*Call to Action:\*\*\s*([^\n]+)/i)?.[1]?.trim() || '';
@@ -397,7 +528,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
         if (wantsOrganicPromote || this._isOrganicPublishIntent(text)) {
             // Only transition if we are NOT already specialized in another modes (like browser actions)
-            if (this.currentMissionMode === 'discuss' || this.currentMissionMode === 'marketing') {
+            if (this.currentMissionMode === 'discuss' || this.currentMissionMode === 'marketing' || this.currentMissionMode === 'execute') {
                 this._setWorkflowState({
                     domain: 'marketing',
                     channel: 'meta',
@@ -427,6 +558,9 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     async _resumeOrganicMetaPublish(userInput) {
         if (!this.currentOrganicMetaDraft || !this._isOrganicPublishIntent(userInput)) return false;
+
+        const normalizedDecision = String(userInput || '').trim().toLowerCase();
+        const userAlreadyApproved = ['yes', 'y', 'approve', 'approved', 'boss approved'].includes(normalizedDecision);
 
         const pageId = await ConfigService.get('META_PAGE_ID');
         const args = {
@@ -550,9 +684,399 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             mode: 'organic_publish',
             stage: 'awaiting_approval'
         });
+
+        // If the user already said "approved/yes", treat it as the approval response and execute immediately.
+        if (userAlreadyApproved) {
+            await this._handleApprovalResponse('YES');
+        }
         return true;
     }
 
+    _inferQueuedActionsFromRequest(userRequest = '') {
+        const value = String(userRequest || '').toLowerCase();
+        const actions = [];
+        this.pendingActionChain = Array.isArray(this.pendingActionChain) ? this.pendingActionChain : [];
+
+        const wantsImage = /\b(generate|create|design|make)\b/.test(value) && /\bimage|poster|banner|creative|thumbnail|logo\b/.test(value);
+        const wantsVideo = /\b(generate|create|make)\b/.test(value) && /\bvideo|reel|short|promo video\b/.test(value);
+        const wantsQuote = /\b(quote|quotation|proposal|estimate|pricing)\b/.test(value);
+        const wantsContent = /\b(write|draft|create)\b/.test(value) && /\bcontent|caption|post copy|copy|article|blog|linkedin post\b/.test(value);
+        const wantsMetaPromote = /\b(promote|publish|post|boost|run)\b/.test(value) && /\bfacebook|instagram|meta\b/.test(value);
+        const wantsLinkedInPublish = /\b(post|publish)\b/.test(value) && /\blinkedin\b/.test(value);
+        const wantsXPublish = /\b(post|publish|tweet)\b/.test(value) && /\bx\b|\btwitter\b/.test(value);
+        const wantsEmailSend = /\b(send|mail|email|share)\b/.test(value) && /\bemail\b/.test(value);
+        const wantsWhatsAppSend = /\b(send|share)\b/.test(value) && /\bwhatsapp\b/.test(value);
+
+        if (wantsImage && wantsMetaPromote) {
+            actions.push({
+                id: `queued_${Date.now()}_meta_image`,
+                type: 'promote_generated_asset',
+                channel: 'meta',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the latest approved generated image and prepare the Facebook/Instagram promotion flow.'
+            });
+        }
+
+        if (wantsVideo && (wantsMetaPromote || wantsLinkedInPublish || wantsXPublish)) {
+            actions.push({
+                id: `queued_${Date.now()}_video_publish`,
+                type: 'publish_generated_video',
+                channel: wantsLinkedInPublish ? 'linkedin' : wantsXPublish ? 'x' : 'meta',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the latest approved generated video and prepare the requested publish flow on the target platform.'
+            });
+        }
+
+        if (wantsContent && wantsLinkedInPublish) {
+            actions.push({
+                id: `queued_${Date.now()}_linkedin_content`,
+                type: 'publish_written_content',
+                channel: 'linkedin',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the approved written content and prepare the LinkedIn publishing step.'
+            });
+        }
+
+        if (wantsContent && wantsXPublish) {
+            actions.push({
+                id: `queued_${Date.now()}_x_content`,
+                type: 'publish_written_content',
+                channel: 'x',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the approved written content and prepare the X publishing step.'
+            });
+        }
+
+        if (wantsQuote && wantsEmailSend) {
+            actions.push({
+                id: `queued_${Date.now()}_quote_email`,
+                type: 'send_quote_bundle',
+                channel: 'email',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the latest approved quotation bundle and prepare the email handoff to the intended recipient.'
+            });
+        }
+
+        if (wantsQuote && wantsWhatsAppSend) {
+            actions.push({
+                id: `queued_${Date.now()}_quote_whatsapp`,
+                type: 'share_quote_bundle',
+                channel: 'whatsapp',
+                status: 'pending_confirmation',
+                createdAt: new Date().toISOString(),
+                prompt: 'Use the latest approved quotation bundle and prepare the WhatsApp handoff to the intended recipient.'
+            });
+        }
+
+        return actions;
+    }
+
+    _isMissionFollowUpRequest(text = '') {
+        const value = String(text || '').trim().toLowerCase();
+        if (!value) return false;
+        const hasMemory = Boolean(this.currentMissionArtifact?.id || this.lastPublishedTargets?.length || this.pendingActionChain?.length || this.missionTaskStack?.length);
+        if (!hasMemory) return false;
+
+        const directFollowUp = /\b(this|that|same|current|latest|previous|above|it)\b/.test(value);
+        const mutateIntent = /\b(update|edit|modify|revise|change|delete|remove|send|share|publish|post|promote|continue|resume|reuse|adapt|repurpose|use)\b/.test(value);
+        const crossDomainIntent = /\bfacebook|instagram|meta|linkedin|x|twitter|google|whatsapp|email|quote|quotation|video|image|creative|caption|content|code|bug|feature\b/.test(value);
+        return (directFollowUp && mutateIntent) || (mutateIntent && crossDomainIntent);
+    }
+
+    _augmentFollowUpRequest(text = '') {
+        const value = String(text || '').trim();
+        if (!value) return value;
+        const parts = [];
+        const artifact = this.currentMissionArtifact;
+        const latestTarget = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null;
+        const queued = Array.isArray(this.pendingActionChain) ? this.pendingActionChain[0] : null;
+
+        parts.push('[FOLLOW-UP MISSION CONTEXT]');
+        if (artifact) {
+            parts.push('Current artifact kind: ' + (artifact.kind || 'file'));
+            if (artifact.path) parts.push('Current artifact path: ' + artifact.path);
+            if (artifact.url) parts.push('Current artifact url: ' + artifact.url);
+            if (artifact.files?.pdf) parts.push('Current artifact pdf: ' + artifact.files.pdf);
+        }
+        if (latestTarget) {
+            const latestTargetUrl = latestTarget?.id && /^https?:/i.test(String(latestTarget.id)) ? latestTarget.id : (latestTarget?.details?.url || latestTarget?.details?.postUrl || null);
+            parts.push('Latest published target channel: ' + (latestTarget.channel || 'unknown'));
+            parts.push('Latest published target id: ' + (latestTarget.id || 'unknown'));
+            parts.push('Latest published target action: ' + (latestTarget.action || 'unknown'));
+            if (latestTargetUrl) parts.push('Latest published target url: ' + latestTargetUrl);
+        }
+        if (queued) {
+            parts.push('Queued next action: ' + queued.type + ' on ' + (queued.channel || 'general'));
+        }
+        parts.push('Interpret references like this, that, it, same, current, and latest against this mission context first.');
+        parts.push('If the Boss asks to delete or remove a published item, resolve against the latest published target first.');
+        parts.push('If the Boss asks to send or share a quote, reuse the latest quote bundle files first.');
+        parts.push('If the Boss asks to publish, promote, or adapt content, reuse the latest artifact first.');
+        parts.push('Boss request: ' + value);
+        return parts.join('\n');
+    }
+
+    _buildMissionMemoryContext() {
+        const sections = [];
+        sections.push(`[MISSION DOMAIN]\nCurrent active domain: ${this.activeMissionDomain || 'general'}\nWhen the Boss jumps to another task, preserve the latest artifact/target memory and adapt instead of pretending the previous task never happened.\n`);
+        if (this.currentMissionArtifact?.path || this.currentMissionArtifact?.url) {
+            sections.push(`[MISSION ARTIFACT]\nCurrent artifact kind: ${this.currentMissionArtifact.kind || 'file'}\nCurrent artifact path: ${this.currentMissionArtifact.path || 'n/a'}\nCurrent artifact url: ${this.currentMissionArtifact.url || 'n/a'}\nSource tool: ${this.currentMissionArtifact.sourceTool || 'unknown'}\nIf the Boss says "use this", "promote this", "update this", "modify this", or "delete this", assume they mean this artifact first.\n`);
+        }
+        if (this.lastPublishedTargets?.length) {
+            const latest = this.lastPublishedTargets[0];
+            sections.push(`[PUBLISHED TARGET]\nLatest published channel: ${latest.channel || 'unknown'}\nLatest published id: ${latest.id || 'unknown'}\nTarget type: ${latest.type || 'published_output'}\nIf the Boss asks to update/delete/remove the published content, resolve it against this target first.\n`);
+        }
+        if (this.missionTaskStack?.length) {
+            const stackSummary = this.missionTaskStack.slice(0, 6)
+                .map((item, index) => `${index + 1}. ${item.domain} :: ${item.label}`)
+                .join('\n');
+            sections.push(`[RECENT TASK MEMORY]\n${stackSummary}\n`);
+        }
+        if (this.pendingActionChain?.length) {
+            const queueSummary = this.pendingActionChain
+                .map((item, index) => `${index + 1}. ${item.type} [${item.status}]`)
+                .join('\n');
+            sections.push(`[QUEUED NEXT ACTIONS]\n${queueSummary}\nAfter completing the current step, ask for approval before executing the next queued risky step.\n`);
+        }
+        return sections.length ? `${sections.join('\n')}` : '';
+    }
+
+    _classifyMissionDomain(toolCall = {}) {
+        const name = String(toolCall?.name || '').toLowerCase();
+        const action = String(toolCall?.args?.action || '').toLowerCase();
+        if (name.includes('meta') || name.includes('googleads') || name.includes('linkedin') || name.includes('xads') || action.includes('campaign') || action.includes('publish')) return 'marketing';
+        if (name === 'generateimage' || name === 'generatevideo' || name === 'removebg') return 'media';
+        if (name === 'readfile' || name === 'writefile' || name === 'replacefilecontent' || name === 'multireplacefilecontent' || name === 'runcommand' || name === 'codemap' || name === 'codesearch' || name === 'codefindfn') return 'development';
+        if (name === 'createagencyquoteartifacts' || name === 'buildagencyquoteplan') return 'commercial';
+        if (name === 'sendemail' || name === 'reademail' || name === 'sendwhatsapp' || name === 'sendwhatsappmedia') return 'communications';
+        if (name === 'browseraction' || name === 'searchweb') return 'research';
+        return 'general';
+    }
+
+    _pushMissionTask(domain, label) {
+        this.missionTaskStack = Array.isArray(this.missionTaskStack) ? this.missionTaskStack : [];
+        this.missionTaskStack.unshift({
+            domain: domain || 'general',
+            label: String(label || 'Task').slice(0, 180),
+            at: new Date().toISOString()
+        });
+        this.missionTaskStack = this.missionTaskStack.slice(0, 12);
+        this.activeMissionDomain = domain || this.activeMissionDomain || 'general';
+    }
+
+    _resolveLatestTargetId(channel = '') {
+        const normalized = String(channel || '').trim().toLowerCase();
+        const targets = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets : [];
+        const match = normalized ? targets.find((item) => String(item.channel || '').toLowerCase() === normalized) : targets[0];
+        return match?.id || null;
+    }
+
+    _registerMissionTarget(details = {}) {
+        const target = {
+            id: details.id || `target_${Date.now()}`,
+            channel: details.channel || details.domain || 'general',
+            type: details.type || 'external_target',
+            action: details.action || '',
+            status: details.status || 'completed',
+            details: details.details || null,
+            artifactId: details.artifactId || this.currentMissionArtifact?.id || null,
+            createdAt: new Date().toISOString()
+        };
+        this.lastPublishedTargets = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets : [];
+        this.lastPublishedTargets.unshift(target);
+        this.lastPublishedTargets = this.lastPublishedTargets.slice(0, 8);
+        return target;
+    }
+    _createOutputUrlFromPath(filePath) {
+        const absolutePath = String(filePath || '').trim();
+        if (!absolutePath || !this.taskDir) return null;
+        const normalizedTaskDir = path.resolve(this.taskDir);
+        const normalizedPath = path.resolve(absolutePath);
+        if (!normalizedPath.startsWith(normalizedTaskDir)) return null;
+        const folderName = path.basename(this.taskDir);
+        const relativePath = path.relative(this.taskDir, normalizedPath).split(path.sep).map(encodeURIComponent).join('/');
+        return `/outputs/${folderName}/${relativePath}`;
+    }
+
+    _registerMissionArtifact(details = {}) {
+        const artifact = {
+            id: `artifact_${Date.now()}`,
+            kind: details.kind || 'file',
+            path: details.path || null,
+            url: details.url || this._createOutputUrlFromPath(details.path),
+            files: details.files || null,
+            prompt: details.prompt || '',
+            sourceTool: details.sourceTool || '',
+            aspectRatio: details.aspectRatio || null,
+            createdAt: new Date().toISOString()
+        };
+        this.currentMissionArtifact = artifact;
+        this.missionArtifactHistory = Array.isArray(this.missionArtifactHistory) ? this.missionArtifactHistory : [];
+        this.missionArtifactHistory.unshift(artifact);
+        this.missionArtifactHistory = this.missionArtifactHistory.slice(0, 12);
+        if (artifact.path) this.lastUploadedFile = artifact.path;
+        return artifact;
+    }
+
+    _captureToolOutcome(toolCall, result) {
+        const name = String(toolCall?.name || '');
+        const action = String(toolCall?.args?.action || '');
+        const text = this._formatToolResult(result);
+        const domain = this._classifyMissionDomain(toolCall);
+        this._pushMissionTask(domain, `${name}${action ? `:${action}` : ''}`);
+
+        if (name === 'generateImage' && /^Success:/i.test(text)) {
+            const savedPath = toolCall?.args?.savePath || text.match(/saved to\s+(.+)$/i)?.[1]?.trim();
+            if (savedPath) {
+                this._registerMissionArtifact({
+                    kind: 'image',
+                    path: savedPath,
+                    prompt: toolCall?.args?.prompt || '',
+                    sourceTool: 'generateImage',
+                    aspectRatio: toolCall?.args?.aspectRatio || null
+                });
+            }
+            if (this.pendingActionChain?.length && this.pendingActionChain[0]?.status === 'pending_confirmation') {
+                const nextAction = this.pendingActionChain[0];
+                nextAction.status = 'awaiting_boss';
+                this.isWaitingForInput = true;
+                this.onUpdate({
+                    type: 'input_requested',
+                    message: `Step 1 completed. The generated image is ready. Reply YES to continue to the next queued step (${nextAction.type}), or describe changes to revise the image first.`
+                });
+            }
+            return;
+        }
+
+        if (name === 'generateVideo' && /^SUCCESS:/i.test(text)) {
+            const outputPath = toolCall?.args?.outputPath || text.match(/at\s+(.+)$/i)?.[1]?.trim();
+            if (outputPath) {
+                this._registerMissionArtifact({ kind: 'video', path: outputPath, prompt: toolCall?.args?.prompt || '', sourceTool: 'generateVideo' });
+            }
+            return;
+        }
+
+        if ((name === 'writeFile' || name === 'replaceFileContent' || name === 'multiReplaceFileContent') && toolCall?.args?.absolutePath) {
+            this._registerMissionArtifact({ kind: 'code', path: toolCall.args.absolutePath, prompt: toolCall?.args?.replacementContent || '', sourceTool: name });
+            return;
+        }
+
+        if (name === 'createAgencyQuoteArtifacts' && result?.files) {
+            this._registerMissionArtifact({
+                kind: 'quote_bundle',
+                url: result.files.pdf || result.files.markdown || null,
+                path: null,
+                prompt: toolCall?.args?.scope || '',
+                sourceTool: name,
+                files: result.files
+            });
+            return;
+        }
+
+        if ((name === 'sendEmail' || name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') && !String(text).toLowerCase().startsWith('error')) {
+            this._registerMissionTarget({ channel: name === 'sendEmail' ? 'email' : 'whatsapp', domain, type: 'message_delivery', action: name, details: { preview: text.slice(0, 400), attachments: toolCall?.args?.attachments || [] } });
+            return;
+        }
+
+        if ((name === 'linkedinAds' && action === 'deletePost' && result && !result.error) || (name === 'linkedinDeletePost' && result && !result.error)) {
+            this._registerMissionTarget({
+                id: result?.id || toolCall?.args?.postId || this._resolveLatestTargetId('linkedin'),
+                channel: 'linkedin',
+                domain,
+                type: 'deleted_output',
+                action: action || name,
+                status: 'deleted',
+                details: result || null
+            });
+            return;
+        }
+
+        if ((name === 'xAds' && action === 'deletePost' && result && !result.error) || (name === 'xDeletePost' && result && !result.error)) {
+            this._registerMissionTarget({
+                id: toolCall?.args?.postUrl || result?.url || this._resolveLatestTargetId('x'),
+                channel: 'x',
+                domain,
+                type: 'deleted_output',
+                action: action || name,
+                status: 'deleted',
+                details: result || null
+            });
+            return;
+        }
+
+        if ((name === 'metaAds' && action.startsWith('publishOrganic') && result && !result.error) || (name === 'linkedinAds' && action === 'publishPost' && result && !result.error) || (name === 'xAds' && result && !result.error)) {
+            const publishedCopy = String(toolCall?.args?.text || toolCall?.args?.message || '').trim();
+            if (publishedCopy) {
+                this._registerMissionArtifact({
+                    kind: 'content',
+                    path: null,
+                    url: null,
+                    prompt: publishedCopy,
+                    sourceTool: `${name}${action ? `:${action}` : ''}`,
+                    files: toolCall?.args?.imagePath ? { imagePath: toolCall.args.imagePath } : null
+                });
+            }
+            this._registerMissionTarget({
+                id: result?.id || result?.post_id || result?.url || result?.surfaces?.facebook?.post_id || result?.surfaces?.facebook?.id || null,
+                channel: name === 'metaAds' ? 'meta' : name === 'linkedinAds' ? 'linkedin' : 'x',
+                domain,
+                type: 'published_output',
+                action: action || name,
+                details: result?.surfaces || result || null
+            });
+            if (this.pendingActionChain?.length && this.pendingActionChain[0]?.type === 'promote_generated_asset') {
+                this.pendingActionChain.shift();
+            }
+        }
+    }
+
+    async _handleQueuedActionContinuation(userInput) {
+        const nextAction = this.pendingActionChain?.[0];
+        if (!nextAction || nextAction.status !== 'awaiting_boss') return false;
+        const decision = GovernanceService.isApprovalResponse(userInput);
+        if (decision === null) return false;
+        if (!decision) {
+            this.pendingActionChain.shift();
+            this.onUpdate({ type: 'thought', message: 'Queued next action cancelled by the Boss. The current artifact remains active for further edits.' });
+            return true;
+        }
+        nextAction.status = 'approved';
+        const artifactReference = this.currentMissionArtifact?.path || this.currentMissionArtifact?.url || this.lastUploadedFile || 'the active artifact';
+        let continuationPrompt = `Boss approved the next queued action. Continue now: ${nextAction.prompt} Use the current mission artifact at ${artifactReference} and pause for approval before publishing or any risky external action.`;
+
+        if (nextAction.type === 'send_quote_bundle') {
+            const quoteFiles = this.currentMissionArtifact?.files || {};
+            const preferredAttachment = quoteFiles.pdf || quoteFiles.markdown || this.currentMissionArtifact?.path || null;
+            const attachmentLine = preferredAttachment ? `When ready, call sendEmail with attachments containing this local file path: ${preferredAttachment}.` : 'If no local file exists, include a direct artifact link in the body.';
+            continuationPrompt = `Boss approved the quote handoff. Ask only for the exact missing recipient email or subject if needed, then prepare the email using the latest quote bundle. Preferred attachment/link: ${preferredAttachment || this.currentMissionArtifact?.url || 'the latest quote file'}. ${attachmentLine} Pause for approval before the actual sendEmail tool call.`;
+        }
+
+        if (nextAction.type === 'share_quote_bundle') {
+            const quoteFiles = this.currentMissionArtifact?.files || {};
+            const preferredMedia = quoteFiles.pdf || this.currentMissionArtifact?.url || quoteFiles.markdown || 'the latest quote file';
+            continuationPrompt = `Boss approved the WhatsApp quote handoff. Ask only for the exact missing phone number or message if needed, then prepare the WhatsApp sharing step using the latest quote bundle. Preferred media/link: ${preferredMedia}. Prefer sendWhatsAppMedia when a shareable file/link is available, otherwise use sendWhatsApp with the quote summary and link. Pause for approval before the actual outbound tool call.`;
+        }
+
+        if (nextAction.type === 'publish_written_content') {
+            continuationPrompt = `Boss approved the content publishing step. Reuse the latest approved copy/artifact context, adapt it for ${nextAction.channel}, and pause for approval before the public publish action.`;
+        }
+
+        if (nextAction.type === 'publish_generated_video') {
+            continuationPrompt = `Boss approved the video publishing step. Use the latest generated video artifact, adapt it for ${nextAction.channel}, and pause for approval before any public publish action.`;
+        }
+
+        this.context.push({
+            role: 'user',
+            content: continuationPrompt
+        });
+        this.pendingActionChain.shift();
+        return true;
+    }
     _formatToolResult(result) {
         if (typeof result === 'string') return result;
         if (result === null || result === undefined) return String(result);
@@ -561,6 +1085,95 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         } catch (error) {
             return String(result);
         }
+    }
+
+    _hasTaskDeliverableEvidence() {
+        const contract = this.currentTaskContract || {};
+        const deliverable = String(contract.expectedDeliverable || '').toLowerCase();
+        const artifact = this.currentMissionArtifact || null;
+        const latestTarget = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null;
+
+        if (!deliverable || deliverable === 'direct answer or requested output') {
+            return true;
+        }
+
+        if (deliverable.includes('quote')) {
+            return Boolean(artifact?.kind === 'quote_bundle' || artifact?.files?.pdf || artifact?.files?.markdown);
+        }
+        if (deliverable.includes('invoice')) {
+            return Boolean(artifact?.files?.pdf || /invoice/i.test(String(artifact?.kind || '')) || /invoice/i.test(String(artifact?.path || '')));
+        }
+        if (deliverable.includes('image asset')) {
+            return Boolean(artifact?.kind === 'image' || /\.(png|jpg|jpeg|webp)$/i.test(String(artifact?.path || '')));
+        }
+        if (deliverable.includes('video asset')) {
+            return Boolean(artifact?.kind === 'video' || /\.mp4$/i.test(String(artifact?.path || '')));
+        }
+        if (deliverable.includes('email')) {
+            return Boolean(latestTarget?.channel === 'email');
+        }
+        if (deliverable.includes('whatsapp message')) {
+            return Boolean(latestTarget?.channel === 'whatsapp');
+        }
+        if (deliverable.includes('analysis report')) {
+            return Boolean(artifact?.path || artifact?.url || this.currentRun?.toolCalls > 0);
+        }
+        if (deliverable.includes('verified fix')) {
+            return Boolean(artifact?.kind === 'code' || this.currentRun?.toolsUsed?.replaceFileContent || this.currentRun?.toolsUsed?.multiReplaceFileContent || this.currentRun?.toolsUsed?.writeFile);
+        }
+        if (deliverable.includes('code change')) {
+            return Boolean(artifact?.kind === 'code');
+        }
+
+        return true;
+    }
+
+    _canDeclareTaskComplete(responseText = '') {
+        const text = String(responseText || '').toLowerCase();
+        const mentionsCompletion =
+            /\b(task complete|mission complete|completed|done|finished|all set|that's all)\b/i.test(text) &&
+            !/\bnot (done|finished|complete)\b/i.test(text);
+
+        if (!mentionsCompletion) return false;
+        if (!this._hasTaskDeliverableEvidence()) return false;
+        return true;
+    }
+
+    _normalizeClarificationQuestion(question = '') {
+        return String(question || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    _extractClarificationQuestion(responseText = '') {
+        const text = String(responseText || '').trim();
+        if (!text) return null;
+        const candidates = text
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .filter((line) =>
+                /\?$/.test(line) ||
+                /please provide|i need your|should i proceed|waiting for your|your confirmation|tell me/i.test(line)
+            );
+
+        if (!candidates.length) return null;
+
+        const best = candidates.find((line) => /\?$/.test(line)) || candidates[0];
+        if (best.length > 220) return null;
+        return best;
+    }
+
+    _shouldAskClarification(question = '') {
+        const normalized = this._normalizeClarificationQuestion(question);
+        if (!normalized) return { allow: false, reason: 'empty' };
+
+        if (this.pendingClarification?.normalized === normalized) {
+            return { allow: false, reason: 'duplicate' };
+        }
+
+        return { allow: true, reason: 'new' };
     }
 
     _getActiveMediaPath(args = {}) {
@@ -621,8 +1234,11 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             '- First understand the Boss objective, then identify the exact missing details.',
             '- If required details are missing, ask only for the exact missing fields and wait.',
             '- Before taking meaningful action, produce a short numbered plan that matches the available tools.',
+            '- Build an internal task contract with: requested outcome, expected deliverable, direct success test, and forbidden side quests.',
+            '- Do not call any tool unless it directly advances the requested outcome.',
             '- Do not invent tool capabilities. Use only the exact supported tool names and action names.',
-            '- Prefer deterministic tool use over generic chat explanations when a supported tool exists.'
+            '- Prefer deterministic tool use over generic chat explanations when a supported tool exists.',
+            '- You have access to a massive library of 1,300+ Standard Operating Procedures (skills) via the `readAgenticSkill` tool. Always use it to load an SOP (like "@seo-audit" or "@react-patterns") into your context before performing complex architecture, debugging, or execution tasks.'
         ];
 
         if (/\b(browser|open|login|sign in|signup|dashboard|website|portal|google ai studio|setup|configure|apikey|api key|console)\b/.test(value)) {
@@ -689,6 +1305,74 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             includeStrategyRetainer: true,
             notes: `${value}${wantsAds && /client wish|client choice|as per client wish/i.test(value) ? '\nAd spend is excluded and will be decided by the client.' : ''}`
         };
+    }
+
+    _buildTaskContract(userRequest = '') {
+        const value = String(userRequest || '').trim();
+        const lower = value.toLowerCase();
+        const deliverableHints = [];
+        if (/\bquote|quotation|estimate|proposal\b/.test(lower)) deliverableHints.push('quote');
+        if (/\binvoice\b/.test(lower)) deliverableHints.push('invoice');
+        if (/\bemail\b/.test(lower)) deliverableHints.push('email');
+        if (/\bwhatsapp\b/.test(lower)) deliverableHints.push('whatsapp message');
+        if (/\bimage|banner|poster|creative|thumbnail|logo\b/.test(lower)) deliverableHints.push('image asset');
+        if (/\bvideo|reel\b/.test(lower)) deliverableHints.push('video asset');
+        if (/\baudit|analyze|analysis|review|check\b/.test(lower)) deliverableHints.push('analysis report');
+        if (/\bfix|debug\b/.test(lower)) deliverableHints.push('verified fix');
+        if (/\bcode|file|function\b/.test(lower)) deliverableHints.push('code change');
+
+        const sideQuestGuard = [];
+        if (!/\bsearch|research|browse|find online|google\b/.test(lower)) {
+            sideQuestGuard.push('Do not browse or research unless the Boss asked for it.');
+        }
+        if (!/\bskill|sop|playbook|expert|architecture|complex|advanced\b/.test(lower)) {
+            sideQuestGuard.push('Do not load specialist skills unless the task is clearly complex and relevant.');
+        }
+        if (!/\bpublish|post|send|share|email|whatsapp|meta|linkedin|x|twitter|google ads?\b/.test(lower)) {
+            sideQuestGuard.push('Do not perform outbound, public, or paid actions unless explicitly requested.');
+        }
+
+        return {
+            objective: value || 'Complete the current user request.',
+            expectedDeliverable: deliverableHints.length ? deliverableHints.join(', ') : 'direct answer or requested output',
+            successTest: 'The final output must match the user request and be supported by real tool output when tools are used.',
+            sideQuestGuard
+        };
+    }
+
+    _buildTaskContractPrompt() {
+        const contract = this.currentTaskContract;
+        if (!contract) return '';
+        const guardLines = contract.sideQuestGuard?.length
+            ? contract.sideQuestGuard.map((item) => `- ${item}`).join('\n')
+            : '- Avoid irrelevant side quests.';
+        return `### TASK CONTRACT\nRequested outcome: ${contract.objective}\nExpected deliverable: ${contract.expectedDeliverable}\nSuccess test: ${contract.successTest}\nSide-quest guardrails:\n${guardLines}\nIf your next step does not directly advance this contract, do not do it.\n\n`;
+    }
+
+    _isToolRelevantToTask(toolCall = {}) {
+        const name = String(toolCall?.name || '').toLowerCase();
+        const argsText = JSON.stringify(toolCall?.args || {}).toLowerCase();
+        const request = String(this.currentTaskContract?.objective || this._getLatestUserText() || '').toLowerCase();
+        if (!request) return true;
+
+        const mentions = (...patterns) => patterns.some((pattern) => pattern.test(request));
+        const isCodeTask = mentions(/\bcode|bug|fix|debug|file|function|repo|project\b/);
+        const isMarketingTask = mentions(/\bmarketing|audit|seo|landing page|campaign|ad|social|competitor\b/);
+        const isCommercialTask = mentions(/\bquote|quotation|proposal|invoice|pricing|estimate\b/);
+        const isMediaTask = mentions(/\bimage|banner|poster|creative|thumbnail|logo|video|reel\b/);
+        const isOutboundTask = mentions(/\bemail|whatsapp|send|share\b/);
+        const asksForResearch = mentions(/\bsearch|research|browse|find|look up|google\b/);
+
+        if (['sendemail', 'sendwhatsapp', 'sendwhatsappmedia'].includes(name) && !isOutboundTask) return false;
+        if (['buildagencyquoteplan', 'createagencyquoteartifacts'].includes(name) && !isCommercialTask) return false;
+        if (['generateimage', 'generatevideo', 'removebg'].includes(name) && !isMediaTask) return false;
+        if (['readfile', 'writefile', 'replacefilecontent', 'multireplacefilecontent', 'runcommand', 'codemap', 'codesearch', 'codefindfn'].includes(name) && !isCodeTask) return false;
+        if (['analyzemarketingpage', 'scancompetitors', 'generatesocialcalendar', 'metaads', 'googleads', 'linkedinads', 'xads'].includes(name) && !(isMarketingTask || isOutboundTask || isCommercialTask)) return false;
+        if (name === 'searchweb' && !asksForResearch && !(isMarketingTask && /competitor|benchmark|trend/.test(request))) return false;
+        if ((name === 'readagenticskill' || name === 'findagenticskill') && !mentions(/\bcomplex|architecture|deep|advanced|audit|specialist|expert\b/)) return false;
+        if (name === 'browseraction' && !mentions(/\bbrowser|website|site|page|url|portal|login|open|navigate|click|form\b/) && !/https?:/.test(argsText)) return false;
+
+        return true;
     }
 
     async _createAgencyQuoteArtifacts(args = {}) {
@@ -818,7 +1502,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         if (!name) return null;
 
         if (name === 'generate_image' || name === 'improveImage') {
-            return 'Execution engine: Google Imagen 4 (`imagen-4.0-generate-001`).';
+            return 'Execution engine: Google Imagen 4.0 Ultra (`imagen-4.0-ultra-generate-001`).';
         }
 
         if (name === 'generateVideo') {
@@ -847,6 +1531,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     async _runLoop(originalRequest) {
         let isTaskCompleted = false;
+        let consecutiveEmptyResponses = 0; // [CIRCUIT BREAKER] Prevent infinite empty-response loops
+        const maxConsecutiveEmpty = 3;
         for (; this.stepCount < this.maxSteps; this.stepCount++) {
             if (this.isStopped) break;
             this.onUpdate({ type: 'step', message: `--- Step ${this.stepCount + 1} ---` });
@@ -865,6 +1551,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             if (this.lastUploadedFile) {
                 stateContext += `[CURRENT_SYSTEM_STATE] Active File Context: "${this.lastUploadedFile}". If a user says "improve this", "run this", "change this", or "promote this", ALWAYS assume they mean this file.\n\n`;
             }
+            stateContext += this._buildMissionMemoryContext();
+            stateContext += this._buildTaskContractPrompt();
 
             // Dynamically grab all configured capability rules mapped to the tools matrix
             const ConfigService = require('./core/config');
@@ -886,7 +1574,59 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
             // Ask LLM what to do next
             if (this.currentRun) this.currentRun.llmCalls += 1;
-            const response = await this.llmService.generateResponse(this.context, { mode: this.currentMissionMode });
+            const turnId = this.context.length + 1;
+            console.log(`[Orchestrator] Starting Mission Turn #${turnId}... (Context: ${this.context.length} msgs)`);
+            this.onUpdate({ type: 'thought', message: `🔍 **Nexus is thinking...** (Turn #${turnId})` });
+            
+            // [RESILIENCE] LLM Call with Autonomous Retry for 400 Errors
+            let response;
+            try {
+                const llmContext = this._trimContextForLlm(this.context);
+                response = await this.llmService.generateResponse(llmContext, { 
+                    mode: this.currentMissionMode,
+                    sessionId: this.currentSessionId 
+                });
+            } catch (err) {
+                const errMsg = err.message || '';
+                const isEmptyOutputErr = errMsg.includes('model output must contain') || errMsg.includes('output text or tool calls') || errMsg.includes('both be empty');
+                if (err.message?.includes('400') || err.message?.includes('thought_signature') || isEmptyOutputErr) {
+                    if (isEmptyOutputErr) {
+                        consecutiveEmptyResponses++;
+                        if (consecutiveEmptyResponses >= maxConsecutiveEmpty) {
+                            this.onUpdate({ type: 'thought', message: `🛑 **Circuit Breaker:** The AI model returned empty responses ${maxConsecutiveEmpty} times. This is likely a content filtering or safety block. Please rephrase your request.` });
+                            this._finishRun('completed');
+                            return;
+                        }
+                        response = { text: '⚠️ Empty model response detected. Retrying...', toolCall: null, provider: 'Gemini', model: 'unknown' };
+                    } else {
+                        console.error(`[RESILIENCE] Signature Mismatch detected. Purging pinned key and retrying turn...`);
+                        this.llmService.pinnedKeys?.delete(this.currentSessionId);
+                        const llmContext = this._trimContextForLlm(this.context);
+                        response = await this.llmService.generateResponse(llmContext, { 
+                            mode: this.currentMissionMode,
+                            sessionId: this.currentSessionId 
+                        });
+                    }
+                } else {
+                    throw err;
+                }
+            }
+            console.log(`[Orchestrator] Turn #${turnId} handled by ${response.provider}/${response.model}. (Text: ${!!response.text}, Tool: ${response.toolCall?.name || 'none'})`);
+
+            // [RESILIENCE] Protect against completely empty API responses
+            if (!response.text && !response.toolCall) {
+                consecutiveEmptyResponses++;
+                console.warn(`[RESILIENCE] LLM returned completely empty response (${consecutiveEmptyResponses}/${maxConsecutiveEmpty}). Injecting fallback...`);
+                if (consecutiveEmptyResponses >= maxConsecutiveEmpty) {
+                    this.onUpdate({ type: 'thought', message: `🛑 **Circuit Breaker:** The AI model returned empty responses ${maxConsecutiveEmpty} times in a row. This is likely a content filtering issue. Please rephrase your request.` });
+                    this._finishRun('completed');
+                    return;
+                }
+                response.text = "I received an empty response. Could you please rephrase your request?";
+            } else {
+                consecutiveEmptyResponses = 0; // Reset on successful response
+            }
+
             if (this.isStopped) break;
             if (this.currentRun) {
                 const previousProvider = this.currentRun.lastLlmProvider;
@@ -957,10 +1697,14 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 }
                 if (response.text.startsWith('MISSION BREACH:')) {
                     this.onUpdate({ type: 'error', message: response.text });
-                } else {
+                } else if (response.text.trim()) {
                     this.onUpdate({ type: 'thought', message: response.text });
                 }
-                this.context.push({ role: 'assistant', content: response.text });
+                this.context.push({ 
+                    role: 'assistant', 
+                    content: response.text,
+                    parts: response.parts // [ADVANCED] Preserve raw metadata (thoughts/signatures)
+                });
 
                 if (organicDraft && this._shouldAutoRequestOrganicApproval(originalRequest || this.context.find(m => m.role === 'user')?.content || '', response.text)) {
                     if (await this._queueOrganicDraftApprovalFromDraft()) {
@@ -985,20 +1729,66 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 // Keep history updated with the call
                 this.context.push({
                     role: 'assistant',
-                    content: '',
-                    toolCall: response.toolCall
+                    content: response.text || '',
+                    toolCall: response.toolCall,
+                    parts: response.parts // [ADVANCED] Preserve raw metadata (thoughts/signatures)
                 });
 
+                this.onUpdate({ type: 'thought', message: `🛠️ **[${response.provider || 'AI'}/${response.model || 'Brain'}] Calling tool:** ${response.toolCall.name}` });
+
                 if (response.toolCall.name === 'askUserForInput') {
-                    this.onUpdate({ type: 'input_requested', message: response.toolCall.args.question });
+                    const question = String(response.toolCall.args.question || '').trim();
+                    const clarificationDecision = this._shouldAskClarification(question);
+                    if (!clarificationDecision.allow) {
+                        this.context.push({
+                            role: 'user',
+                            content: 'SYSTEM CORRECTION: Do not repeat the same clarification request. Either continue with the information already available or ask one different, more specific missing-field question only if absolutely necessary.'
+                        });
+                        continue;
+                    }
+                    this.pendingClarification = {
+                        question,
+                        normalized: this._normalizeClarificationQuestion(question),
+                        requestedAt: new Date().toISOString()
+                    };
+                    this.onUpdate({ type: 'input_requested', message: `💬 **[${response.provider || 'AI'}/${response.model || 'Brain'}] Internal Question:** ${question}` });
                     this.isWaitingForInput = true;
                     this._finishRun('paused');
                     return; // Pause execution
                 }
 
-                // Execute the tool
-                let result = await this.dispatchTool(response.toolCall);
+                // Execute the tool with specialist fail-safe logic
+                let result;
+                try {
+                    result = await this.dispatchTool(response.toolCall);
+                    this.onUpdate({ type: 'thought', message: `✅ **Tool result received from ${response.toolCall.name}.**` });
+                } catch (err) {
+                    this.onUpdate({ type: 'thought', message: `⚠️ Specialist Insight: An expert-level hurdle has been encountered in [${response.toolCall.name}].` });
+                    
+                    // Generate a "Specialist Recovery Report" instead of a simple error
+                    const troubleshootingSkills = SkillReaderTool.searchSkills(err.message + " " + response.toolCall.name);
+                    const skillContext = troubleshootingSkills.length > 0 ? `Relevant expert SOPs found for repair: ${troubleshootingSkills.join(', ')}` : "No direct local repair SOP found.";
+
+                    const recoveryPrompt = `The system encountered a technical error: "${err.message}" while running the tool "${response.toolCall.name}". 
+${skillContext}
+
+As a professional expert, analyze this failure and propose 3 distinct ways the Boss can help me finish this task (e.g., provide a different API key, use a different tool, or manual workaround). Act like a pro employee—refer to alternatives and suggest how we can create it despite this hurdle.`;
+                    
+                    const recoveryReport = await this.llmService.generateResponse([{ role: 'user', content: recoveryPrompt }], { mode: 'chat' });
+                    result = `### SPECIALIST RECOVERY REPORT\n${recoveryReport.text || err.message}`;
+                    this.onUpdate({ type: 'thought', message: result });
+                }
+
                 if (this.isStopped) break;
+                
+                // [RESILIENCE] Auto-Sync Intelligence: If we just opened a page, automatically scan it to eliminate "flying blind"
+                if (response.toolCall.name === 'browserAction' && response.toolCall.args.action === 'open' && !String(result).toLowerCase().includes('error')) {
+                    this.onUpdate({ type: 'thought', message: `🔍 Auto-Sync: Page opened. Performing background 'getMarkdown' for immediate context...` });
+                    const pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+                    result = `${result}\n\n[PROACTIVE PAGE SCAN]:\n${pageContent}`;
+                }
+
+                this._captureToolOutcome(response.toolCall, result);
                 let resultString = this._formatToolResult(result);
 
                 // AUTO-RECOVERY: If a browser interaction fails, automatically scan for elements
@@ -1036,26 +1826,107 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                     return;
                 }
             } else {
-                // If the LLM is explicitly asking a question or for credentials, pause instead of completing
+                // The LLM returned text only (no tool call). Check if it's asking a question or if it's just "thinking out loud".
                 const textLower = (response.text || "").toLowerCase();
-                const isAskingQuestion = textLower.includes('?') || 
-                                         textLower.includes('please provide') || 
+
+                // [RESILIENCE] Provider reported an unexpected/invalid tool call. Auto-correct and retry.
+                if (textLower.includes('unexpected_tool_call')) {
+                    const latestUser = this._getLatestUserText();
+                    const likelyBanner = this._isCreativeAssetRequest(latestUser);
+                    const correction = likelyBanner
+                        ? "ERROR: You attempted an invalid tool call. For this request, you MUST call generateImage with a concrete banner prompt (Meta Ads style). Do NOT call metaAds yet. Respond ONLY with a valid tool call."
+                        : "ERROR: You attempted an invalid tool call. Respond ONLY with a valid tool call from the provided tool schema.";
+                    this.onUpdate({ type: 'thought', message: `\u26a0\ufe0f **Detection:** Invalid tool call from LLM (UNEXPECTED_TOOL_CALL). Retrying with correction...` });
+                    this.context.push({ role: 'user', content: correction });
+                    continue;
+                }
+                const isExplicitCompletion = this._canDeclareTaskComplete(response.text);
+                const isAskingQuestion = textLower.includes('please provide') || 
                                          textLower.includes('i need your') ||
-                                         textLower.includes('tell me') ||
                                          textLower.includes('what you would like me to do') ||
-                                         textLower.includes('ready for your instructions');
+                                         textLower.includes('ready for your instructions') ||
+                                         textLower.includes('should i proceed') ||
+                                         textLower.includes('waiting for your') ||
+                                         textLower.includes('your confirmation');
                 
-                if (isAskingQuestion) {
+                // [RESILIENCE] Detect "Narrative Action" where model describes tools instead of calling them
+                // This must run BEFORE the explicit completion check to catch "hallucinated success".
+                const containsMarkdownMedia = /!\[[^\]]*\]\(([^)]+)\)/i.test(response.text || '');
+                const containsPlaceholderMedia = /\[(image|video|preview|file|audio|attachment):/i.test(textLower);
+                const containsToolCodeBlock = /<\s*tool_code\s*>/i.test(response.text || '') || /"tool_code"\s*:/i.test(response.text || '');
+                const containsPythonToolNarration = /\bnexus_os\.(generateimage|generatevideo|metaads|browseraction)\b/i.test(response.text || '');
+                const isNarratingToolSuccess = 
+                    /\b(i will use|i'll use|calling tool|now using|generating now|here is the image|post is ready|successfully (published|sent|created|generated))\b/i.test(textLower) ||
+                    containsPlaceholderMedia ||
+                    containsMarkdownMedia ||
+                    containsToolCodeBlock ||
+                    containsPythonToolNarration;
+                
+                // Don't treat internal breach notices as "narrated action".
+                const isInternalBreachNotice = textLower.trimStart().startsWith('mission breach:');
+                if (!isInternalBreachNotice && (this.currentMissionMode === 'execute' || this.currentMissionMode === 'chat') && isNarratingToolSuccess && !response.toolCall) {
+                    const correction = "ERROR: You narrated an action or provided a text placeholder (e.g. [Image:] or ![Preview](...)) but failed to provide a structured tool call. DO NOT narrate tool execution in text. You MUST use the available tools (e.g., generateImage, metaAds, browserAction) via the function schema to perform actions. Repeat the task now using a REAL tool call.";
+                    this.onUpdate({ type: 'thought', message: `⚠️ **Detection:** Narrated action without tool call. Injecting correction...` });
+                    this.context.push({ role: 'user', content: correction });
+                    continue;
+                }
+
+                if (isExplicitCompletion) {
+                    this.onUpdate({ type: 'complete', message: 'Task Complete. No further actions requested.' });
+                    isTaskCompleted = true;
+                    this._finishRun('completed');
+                    break;
+                }
+
+                if ((response.text || '').trim() && /\b(task complete|mission complete|completed|done|finished|all set|that's all)\b/i.test(textLower) && !isExplicitCompletion) {
+                    this.onUpdate({
+                        type: 'thought',
+                        message: 'Completion claim ignored because Nexus does not yet have enough evidence that the requested deliverable was actually produced.'
+                    });
+                    this.context.push({
+                        role: 'user',
+                        content: 'SYSTEM CORRECTION: Do not declare completion yet. The requested deliverable is not sufficiently evidenced. Continue only with steps that directly produce or verify the deliverable.'
+                    });
+                    continue;
+                }
+
+                // [RESILIENCE] In CHAT mode, a text-only reply IS the response — pause for user input.
+                if (this.currentMissionMode === 'chat') {
+                    console.log(`[Chat Mode] Conversational reply sent. Pausing for user input.`);
                     this.onUpdate({ type: 'pause' });
                     this.isWaitingForInput = true;
                     this._finishRun('paused');
-                    return; // Pause execution, keeping context alive for resume()
+                    return;
                 }
 
-                this.onUpdate({ type: 'complete', message: 'Task Complete. No further actions requested.' });
-                isTaskCompleted = true;
-                this._finishRun('completed');
-                break;
+                if (isAskingQuestion) {
+                    const extractedQuestion = this._extractClarificationQuestion(response.text);
+                    const clarificationDecision = this._shouldAskClarification(extractedQuestion || response.text);
+                    if (extractedQuestion && clarificationDecision.allow) {
+                        this.pendingClarification = {
+                            question: extractedQuestion,
+                            normalized: this._normalizeClarificationQuestion(extractedQuestion),
+                            requestedAt: new Date().toISOString()
+                        };
+                        this.onUpdate({ type: 'input_requested', message: extractedQuestion });
+                        this.isWaitingForInput = true;
+                        this._finishRun('paused');
+                        return;
+                    }
+                    if (!clarificationDecision.allow) {
+                        this.context.push({
+                            role: 'user',
+                            content: 'SYSTEM CORRECTION: Do not repeat the same vague clarification. Continue with the available context or ask one new, specific missing-field question only if the task is truly blocked.'
+                        });
+                        continue;
+                    }
+                }
+
+                if (textLower.length > 0) {
+                    this.onUpdate({ type: 'thought', message: response.text });
+                }
+                console.log(`[RESILIENCE] Text-only turn detected. Continuing loop for tool execution...`);
+                continue;
             }
         }
 
@@ -1064,13 +1935,19 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
         }
 
-        // Close browser after finished missions, or when explicitly requested.
+        // MISSION STABILITY: Only close browser if explicitly requested or if it's a "leaf" mission.
         const requestToCheck = originalRequest || (this.context.find(m => m.role === 'user')?.content || "");
         const usedBrowser = Boolean(this.currentRun?.toolsUsed?.browserAction);
-        const shouldClose = !this.isWaitingForInput && (usedBrowser || /auto[- ]?close(d)?/i.test(requestToCheck));
-        if (shouldClose) {
-            this.onUpdate({ type: 'step', message: 'Auto-closing browser as requested...' });
+        const hasExplicitClose = /auto[- ]?close(d)?/i.test(requestToCheck) || /stop browser|close browser/i.test(requestToCheck);
+        
+        // Don't close if we are waiting for input, OR if we used the browser and haven't finished the goal.
+        const shouldClose = !this.isWaitingForInput && hasExplicitClose;
+        
+        if (shouldClose && usedBrowser) {
+            this.onUpdate({ type: 'step', message: 'Auto-closing browser as requested or per mission completion protocol...' });
             await this.browserInstance.close();
+        } else if (usedBrowser && !this.isWaitingForInput) {
+            this.onUpdate({ type: 'thought', message: "🌐 **Persistence Layer:** Browser session remains active for subsequent turn continuity." });
         }
     }
 
@@ -1117,6 +1994,9 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
         if (toolCall.name === 'metaAds') {
             const normalizedArgs = { ...(toolCall.args || {}) };
+            // SECURITY: The model must never be able to "self-approve" a dangerous action.
+            // Only _handleApprovalResponse() can set boss_approved=true with skipGovernance enabled.
+            if ('boss_approved' in normalizedArgs) delete normalizedArgs.boss_approved;
             if (typeof normalizedArgs.body === 'string' && normalizedArgs.body.trim()) {
                 try {
                     const parsedBody = JSON.parse(normalizedArgs.body);
@@ -1164,7 +2044,75 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             return { name: 'linkedinAds', args: { ...(toolCall.args || {}), action: 'publishPost' } };
         }
 
+        if (toolCall.name === 'linkedinDeletePost') {
+            return { name: 'linkedinAds', args: { ...(toolCall.args || {}), action: 'deletePost' } };
+        }
+
+        if (toolCall.name === 'twitterAds' || toolCall.name === 'x' || toolCall.name === 'tweet') {
+            return { name: 'xAds', args: { ...(toolCall.args || {}) } };
+        }
+
+        if (toolCall.name === 'xDeletePost') {
+            return { name: 'xAds', args: { ...(toolCall.args || {}), action: 'deletePost' } };
+        }
+
         return toolCall;
+    }
+
+    _isPlaceholderValue(value) {
+        const v = String(value ?? '').trim().toLowerCase();
+        if (!v) return false;
+        return (
+            v.startsWith('your_') ||
+            v.includes('path_to_your_') ||
+            v.includes('example.com') ||
+            v === 'todo' ||
+            v === 'tbd'
+        );
+    }
+
+    _isCreativeAssetRequest(text = '') {
+        const t = String(text || '').toLowerCase();
+        return /\b(banner|poster|flyer|thumbnail|creative|ad\s*creative)\b/.test(t) || /\b(generate|create)\b.*\b(image|banner|creative)\b/.test(t);
+    }
+
+    _getLatestUserText() {
+        for (let i = this.context.length - 1; i >= 0; i--) {
+            if (this.context[i]?.role === 'user') return String(this.context[i]?.content || '');
+        }
+        return '';
+    }
+
+    _hasImageArtifact() {
+        const p = String(this.currentMissionArtifact?.path || this.lastUploadedFile || '').trim();
+        return Boolean(p) && /\.(png|jpg|jpeg|webp)$/i.test(p);
+    }
+
+    _trimContextForLlm(context = []) {
+        // Prevent "request too large" / max context loops by keeping a small, high-signal window.
+        const MAX_MESSAGES = 24;
+        const MAX_TOOL_CHARS = 4000;
+        const MAX_TEXT_CHARS = 8000;
+
+        const sliced = Array.isArray(context) ? context.slice(-MAX_MESSAGES) : [];
+        return sliced.map((m) => {
+            const role = m?.role;
+            const out = { ...m };
+
+            if (role === 'tool') {
+                const s = typeof out.content === 'string' ? out.content : JSON.stringify(out.content || {});
+                out.content = s.length > MAX_TOOL_CHARS ? `${s.slice(0, MAX_TOOL_CHARS)}\n...[TRUNCATED]` : s;
+                return out;
+            }
+
+            if (role === 'user' || role === 'assistant' || role === 'system') {
+                const s = String(out.content || '');
+                out.content = s.length > MAX_TEXT_CHARS ? `${s.slice(0, MAX_TEXT_CHARS)}\n...[TRUNCATED]` : s;
+                return out;
+            }
+
+            return out;
+        });
     }
 
     _isBlankValue(value) {
@@ -1228,8 +2176,14 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     _isExternalActionConfirmed(name, result) {
         if (!name) return false;
         if (name === 'metaAds') return this._isSuccessfulMetaPublishResult(result);
-        if (name === 'linkedinPublishPost') {
+        if (name === 'linkedinPublishPost' || (name === 'linkedinAds' && args?.action === 'publishPost')) {
             return Boolean(result && typeof result === 'object' && (result.success === true || result.id));
+        }
+        if (name === 'linkedinDeletePost' || (name === 'linkedinAds' && args?.action === 'deletePost')) {
+            return Boolean(result && typeof result === 'object' && (result.success === true || result.deleted === true));
+        }
+        if (name === 'xDeletePost' || (name === 'xAds' && args?.action === 'deletePost')) {
+            return Boolean(result && typeof result === 'object' && (result.success === true || result.deleted === true));
         }
         if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
             if (Array.isArray(result) && result.length > 0) return true;
@@ -1245,8 +2199,36 @@ ${JSON.stringify(quoteDefaults, null, 2)}
     async _preflightExternalAction(toolCall = {}) {
         const { name, args = {} } = toolCall;
         if (name === 'metaAds') {
-            const status = await MetaAdsTool.getSetupStatus();
+            const status = typeof this.tools?.metaAds?.getSetupStatus === 'function'
+                ? await this.tools.metaAds.getSetupStatus()
+                : await MetaAdsTool.getSetupStatus();
             const action = String(args.action || '');
+
+            // GUARD: If the Boss asked for a creative/banner, we must generate the asset first.
+            // Do not attempt Meta publishing/creative creation until an image artifact exists.
+            const latestUser = this._getLatestUserText();
+            const creativeFirst = this._isCreativeAssetRequest(latestUser);
+            if (creativeFirst && !this._hasImageArtifact()) {
+                return {
+                    ok: false,
+                    error: `Meta action ${action} blocked: banner/image must be generated first. Use generateImage, then ask for approval to publish/promote.`,
+                    missingKeys: ['IMAGE_ASSET'],
+                    provider: 'meta'
+                };
+            }
+
+            // GUARD: Block placeholder arguments so we don't enter approval loops with fake ids/paths.
+            const placeholderKeys = ['pageId', 'adAccountId', 'imageHash', 'imagePath', 'videoPath', 'link'];
+            const placeholders = placeholderKeys.filter((k) => this._isPlaceholderValue(args?.[k]));
+            if (placeholders.length) {
+                return {
+                    ok: false,
+                    error: `Meta action ${action} blocked: placeholder values detected for ${placeholders.join(', ')}. Provide real values or generate/upload the asset first.`,
+                    missingKeys: placeholders.map((k) => `REAL_${k.toUpperCase()}`),
+                    provider: 'meta'
+                };
+            }
+
             const needsPaidSetup = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'uploadImage', 'getAccountInfo'].includes(action);
             const needsOrganicSetup = ['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel', 'getPageInsights'].includes(action);
             const requestedChannels = Array.isArray(args.channels) ? args.channels.map((item) => String(item || '').trim().toLowerCase()) : [];
@@ -1284,7 +2266,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             return { ok: true };
         }
 
-        if (name === 'linkedinAds' || name === 'linkedinPublishPost') {
+        if (name === 'linkedinAds' || name === 'linkedinPublishPost' || name === 'linkedinDeletePost') {
             const status = await LinkedInAdsTool.getSetupStatus();
             if (!status.hasAccessToken) {
                 return {
@@ -1349,6 +2331,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 return await MetaAdsTool.setCredentials(args.accessToken, args.adAccountId, args.pageId);
             case 'metaReplyToComment':
                 return await MetaAdsTool.replyToComment(args.commentId, args.message);
+            case 'deleteObject':
+                return await MetaAdsTool.deleteObject(args.objectId || this._resolveLatestTargetId('meta'));
             default:
                 return `Unknown metaAds action: ${action}`;
         }
@@ -1379,22 +2363,60 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         switch (action) {
             case 'publishPost':
                 return await LinkedInAdsTool.publishOrganicPost(args.urn, args.text, args.imagePath || this.lastUploadedFile || null);
+            case 'deletePost':
+                return await LinkedInAdsTool.deletePost(args.postId || this._resolveLatestTargetId('linkedin'));
             default:
                 return `Unknown linkedinAds action: ${action}`;
         }
     }
 
+    async _runXAdsAction(args = {}) {
+        const action = String(args.action || 'publishPost');
+        switch (action) {
+            case 'publishPost':
+                XAdsTool.browserAction = (browserArgs) => this.browserInstance.executeAction(browserArgs);
+                return await XAdsTool.publishOrganicPost(args.text, args.imagePath || this.lastUploadedFile || null);
+            case 'deletePost':
+                XAdsTool.browserAction = (browserArgs) => this.browserInstance.executeAction(browserArgs);
+                return await XAdsTool.deletePost(args.postUrl || this._resolveLatestTargetId('x'));
+            default:
+                return `Unknown xAds action: ${action}`;
+        }
+    }
+
     async _dispatchTool(toolCall, options = {}) {
         const normalizedToolCall = this._normalizeToolCall(toolCall);
-        const { name, args } = normalizedToolCall;
+        const { name } = normalizedToolCall;
+        let args = normalizedToolCall.args;
         
         if (this.currentRun) {
             this.currentRun.toolCalls += 1;
             this.currentRun.lastTool = name;
             this.currentRun.toolsUsed[name] = (this.currentRun.toolsUsed[name] || 0) + 1;
+            const toolUsageKey = `${name}::${String(args?.action || '').trim() || 'default'}`;
+            this.currentRun.toolUsage = this.currentRun.toolUsage || {};
+            this.currentRun.toolUsage[toolUsageKey] = {
+                tool: name,
+                action: String(args?.action || '').trim() || '',
+                calls: Number(this.currentRun.toolUsage[toolUsageKey]?.calls || 0) + 1
+            };
         }
+        await UsageTracker.recordToolUsage({
+            tool: name,
+            action: String(args?.action || '').trim() || '',
+            provider: ['metaAds', 'googleAds', 'linkedinAds', 'xAds'].includes(name) ? name : 'Nexus',
+            clientId: this.currentClientId || null,
+            sessionId: this.currentSessionId || null,
+            runId: this.currentRun?.id || null,
+            requestPreview: this.currentRun?.requestPreview || ''
+        });
 
         try {
+            if (!this._isToolRelevantToTask(normalizedToolCall)) {
+                const request = this.currentTaskContract?.objective || this._getLatestUserText() || 'the active task';
+                return `MISSION BREACH: Tool '${name}' is not relevant to the current task. Stay focused on: ${request}`;
+            }
+
             const preflight = await this._preflightExternalAction(normalizedToolCall);
             if (!preflight.ok) return preflight;
 
@@ -1413,6 +2435,12 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 });
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: ${governance.reason}\n${governance.preview}`;
+            }
+
+            // SECURITY: If this call is being executed after explicit user approval, set boss_approved here.
+            // The model never gets to set boss_approved itself (we strip it in _normalizeToolCall).
+            if (options.skipGovernance && governance.requiresApproval) {
+                args = { ...(args || {}), boss_approved: true };
             }
 
             if (governance.requiresApproval && (options.skipGovernance || args?.boss_approved === true)) {
@@ -1438,7 +2466,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             }
 
             // B. Special Handler: Ads
-            if (['metaAds', 'googleAds', 'linkedinAds'].includes(name)) {
+            if (['metaAds', 'googleAds', 'linkedinAds', 'xAds'].includes(name)) {
                 if (name === 'metaAds') {
                     const dangerous = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'];
                     if (dangerous.includes(args.action) && args.boss_approved !== true) return "⚠️ MISSION BREACH: Dangerous action attempted without approval.";
@@ -1448,8 +2476,18 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
             // C. Special Handler: Generative Media
             if (name === 'generateImage') {
-                const result = await ImageGenTool.generateImage(args.prompt, args.savePath);
-                if (!String(result).toLowerCase().startsWith('error')) await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
+                const resolvedSavePath = args.savePath || path.join(this.taskDir || __dirname, `generated_image_${Date.now()}.png`);
+                const result = await ImageGenTool.generateImage(args.prompt, resolvedSavePath, { aspectRatio: args.aspectRatio, refine: args.refine });
+                if (!String(result).toLowerCase().startsWith('error')) {
+                    await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
+                    this._registerMissionArtifact({
+                        kind: 'image',
+                        path: resolvedSavePath,
+                        prompt: args.prompt,
+                        sourceTool: 'generateImage',
+                        aspectRatio: args.aspectRatio || null
+                    });
+                }
                 return result;
             }
 
@@ -1494,7 +2532,8 @@ ${JSON.stringify(quoteDefaults, null, 2)}
 
     async _runChatLoop(originalRequest = null) {
         if (this.currentRun) this.currentRun.llmCalls += 1;
-        const response = await this.llmService.generateResponse(this.context, { mode: 'chat', enableTools: false });
+        const llmContext = this._trimContextForLlm(this.context);
+        const response = await this.llmService.generateResponse(llmContext, { mode: 'chat', enableTools: false });
         if (this.isStopped) return;
 
         if (this.currentRun) {
@@ -1601,6 +2640,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
                 });
             }
             const result = await this._dispatchTool(approvedCall, { skipGovernance: true });
+            this._captureToolOutcome(approvedCall, result);
             this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
             this.context.push({ role: 'tool', name: approvedCall.name, content: result });
             if (this._isMetaOrganicPublishAction(approvedCall)) {
@@ -1902,6 +2942,7 @@ ${toolSource}`
     }
 
     _beginRun(request) {
+        this.stepCount = 0; // Reset step counter for each new mission
         this.currentRun = {
             id: `run_${Date.now()}`,
             requestPreview: String(request || '').trim().slice(0, 160) || 'Mission',
@@ -1917,6 +2958,7 @@ ${toolSource}`
             lastLlmProvider: null,
             lastLlmModel: null,
             providerUsage: {},
+            toolUsage: {},
             providerSwitches: [],
             steps: 0,
             clientId: this.currentClientId || null,
@@ -1941,6 +2983,15 @@ ${toolSource}`
         this.currentRun.estimatedCostUsd = Number((providerCostUsd > 0 ? providerCostUsd : fallbackCostUsd).toFixed(6));
         this.recentRuns.unshift(this.currentRun);
         this.recentRuns = this.recentRuns.slice(0, 12);
+
+        // [TRANSPARENCY] Provide a professional closing signal if the mission completed successfully
+        // Only signal "Achieved" if at least one tool call was performed, otherwise it's just a conversational turn
+        if (status === 'completed' && !this.isWaitingForInput && (this.currentRun.toolCalls > 0 || this.stepCount > 1)) {
+            this.onUpdate({ 
+                type: 'thought', 
+                message: `🎯 **Mission Goal Achieved:** Nexus has completed the required actions for this turn. Standing by for your next directive, Boss.` 
+            });
+        }
     }
 
     getMissionControlData() {
@@ -1961,6 +3012,12 @@ ${toolSource}`
             pendingApproval: this.pendingApproval,
             pendingRequirement: this.pendingRequirement,
             pendingRepair: this.pendingRepair,
+            currentMissionArtifact: this.currentMissionArtifact || null,
+            missionArtifactHistory: (this.missionArtifactHistory || []).slice(0, 10),
+            pendingActionChain: this.pendingActionChain || [],
+            lastPublishedTargets: (this.lastPublishedTargets || []).slice(0, 5),
+            activeMissionDomain: this.activeMissionDomain || 'general',
+            missionTaskStack: (this.missionTaskStack || []).slice(0, 10),
             missionMode: this.currentMissionMode,
             auditTrail: this.auditTrail.slice(0, 20),
             recoveryHistory: this.recoveryHistory.slice(0, 20),
@@ -1994,6 +3051,12 @@ ${toolSource}`
             recentRuns: this.recentRuns,
             currentOrganicMetaDraft: this.currentOrganicMetaDraft,
             currentWorkflowState: this.currentWorkflowState,
+            currentMissionArtifact: this.currentMissionArtifact || null,
+            missionArtifactHistory: this.missionArtifactHistory || [],
+            pendingActionChain: this.pendingActionChain || [],
+            lastPublishedTargets: this.lastPublishedTargets || [],
+            activeMissionDomain: this.activeMissionDomain || 'general',
+            missionTaskStack: this.missionTaskStack || [],
             pendingApproval: this.pendingApproval,
             pendingRepair: this.pendingRepair,
             auditTrail: this.auditTrail,
@@ -2008,7 +3071,6 @@ ${toolSource}`
         if (!state) return;
         if (state.context) this.context = state.context;
         if (state.lastUploadedFile) this.lastUploadedFile = state.lastUploadedFile;
-        if (state.stepCount !== undefined) this.stepCount = state.stepCount;
         if (state.currentClientId !== undefined) this.currentClientId = state.currentClientId;
         if (state.currentMarketingWorkflow !== undefined) this.currentMarketingWorkflow = state.currentMarketingWorkflow;
         if (state.missionMode !== undefined) this.currentMissionMode = state.missionMode;
@@ -2018,6 +3080,12 @@ ${toolSource}`
         if (state.recentRuns) this.recentRuns = state.recentRuns;
         if (state.currentOrganicMetaDraft) this.currentOrganicMetaDraft = state.currentOrganicMetaDraft;
         if (state.currentWorkflowState) this.currentWorkflowState = state.currentWorkflowState;
+        if (state.currentMissionArtifact) this.currentMissionArtifact = state.currentMissionArtifact;
+        if (state.missionArtifactHistory) this.missionArtifactHistory = state.missionArtifactHistory;
+        if (state.pendingActionChain) this.pendingActionChain = state.pendingActionChain;
+        if (state.lastPublishedTargets) this.lastPublishedTargets = state.lastPublishedTargets;
+        if (state.activeMissionDomain) this.activeMissionDomain = state.activeMissionDomain;
+        if (state.missionTaskStack) this.missionTaskStack = state.missionTaskStack;
         if (state.pendingApproval) this.pendingApproval = state.pendingApproval;
         if (state.pendingRequirement) this.pendingRequirement = state.pendingRequirement;
         if (state.pendingRepair) this.pendingRepair = state.pendingRepair;
@@ -2043,3 +3111,14 @@ if (require.main === module) {
 }
 
 module.exports = NexusOrchestrator;
+
+
+
+
+
+
+
+
+
+
+

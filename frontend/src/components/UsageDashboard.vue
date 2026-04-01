@@ -28,6 +28,8 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
       </div>
       <div class="card-grid">
         <div class="mini-card"><label>Period calls</label><strong>{{ globalUsageSummary.totals.calls || 0 }}</strong><p class="muted">{{ usagePeriod.toUpperCase() }}</p></div>
+        <div class="mini-card"><label>Tool calls</label><strong>{{ globalUsageSummary.totals.toolCalls || 0 }}</strong><p class="muted">tracked tool executions</p></div>
+        <div class="mini-card"><label>Active days</label><strong>{{ globalUsageSummary.totals.activeDays || 0 }}</strong><p class="muted">days with activity</p></div>
         <div class="mini-card"><label>Free calls</label><strong>{{ globalUsageSummary.totals.freeCalls || 0 }}</strong><p class="muted">estimated free</p></div>
         <div class="mini-card"><label>Paid calls</label><strong>{{ globalUsageSummary.totals.paidCalls || 0 }}</strong><p class="muted">estimated paid</p></div>
         <div class="mini-card"><label>Paid cost</label><strong>{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }}</strong><p class="muted">estimated cost</p></div>
@@ -63,8 +65,10 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
         <div class="stack-item">
           <strong>Tracked Nexus usage</strong>
           <p class="muted">{{ globalUsageSummary.totals.calls || 0 }} total calls · {{ globalUsageSummary.totals.freeCalls || 0 }} free · {{ globalUsageSummary.totals.paidCalls || 0 }} paid</p>
+          <p class="muted">{{ globalUsageSummary.totals.toolCalls || 0 }} tool calls · {{ globalUsageSummary.totals.activeDays || 0 }} active days</p>
           <p class="muted">{{ globalUsageSummary.totals.totalTokens || 0 }} total tokens | {{ globalUsageSummary.totals.inputTokens || 0 }} in | {{ globalUsageSummary.totals.outputTokens || 0 }} out</p>
           <p class="muted">{{ dualCurrency(globalUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage</p>
+          <p class="muted">Window: {{ prettyDate(globalUsageSummary.window?.firstUsedAt) }} to {{ prettyDate(globalUsageSummary.window?.lastUsedAt) }}</p>
           <p class="muted">Exact for requests routed through Nexus. This is not Google-official remaining quota.</p>
         </div>
         <div v-if="globalUsageSummary.providers?.length" class="stack-item">
@@ -76,11 +80,25 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
 
     <div class="panel">
       <div class="panel-head">
+        <div><span class="tiny-label">Tools</span><h3>Global tool breakdown</h3></div>
+      </div>
+      <div v-if="globalUsageSummary.tools?.length" class="stack-list">
+        <div v-for="tool in globalUsageSummary.tools" :key="`${tool.tool}-${tool.action}`" class="stack-item">
+          <div class="run-head"><strong>{{ tool.tool }}</strong><span>{{ tool.calls }} calls</span></div>
+          <p class="muted">{{ tool.action || 'default action' }}</p>
+          <p class="muted">{{ dualCurrency(tool.estimatedCostUsd || 0) }} · {{ prettyDate(tool.lastUsedAt) }}</p>
+        </div>
+      </div>
+      <p v-else class="muted">Tool breakdown will appear after tracked tool executions.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
         <div><span class="tiny-label">Trend</span><h3>Daily usage trend</h3></div>
       </div>
       <div v-if="globalUsageChart.length" class="usage-chart">
         <div v-for="point in globalUsageChart" :key="point.date" class="usage-bar-wrap">
-          <div class="usage-bar" :style="{ height: point.height }" :title="`${point.date}: ${point.calls} calls`"></div>
+          <div class="usage-bar" :style="{ height: point.height }" :title="`${point.date}: ${point.calls} calls / ${point.toolCalls || 0} tools`"></div>
           <span>{{ point.date.slice(5) }}</span>
         </div>
       </div>
@@ -126,8 +144,10 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
         <div class="stack-item">
           <strong>Tracked client usage</strong>
           <p class="muted">{{ clientUsageSummary.totals.calls || 0 }} total calls · {{ clientUsageSummary.totals.freeCalls || 0 }} free · {{ clientUsageSummary.totals.paidCalls || 0 }} paid</p>
+          <p class="muted">{{ clientUsageSummary.totals.toolCalls || 0 }} tool calls · {{ clientUsageSummary.totals.activeDays || 0 }} active days</p>
           <p class="muted">{{ clientUsageSummary.totals.totalTokens || 0 }} total tokens | {{ clientUsageSummary.totals.inputTokens || 0 }} in | {{ clientUsageSummary.totals.outputTokens || 0 }} out</p>
           <p class="muted">{{ dualCurrency(clientUsageSummary.totals.estimatedCostUsd || 0) }} estimated paid usage</p>
+          <p class="muted">Window: {{ prettyDate(clientUsageSummary.window?.firstUsedAt) }} to {{ prettyDate(clientUsageSummary.window?.lastUsedAt) }}</p>
           <p class="muted">Exact for activity executed through Nexus under this client context only.</p>
         </div>
         <div v-if="clientUsageSummary.providers?.length" class="stack-item">
@@ -138,6 +158,10 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
           <strong>Models</strong>
           <p v-for="model in clientUsageSummary.models" :key="`${model.provider}-${model.model}-${model.mode}`" class="muted">{{ model.provider }} / {{ model.model }} · {{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ model.resetCadence }} · {{ model.kind || 'llm' }}</p>
         </div>
+        <div v-if="clientUsageSummary.tools?.length" class="stack-item">
+          <strong>Tools</strong>
+          <p v-for="tool in clientUsageSummary.tools" :key="`${tool.tool}-${tool.action}`" class="muted">{{ tool.tool }}{{ tool.action ? ` / ${tool.action}` : '' }} · {{ tool.calls }} calls · {{ prettyDate(tool.lastUsedAt) }}</p>
+        </div>
       </div>
       <p v-if="!selectedFinanceClient" class="muted">Select a client to see client-based model and media usage.</p>
     </div>
@@ -147,7 +171,7 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
         <div><span class="tiny-label">Models</span><h3>Global model breakdown</h3></div>
       </div>
       <div v-if="globalUsageSummary.models?.length" class="stack-list">
-        <div v-for="model in globalUsageSummary.models" :key="`${model.provider}-${model.model}`" class="stack-item">
+        <div v-for="model in globalUsageSummary.models" :key="`${model.provider}-${model.model}-${model.mode}`" class="stack-item">
           <div class="run-head"><strong>{{ model.provider }}</strong><span>{{ model.kind || 'llm' }}</span></div>
           <p class="muted">{{ model.model }}</p>
           <p class="muted">{{ model.calls }} calls · {{ model.freeCalls }} free · {{ model.paidCalls }} paid · {{ dualCurrency(model.estimatedCostUsd || 0) }}</p>
@@ -178,6 +202,7 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
       <div v-if="usageLeaders.length" class="stack-list">
         <div v-for="leader in usageLeaders" :key="leader.clientId" class="stack-item">
           <div class="run-head"><strong>{{ leader.clientName }}</strong><span>{{ leader.calls }} calls</span></div>
+          <p class="muted">{{ leader.toolCalls || 0 }} tool calls · {{ leader.activeDays || 0 }} active days</p>
           <p class="muted">{{ leader.freeCalls || 0 }} free · {{ leader.paidCalls || 0 }} paid · {{ dualCurrency(leader.estimatedCostUsd || 0) }}</p>
         </div>
       </div>

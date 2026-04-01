@@ -87,9 +87,17 @@ class BrowserTool {
     }
 
     async close() {
+        const stack = new Error().stack;
+        console.log(`[Browser] Close requested. Current state: browser=${!!this.browser}, page=${!!this.page}.`);
+        console.log(`[Browser] Shutdown Stack: ${stack.split('\n')[2].trim()}`);
+        
         this.stopRequested = true;
         if (this.browser) {
-            await this.browser.close();
+            try {
+                await this.browser.close();
+            } catch (err) {
+                console.error(`[Browser] Error during close: ${err.message}`);
+            }
             this.browser = null;
             this.page = null;
         }
@@ -161,15 +169,15 @@ class BrowserTool {
 
                 case 'click':
                     if (!args.selector) return 'Error: action=click requires selector';
-                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                    await this.page.waitForSelector(args.selector, { visible: true, timeout: args.timeout || 10000 });
                     await this.page.click(args.selector);
                     return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'type':
                     if (!args.selector || !args.text) return 'Error: action=type requires selector and text';
-                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
+                    await this.page.waitForSelector(args.selector, { visible: true, timeout: args.timeout || 10000 });
                     await this.page.focus(args.selector);
-                    await this.page.type(args.selector, args.text);
+                    await this.page.type(args.selector, args.text, { delay: 50 });
                     return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, page: await this._describePageState() }, null, 2);
 
                 case 'clearAndType':
@@ -246,7 +254,7 @@ class BrowserTool {
                         // Use Puppeteer's built-in text selector which finds the deepest matching element
                         const safeText = String(args.text).replace(/[\\()]/g, '\\$&');
                         const selector = `::-p-text(${safeText})`;
-                        await this.page.waitForSelector(selector, { timeout: 5000 });
+                        await this.page.waitForSelector(selector, { visible: true, timeout: args.timeout || 10000 });
                         // Click via evaluate to bypass strict visibility/overlay checks
                         await this.page.$eval(selector, el => {
                             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -254,7 +262,7 @@ class BrowserTool {
                         });
                         return `Successfully clicked element containing text: '${args.text}'`;
                     } catch (err) {
-                        return `Error clicking element with text '${args.text}': ${err.message}`;
+                        return JSON.stringify({ ok: false, action, text: args.text, error: err.message, classification: 'interaction_failure', page: await this._describePageState() }, null, 2);
                     }
 
                 case 'extract':

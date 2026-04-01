@@ -39,19 +39,42 @@ export function useChatShellActions(options) {
     openSettings,
     scrollToBottom,
     isLikelyContinuationPrompt,
-    clientKeyLabels
+    clientKeyLabels,
+    uploadedContextFiles = { value: [] }
   } = options
 
-  async function handleFileUpload(event) {
-    const file = event.target.files?.[0]
-    if (!file) return
-    const formData = new FormData()
-    formData.append('file', file)
-    const response = await fetch('/upload', { method: 'POST', body: formData })
-    const data = await response.json()
-    if (!response.ok) return showToast('Upload failed, Boss', 'error')
-    promptInput.value = `${promptInput.value}${promptInput.value ? '\n' : ''}[Context File Loaded: Path: \`${data.path}\`]`
-    showToast('File attached to mission context')
+  async function handleFileUpload(payload) {
+    const files = Array.isArray(payload)
+      ? payload
+      : Array.from(payload?.target?.files || payload?.dataTransfer?.files || [])
+    if (!files.length) return
+    const uploaded = []
+    for (const file of files) {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch('/upload', { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) {
+        showToast(`Upload failed for ${file.name}`, 'error')
+        continue
+      }
+      uploaded.push({
+        name: data.originalName || data.filename || file.name,
+        path: data.path,
+        url: data.url,
+        mimeType: data.mimeType || file.type || ''
+      })
+    }
+    if (!uploaded.length) return
+    uploadedContextFiles.value = [...uploadedContextFiles.value, ...uploaded]
+    const promptLines = uploaded.map((item) => {
+      const isImage = String(item.mimeType || '').startsWith('image/')
+      const isVideo = String(item.mimeType || '').startsWith('video/')
+      if (isImage || isVideo) return `[${isImage ? 'Uploaded image' : 'Uploaded video'}: ${item.name}](${item.url})\n[Context File Loaded: Path: \`${item.path}\`]`
+      return `[Uploaded file: ${item.name}](${item.url})\n[Context File Loaded: Path: \`${item.path}\`]`
+    })
+    promptInput.value = `${promptInput.value}${promptInput.value ? '\n' : ''}${promptLines.join('\n')}`
+    showToast(`${uploaded.length} file${uploaded.length > 1 ? 's' : ''} attached to mission context`)
   }
 
   async function submitTask() {
@@ -75,6 +98,7 @@ export function useChatShellActions(options) {
     const prefix = selectedClientForChat.value ? `[Client Context: ${activeClientName.value}] ` : ''
     chatHistory.value.push({ sender: 'user', text: `${prefix}${prompt}` })
     promptInput.value = ''
+    uploadedContextFiles.value = []
     isWorking.value = true
     const isPaused = hasWaitingMission.value
     const hasExplicitBlocker = !!missionSummary.value.pendingApproval ||
@@ -103,13 +127,17 @@ export function useChatShellActions(options) {
   }
 
   function startNewOrchestration() {
+    // Prevent the next mount/reconnect from rejoining an old persisted session.
+    localStorage.removeItem('nexus_session_id')
     socket.emit('start_new_session')
     chatHistory.value = [{ sender: 'nexus', text: 'Fresh session started, Boss. Define the next agency objective.' }]
     runtimeLogs.value = []
     outputFiles.value = []
     promptInput.value = ''
+    uploadedContextFiles.value = []
     isWorking.value = false
     missionStatus.value = 'idle'
+    missionSummary.value = {}
     activeView.value = 'chat'
   }
 

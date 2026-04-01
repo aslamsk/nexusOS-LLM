@@ -72,6 +72,35 @@ function estimateResetCadence(provider, model, quotaMode = 'FREE') {
 }
 
 class UsageTracker {
+    async recordToolUsage({
+        tool,
+        action = '',
+        provider = 'Nexus',
+        clientId = null,
+        sessionId = null,
+        runId = null,
+        requestPreview = '',
+        estimatedCostUsd = 0
+    }) {
+        const event = {
+            kind: 'tool',
+            provider: normalizeProvider(provider),
+            model: String(tool || 'unknown-tool').trim() || 'unknown-tool',
+            tool: String(tool || 'unknown-tool').trim() || 'unknown-tool',
+            action: String(action || '').trim(),
+            clientId: clientId || null,
+            sessionId: sessionId || null,
+            runId: runId || null,
+            requestPreview: String(requestPreview || '').slice(0, 160),
+            usageTier: 'tracked',
+            quotaMode: 'TRACKED',
+            estimatedCostUsd: Number(estimatedCostUsd || 0),
+            timestamp: new Date()
+        };
+
+        return this._persistEvent(event);
+    }
+
     async recordLlmUsage({
         provider,
         model,
@@ -158,14 +187,22 @@ class UsageTracker {
                 calls: 0,
                 freeCalls: 0,
                 paidCalls: 0,
-                estimatedCostUsd: 0
-                ,
+                toolCalls: 0,
+                llmCalls: 0,
+                mediaCalls: 0,
+                activeDays: 0,
+                estimatedCostUsd: 0,
                 inputTokens: 0,
                 outputTokens: 0,
                 totalTokens: 0
             },
             providers: [],
             models: [],
+            tools: [],
+            window: {
+                firstUsedAt: null,
+                lastUsedAt: null
+            },
             daily: []
         };
     }
@@ -183,15 +220,54 @@ class UsageTracker {
 
             const providerMap = new Map();
             const modelMap = new Map();
+            const toolMap = new Map();
             const dailyMap = new Map();
             const summary = this._emptySummary(clientId ? 'client' : 'global', clientId);
 
             const startDate = getStartDateForPeriod(period);
             snapshot.forEach((doc) => {
                 const data = doc.data() || {};
-                if (!['llm', 'media'].includes(data.kind)) return;
+                if (!['llm', 'media', 'tool'].includes(data.kind)) return;
                 const timestampDate = toDate(data.timestamp);
                 if (startDate && timestampDate && timestampDate < startDate) return;
+
+                const timestamp = timestampDate?.toISOString?.() || null;
+                const dayKey = timestampDate ? timestampDate.toISOString().slice(0, 10) : 'unknown';
+                summary.window.firstUsedAt = !summary.window.firstUsedAt || (timestamp && timestamp < summary.window.firstUsedAt) ? timestamp : summary.window.firstUsedAt;
+                summary.window.lastUsedAt = !summary.window.lastUsedAt || (timestamp && timestamp > summary.window.lastUsedAt) ? timestamp : summary.window.lastUsedAt;
+
+                const dayEntry = dailyMap.get(dayKey) || {
+                    date: dayKey,
+                    calls: 0,
+                    freeCalls: 0,
+                    paidCalls: 0,
+                    toolCalls: 0,
+                    estimatedCostUsd: 0
+                };
+
+                if (data.kind === 'tool') {
+                    const tool = String(data.tool || data.model || 'unknown-tool');
+                    const action = String(data.action || '');
+                    const toolKey = `${tool}::${action}`;
+                    const toolEntry = toolMap.get(toolKey) || {
+                        tool,
+                        action,
+                        calls: 0,
+                        estimatedCostUsd: 0,
+                        lastUsedAt: null,
+                        provider: normalizeProvider(data.provider || 'Nexus')
+                    };
+                    toolEntry.calls += 1;
+                    toolEntry.estimatedCostUsd += Number(data.estimatedCostUsd || 0);
+                    toolEntry.lastUsedAt = toolEntry.lastUsedAt && toolEntry.lastUsedAt > timestamp ? toolEntry.lastUsedAt : timestamp;
+                    toolMap.set(toolKey, toolEntry);
+
+                    summary.totals.toolCalls += 1;
+                    dayEntry.toolCalls += 1;
+                    dayEntry.estimatedCostUsd += Number(data.estimatedCostUsd || 0);
+                    dailyMap.set(dayKey, dayEntry);
+                    return;
+                }
 
                 const provider = normalizeProvider(data.provider);
                 const model = String(data.model || 'unknown-model');
@@ -200,9 +276,7 @@ class UsageTracker {
                 const inputTokens = Number(data.inputTokens || 0);
                 const outputTokens = Number(data.outputTokens || 0);
                 const totalTokens = Number(data.totalTokens || 0);
-                const timestamp = timestampDate?.toISOString?.() || null;
                 const resetCadence = estimateResetCadence(provider, model, data.quotaMode || 'FREE');
-                const dayKey = timestampDate ? timestampDate.toISOString().slice(0, 10) : 'unknown';
                 const providerEntry = providerMap.get(provider) || {
                     provider,
                     calls: 0,
@@ -255,6 +329,8 @@ class UsageTracker {
                 modelMap.set(modelKey, modelEntry);
 
                 summary.totals.calls += 1;
+                summary.totals.llmCalls += data.kind === 'llm' ? 1 : 0;
+                summary.totals.mediaCalls += data.kind === 'media' ? 1 : 0;
                 summary.totals.freeCalls += usageTier === 'free' ? 1 : 0;
                 summary.totals.paidCalls += usageTier === 'paid' ? 1 : 0;
                 summary.totals.estimatedCostUsd += estimatedCostUsd;
@@ -262,13 +338,6 @@ class UsageTracker {
                 summary.totals.outputTokens += outputTokens;
                 summary.totals.totalTokens += totalTokens;
 
-                const dayEntry = dailyMap.get(dayKey) || {
-                    date: dayKey,
-                    calls: 0,
-                    freeCalls: 0,
-                    paidCalls: 0,
-                    estimatedCostUsd: 0
-                };
                 dayEntry.calls += 1;
                 dayEntry.freeCalls += usageTier === 'free' ? 1 : 0;
                 dayEntry.paidCalls += usageTier === 'paid' ? 1 : 0;
@@ -277,11 +346,15 @@ class UsageTracker {
             });
 
             summary.totals.estimatedCostUsd = Number(summary.totals.estimatedCostUsd.toFixed(6));
+            summary.totals.activeDays = dailyMap.size;
             summary.period = period;
             summary.providers = [...providerMap.values()]
                 .map((entry) => ({ ...entry, estimatedCostUsd: Number(entry.estimatedCostUsd.toFixed(6)) }))
                 .sort((a, b) => b.calls - a.calls);
             summary.models = [...modelMap.values()]
+                .map((entry) => ({ ...entry, estimatedCostUsd: Number(entry.estimatedCostUsd.toFixed(6)) }))
+                .sort((a, b) => b.calls - a.calls);
+            summary.tools = [...toolMap.values()]
                 .map((entry) => ({ ...entry, estimatedCostUsd: Number(entry.estimatedCostUsd.toFixed(6)) }))
                 .sort((a, b) => b.calls - a.calls);
             summary.daily = [...dailyMap.values()]
@@ -313,7 +386,7 @@ class UsageTracker {
             const totals = new Map();
             usageSnapshot.forEach((doc) => {
                 const data = doc.data() || {};
-                if (!data.clientId || !['llm', 'media'].includes(data.kind)) return;
+                if (!data.clientId || !['llm', 'media', 'tool'].includes(data.kind)) return;
                 const timestampDate = toDate(data.timestamp);
                 if (startDate && timestampDate && timestampDate < startDate) return;
 
@@ -324,18 +397,32 @@ class UsageTracker {
                     calls: 0,
                     freeCalls: 0,
                     paidCalls: 0,
-                    estimatedCostUsd: 0
+                    toolCalls: 0,
+                    activeDays: 0,
+                    estimatedCostUsd: 0,
+                    _daySet: new Set()
                 };
-                entry.calls += 1;
-                entry.freeCalls += data.usageTier === 'free' ? 1 : 0;
-                entry.paidCalls += data.usageTier === 'paid' ? 1 : 0;
+                const dayKey = timestampDate ? timestampDate.toISOString().slice(0, 10) : 'unknown';
+                entry._daySet.add(dayKey);
+                if (data.kind === 'tool') {
+                    entry.toolCalls += 1;
+                } else {
+                    entry.calls += 1;
+                    entry.freeCalls += data.usageTier === 'free' ? 1 : 0;
+                    entry.paidCalls += data.usageTier === 'paid' ? 1 : 0;
+                }
                 entry.estimatedCostUsd += Number(data.estimatedCostUsd || 0);
                 totals.set(key, entry);
             });
 
             return [...totals.values()]
-                .map((entry) => ({ ...entry, estimatedCostUsd: Number(entry.estimatedCostUsd.toFixed(6)) }))
-                .sort((a, b) => b.calls - a.calls)
+                .map((entry) => ({
+                    ...entry,
+                    activeDays: entry._daySet?.size || 0,
+                    estimatedCostUsd: Number(entry.estimatedCostUsd.toFixed(6))
+                }))
+                .map(({ _daySet, ...entry }) => entry)
+                .sort((a, b) => (b.calls + b.toolCalls) - (a.calls + a.toolCalls))
                 .slice(0, limit);
         } catch (error) {
             console.error('[UsageTracker] Failed to build client leaderboard:', error.message);

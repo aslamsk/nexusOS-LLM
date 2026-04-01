@@ -72,7 +72,7 @@ export function useSocketSession(options) {
     socket.on('mission_state', (data) => {
       missionSummary.value = data || missionSummary.value
       if (data?.activeRun) missionStatus.value = 'active'
-      else if (data?.blocker || data?.pendingApproval || data?.pendingRepair || data?.queue?.activeWaitingJobId) missionStatus.value = 'paused'
+      else if (data?.blocker || data?.pendingApproval || data?.pendingRequirement || data?.pendingRepair || data?.queue?.activeWaitingJobId) missionStatus.value = 'paused'
     })
     socket.on('proactive_proposal', (data) => {
       proactiveProposals.value.unshift({ ...data, receivedAt: new Date().toISOString() })
@@ -96,3 +96,4 @@ export function useSocketSession(options) {
 
   return { mount, unmount }
 }
+

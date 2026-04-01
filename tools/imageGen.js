@@ -9,26 +9,34 @@ const path = require('path');
  */
 class ImageGenTool {
     constructor() {
-        this.modelName = 'imagen-3.0-generate-001';
+        this.modelName = 'imagen-4.0-ultra-generate-001';
         this.alternateModels = [
-            'imagen-3.0-generate-001',
-            'imagen-3.0-generate-002',
-            'veo-3.1-fast-generate-preview',
-            'image-generation-001',
-            'imagen-3.0-fast-generate-001'
+            'imagen-4.0-ultra-generate-001',
+            'imagen-4.0-generate-001',
+            'imagen-4.0-fast-generate-001',
+            'gemini-3.1-flash-image-preview',
+            'gemini-3-pro-image-preview',
+            'gemini-2.5-flash-image'
         ];
+        this.failedModels = new Set();
         this.ai = null;
         this.activeApiKey = null;
     }
 
     async _getClient() {
-        const apiKey = await ConfigService.get('GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
+        const apiKey =
+            (await ConfigService.get('GEMINI_API_KEY')) ||
+            (await ConfigService.get('GEMINI_API_KEY_2')) ||
+            (await ConfigService.get('GEMINI_API_KEY_3')) ||
+            process.env.GEMINI_API_KEY;
         if (!apiKey) {
             throw new Error("GEMINI_API_KEY is not configured in Firestore or .env.");
         }
         if (!this.ai || this.activeApiKey !== apiKey) {
             this.ai = new GoogleGenAI({ apiKey });
             this.activeApiKey = apiKey;
+            // New key means previous model failures may not apply (quota/permissions differ).
+            this.failedModels.clear();
         }
         return this.ai;
     }
@@ -36,8 +44,22 @@ class ImageGenTool {
     /**
      * Generates a new image from a text prompt using Imagen.
      */
-    async generateImage(prompt, savePath) {
-        const candidates = [this.modelName, ...this.alternateModels];
+    async generateImage(prompt, savePath, options = {}) {
+        let finalPrompt = prompt;
+        if (options.refine !== false) {
+            finalPrompt = await this.refinePrompt(prompt);
+        }
+
+        const buildCandidates = () =>
+            [this.modelName, ...this.alternateModels].filter((m) => !this.failedModels.has(m));
+        let candidates = buildCandidates();
+
+        // If we somehow exhausted every model (often due to transient quota/auth), reset once and retry.
+        if (candidates.length === 0) {
+            this.failedModels.clear();
+            candidates = buildCandidates();
+        }
+
         let lastError = null;
 
         for (const modelId of candidates) {
@@ -46,16 +68,19 @@ class ImageGenTool {
                 console.log(`[ImageGen] Attempting generation with model: ${modelId}...`);
                 const response = await ai.models.generateImages({
                     model: modelId,
-                    prompt: prompt,
+                    prompt: finalPrompt,
                     parameters: {
                         sampleCount: 1,
-                        aspectRatio: "1:1",
+                        aspectRatio: options.aspectRatio || "1:1",
                         outputMimeType: "image/png"
                     }
                 });
 
                 let imageData = this._extractImageData(response);
-                if (!imageData) continue;
+                if (!imageData) {
+                    this.failedModels.add(modelId);
+                    continue;
+                }
 
                 const dir = path.dirname(savePath);
                 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -64,7 +89,8 @@ class ImageGenTool {
                 this.modelName = modelId; // Stick with the working one
                 return `Success: Image saved to ${savePath}`;
             } catch (error) {
-                console.warn(`[ImageGen Warning] Model ${modelId} failed: ${error.message}`);
+                console.warn(`[ImageGen Warning] Model ${modelId} failed: ${error.message}. Blacklisting for this session.`);
+                this.failedModels.add(modelId);
                 lastError = error;
             }
         }
@@ -110,6 +136,37 @@ class ImageGenTool {
         } catch (error) {
             console.error("[ImageGen Improve Error]", error);
             return `Error improving image: ${error.message}`;
+        }
+    }
+
+    /**
+     * Refines a simple user prompt into a high-fidelity, descriptive prompt for the image model.
+     * Uses the LLM to inject cinematic lighting, composition, and professional detail.
+     */
+    async refinePrompt(userPrompt) {
+        try {
+            const LLMService = require('../core/llm');
+            const llm = new LLMService();
+            const systemPrompt = `You are an expert prompt engineer for professional image generation models like Imagen 4.0 and Midjourney.
+Your mission is to transform a simple user request into a high-fidelity, premium prompt that delivers "WOW" results.
+
+Follow these rules:
+1. Maintain the core intent (e.g., if they asked for a "blue car", it must be a blue car).
+2. Add professional descriptors: lighting (volumetric, cinematic, soft), texture (8k, high-fidelity), composition (wide angle, bokeh, rule of thirds).
+3. If it is for a business (like fashion), inject brand-appropriate aesthetics.
+4. Keep the result under 75 words.
+5. Provide ONLY the expanded prompt text. No conversational filler.
+
+USER REQUEST: "${userPrompt}"`;
+
+            console.log(`[ImageGen] Refining prompt for better "WOW" factor...`);
+            const response = await llm.generateResponse([{ role: 'user', content: systemPrompt }], { mode: 'chat' });
+            const refined = response.text || userPrompt;
+            console.log(`[ImageGen] Expanded Prompt: "${refined}"`);
+            return refined;
+        } catch (error) {
+            console.warn(`[ImageGen Warning] Prompt refinement failed, using raw prompt: ${error.message}`);
+            return userPrompt;
         }
     }
 

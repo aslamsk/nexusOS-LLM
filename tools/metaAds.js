@@ -13,6 +13,16 @@ class MetaAdsTool {
         this.apiVersion = 'v19.0';
     }
 
+    _sanitizeAccessToken(value) {
+        const raw = String(value ?? '').trim();
+        if (!raw) return '';
+        const prefixed = raw.match(/(?:access\s*token\s*:?\s*)(EAA[\w]+)/i);
+        if (prefixed && prefixed[1]) {
+            return prefixed[1].trim();
+        }
+        return raw;
+    }
+
     async _getAdAccountId() {
         let adAccountId = await ConfigService.get('META_AD_ACCOUNT_ID');
         if (this._isBlankValue(adAccountId)) {
@@ -42,14 +52,35 @@ class MetaAdsTool {
         if (!db) return "Error: Firebase Firestore not initialized.";
 
         const updates = {};
-        if (accessToken) updates['META_ACCESS_TOKEN'] = accessToken;
+        const cleanedAccessToken = this._sanitizeAccessToken(accessToken);
+        if (cleanedAccessToken) updates['META_ACCESS_TOKEN'] = cleanedAccessToken;
         if (adAccountId) updates['META_AD_ACCOUNT_ID'] = adAccountId;
         if (pageId) updates['META_PAGE_ID'] = pageId;
 
         try {
-            await db.collection('configs').doc('default').set(updates, { merge: true });
-            ConfigService.refresh(); // Invalidate cache
-            return "Meta credentials successfully updated in Firestore.";
+            const executionContext = typeof ConfigService.getExecutionContext === 'function'
+                ? ConfigService.getExecutionContext()
+                : { strict: false, clientId: null, hasOverrides: false };
+            const isClientScoped = Boolean(executionContext.strict && executionContext.clientId);
+            const collection = isClientScoped ? 'client_configs' : 'configs';
+            const docId = isClientScoped ? executionContext.clientId : 'default';
+
+            await db.collection(collection).doc(docId).set(updates, { merge: true });
+
+            if (isClientScoped) {
+                const mergedOverrides = {
+                    ...(ConfigService.clientOverrides || {}),
+                    ...updates
+                };
+                ConfigService.setClientOverrides(mergedOverrides, {
+                    strict: true,
+                    clientId: executionContext.clientId
+                });
+            } else {
+                ConfigService.refresh(); // Invalidate cache for default/global mode
+            }
+
+            return `Meta credentials successfully updated in Firestore${isClientScoped ? ` for client ${executionContext.clientId}` : ''}.`;
         } catch (error) {
             return `Error updating Firestore: ${error.message}`;
         }
@@ -59,19 +90,21 @@ class MetaAdsTool {
      * Helper to make API requests to Meta Graph
      */
     async _request(method, endpoint, data = {}) {
-        const accessToken = await ConfigService.get('META_ACCESS_TOKEN');
-        let adAccountId = await ConfigService.get('META_AD_ACCOUNT_ID');
-
-        if (adAccountId && !adAccountId.startsWith('act_')) {
-            adAccountId = 'act_' + adAccountId;
+        const payload = { ...(data || {}) };
+        const explicitAccessToken = this._sanitizeAccessToken(payload.access_token);
+        if (payload.access_token) {
+            delete payload.access_token;
         }
 
-        if (!accessToken || !adAccountId) {
-            return { error: "Meta API credentials missing in Firestore. Use 'metaSetCredentials' or update the 'configs/default' collection." };
+        const configAccessToken = this._sanitizeAccessToken(await ConfigService.get('META_ACCESS_TOKEN'));
+        const accessToken = explicitAccessToken || configAccessToken;
+
+        if (!accessToken) {
+            return { error: "Meta API access token missing. Use 'metaSetCredentials' or update the active client/default configuration." };
         }
 
         const url = `https://graph.facebook.com/${this.apiVersion}/${endpoint}`;
-        const queryParams = new URLSearchParams({ access_token: accessToken, ...data }).toString();
+        const queryParams = new URLSearchParams({ access_token: accessToken, ...payload }).toString();
         const fullUrl = method === 'GET' ? `${url}?${queryParams}` : `${url}?access_token=${accessToken}`;
 
         const options = {
@@ -102,7 +135,7 @@ class MetaAdsTool {
 
             req.on('error', (err) => reject(err));
             if (method !== 'GET') {
-                req.write(JSON.stringify(data));
+                req.write(JSON.stringify(payload));
             }
             req.end();
         });
@@ -489,7 +522,9 @@ class MetaAdsTool {
     }
 
     async publishInstagramPhoto(message, imagePathRaw) {
-        const imageUrl = await this._resolveMedia(imagePathRaw);
+        const imageUrl = /^https?:\/\//i.test(String(imagePathRaw || ''))
+            ? String(imagePathRaw).trim()
+            : await this._resolveMedia(imagePathRaw);
         const igUserId = await this._getInstagramBusinessAccountId();
         const accessToken = await ConfigService.get('META_ACCESS_TOKEN');
 
@@ -584,6 +619,14 @@ class MetaAdsTool {
     /**
      * Get comments for a specific object (Post, Ad, etc.)
      */
+    async deleteObject(objectId) {
+        const targetId = String(objectId || '').trim();
+        if (this._isBlankValue(targetId)) {
+            return { error: 'Object ID is required to delete a Meta post or asset.' };
+        }
+        console.log(`[MetaAds] Deleting object ${targetId}...`);
+        return await this._request('DELETE', targetId, {});
+    }
     async getComments(objectId) {
         console.log(`[MetaAds] Fetching comments for ${objectId}...`);
         const activePageId = await ConfigService.get('META_PAGE_ID');
@@ -640,3 +683,4 @@ class MetaAdsTool {
 }
 
 module.exports = new MetaAdsTool();
+

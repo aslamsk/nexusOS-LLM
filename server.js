@@ -27,6 +27,34 @@ const server = http.createServer(app);
 const io = new Server(server);
 const APP_BOOTED_AT = new Date().toISOString();
 
+async function resolveClientConfigsForExecution(clientId, orchestratorInstance = null) {
+    if (!clientId || !db) return {};
+
+    const doc = await db.collection('client_configs').doc(clientId).get();
+    const firestoreConfigs = doc.exists ? doc.data() : {};
+    const executionContext = typeof ConfigService.getExecutionContext === 'function'
+        ? ConfigService.getExecutionContext()
+        : { strict: false, clientId: null, hasOverrides: false };
+
+    const shouldMergeLiveOverrides =
+        Boolean(
+            executionContext.strict &&
+            executionContext.clientId === clientId &&
+            executionContext.hasOverrides &&
+            orchestratorInstance &&
+            orchestratorInstance.currentClientId === clientId
+        );
+
+    if (!shouldMergeLiveOverrides) {
+        return firestoreConfigs;
+    }
+
+    return {
+        ...firestoreConfigs,
+        ...(ConfigService.clientOverrides || {})
+    };
+}
+
 async function createPaymentLinkForInvoice(invoice, client) {
     const stripeSecret = await ConfigService.get('STRIPE_SECRET_KEY');
     const appBaseUrl = await ConfigService.get('APP_BASE_URL') || process.env.APP_BASE_URL || 'http://localhost:3000';
@@ -291,26 +319,36 @@ function buildQuoteCsv(model) {
 }
 
 function buildUsageCsv(summary) {
-    const providerRows = [
-        ['Scope', summary.scope || 'global'],
-        ['Period', summary.period || 'all'],
-        ['Client ID', summary.clientId || ''],
-        ['Total Calls', summary.totals?.calls || 0],
-        ['Free Calls', summary.totals?.freeCalls || 0],
-        ['Paid Calls', summary.totals?.paidCalls || 0],
-        ['Input Tokens', summary.totals?.inputTokens || 0],
-        ['Output Tokens', summary.totals?.outputTokens || 0],
-        ['Total Tokens', summary.totals?.totalTokens || 0],
+      const providerRows = [
+          ['Scope', summary.scope || 'global'],
+          ['Period', summary.period || 'all'],
+          ['Client ID', summary.clientId || ''],
+          ['Total Calls', summary.totals?.calls || 0],
+          ['Tool Calls', summary.totals?.toolCalls || 0],
+          ['LLM Calls', summary.totals?.llmCalls || 0],
+          ['Media Calls', summary.totals?.mediaCalls || 0],
+          ['Active Days', summary.totals?.activeDays || 0],
+          ['First Used At', summary.window?.firstUsedAt || ''],
+          ['Last Used At', summary.window?.lastUsedAt || ''],
+          ['Free Calls', summary.totals?.freeCalls || 0],
+          ['Paid Calls', summary.totals?.paidCalls || 0],
+          ['Input Tokens', summary.totals?.inputTokens || 0],
+          ['Output Tokens', summary.totals?.outputTokens || 0],
+          ['Total Tokens', summary.totals?.totalTokens || 0],
         ['Estimated Paid Cost USD', summary.totals?.estimatedCostUsd || 0],
         [],
         ['Providers'],
         ['Provider', 'Calls', 'Free Calls', 'Paid Calls', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
         ...(summary.providers || []).map((entry) => [entry.provider, entry.calls, entry.freeCalls, entry.paidCalls, entry.inputTokens || 0, entry.outputTokens || 0, entry.totalTokens || 0, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || '']),
         [],
-        ['Models'],
-        ['Provider', 'Model', 'Mode', 'Calls', 'Free Calls', 'Paid Calls', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
-        ...(summary.models || []).map((entry) => [entry.provider, entry.model, entry.mode || 'execute', entry.calls, entry.freeCalls, entry.paidCalls, entry.inputTokens || 0, entry.outputTokens || 0, entry.totalTokens || 0, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || ''])
-    ];
+          ['Models'],
+          ['Provider', 'Model', 'Mode', 'Calls', 'Free Calls', 'Paid Calls', 'Input Tokens', 'Output Tokens', 'Total Tokens', 'Estimated Cost USD', 'Reset Cadence', 'Last Used At'],
+          ...(summary.models || []).map((entry) => [entry.provider, entry.model, entry.mode || 'execute', entry.calls, entry.freeCalls, entry.paidCalls, entry.inputTokens || 0, entry.outputTokens || 0, entry.totalTokens || 0, entry.estimatedCostUsd, entry.resetCadence || '', entry.lastUsedAt || '']),
+          [],
+          ['Tools'],
+          ['Tool', 'Action', 'Calls', 'Estimated Cost USD', 'Last Used At'],
+          ...(summary.tools || []).map((entry) => [entry.tool, entry.action || '', entry.calls, entry.estimatedCostUsd || 0, entry.lastUsedAt || ''])
+      ];
 
     return providerRows.map((row) => row.map((cell) => {
         const value = String(cell ?? '');
@@ -319,25 +357,34 @@ function buildUsageCsv(summary) {
 }
 
 function buildUsagePdfBuffer(summary) {
-    const lines = [
-        'Nexus OS Usage Report',
-        `Scope: ${summary.scope || 'global'}`,
-        `Period: ${summary.period || 'all'}`,
-        summary.clientId ? `Client: ${summary.clientId}` : '',
-        `Total Calls: ${summary.totals?.calls || 0}`,
-        `Free Calls: ${summary.totals?.freeCalls || 0}`,
-        `Paid Calls: ${summary.totals?.paidCalls || 0}`,
-        `Input Tokens: ${summary.totals?.inputTokens || 0}`,
-        `Output Tokens: ${summary.totals?.outputTokens || 0}`,
-        `Total Tokens: ${summary.totals?.totalTokens || 0}`,
+      const lines = [
+          'Nexus OS Usage Report',
+          `Scope: ${summary.scope || 'global'}`,
+          `Period: ${summary.period || 'all'}`,
+          summary.clientId ? `Client: ${summary.clientId}` : '',
+          `Total Calls: ${summary.totals?.calls || 0}`,
+          `Tool Calls: ${summary.totals?.toolCalls || 0}`,
+          `LLM Calls: ${summary.totals?.llmCalls || 0}`,
+          `Media Calls: ${summary.totals?.mediaCalls || 0}`,
+          `Active Days: ${summary.totals?.activeDays || 0}`,
+          `First Used At: ${summary.window?.firstUsedAt || 'N/A'}`,
+          `Last Used At: ${summary.window?.lastUsedAt || 'N/A'}`,
+          `Free Calls: ${summary.totals?.freeCalls || 0}`,
+          `Paid Calls: ${summary.totals?.paidCalls || 0}`,
+          `Input Tokens: ${summary.totals?.inputTokens || 0}`,
+          `Output Tokens: ${summary.totals?.outputTokens || 0}`,
+          `Total Tokens: ${summary.totals?.totalTokens || 0}`,
         `Estimated Paid Cost: ${formatCurrencyValue(summary.totals?.estimatedCostUsd || 0, 'USD')}`,
         '',
         'Providers',
         ...(summary.providers || []).slice(0, 10).map((entry) => `${entry.provider} | ${entry.calls} calls | ${entry.totalTokens || 0} tokens | ${entry.freeCalls} free | ${entry.paidCalls} paid | ${formatCurrencyValue(entry.estimatedCostUsd || 0, 'USD')} | ${entry.resetCadence || ''}`),
         '',
-        'Models',
-        ...(summary.models || []).slice(0, 12).map((entry) => `${entry.provider} / ${entry.model} / ${entry.mode || 'execute'} | ${entry.calls} calls | ${entry.totalTokens || 0} tokens | ${entry.freeCalls} free | ${entry.paidCalls} paid`)
-    ].filter(Boolean);
+          'Models',
+          ...(summary.models || []).slice(0, 12).map((entry) => `${entry.provider} / ${entry.model} / ${entry.mode || 'execute'} | ${entry.calls} calls | ${entry.totalTokens || 0} tokens | ${entry.freeCalls} free | ${entry.paidCalls} paid`),
+          '',
+          'Tools',
+          ...(summary.tools || []).slice(0, 12).map((entry) => `${entry.tool}${entry.action ? ` / ${entry.action}` : ''} | ${entry.calls} calls | ${formatCurrencyValue(entry.estimatedCostUsd || 0, 'USD')}`)
+      ].filter(Boolean);
 
     const content = ['BT', '/F1 11 Tf', '50 790 Td'];
     lines.forEach((line, index) => {
@@ -1798,6 +1845,8 @@ io.on('connection', (socket) => {
     let latestLogs = [];
     let jobQueue = [];
     let currentJobId = null;
+    let queueTimer = null;
+    let isSocketActive = true;
     const MAX_JOB_ATTEMPTS = 3;
     const BASE_RETRY_DELAY_MS = 15000;
 
@@ -1874,19 +1923,53 @@ io.on('connection', (socket) => {
     };
 
     const processNextJob = async () => {
-        if (!orchestrator || orchestrator.isRunning || currentJobId) return;
+        if (!isSocketActive) return;
+        const queueTotals = {
+            queued: jobQueue.filter(j => j.status === 'queued').length,
+            running: jobQueue.filter(j => j.status === 'running').length,
+            waiting: jobQueue.filter(j => j.status === 'awaiting_input' || j.status === 'paused').length
+        };
+        
+        if (queueTotals.queued > 0 || currentJobId) {
+            console.log(`[Queue] Diagnostic: isRunning=${orchestrator?.isRunning}, currentJobId=${currentJobId}, Queued=${queueTotals.queued}, Running=${queueTotals.running}, Waiting=${queueTotals.waiting}`);
+        }
+
+        // [RESILIENCE] Force-clear currentJobId if the orchestrator isn't actually running
+        if ((currentJobId || orchestrator?.isRunning === false) && orchestrator && !orchestrator.isRunning && currentJobId) {
+            console.log(`[Queue] CRITICAL RECOVERY: currentJobId ${currentJobId} was set but orchestrator is NOT running. Forcing reset.`);
+            const staleJob = jobQueue.find(j => j.id === currentJobId);
+            if (staleJob && staleJob.status === 'running') staleJob.status = 'queued';
+            currentJobId = null;
+        }
+
+        if (!orchestrator || orchestrator.isRunning || currentJobId) {
+            return;
+        }
         const now = Date.now();
         const retryReadyJob = jobQueue.find(job => job.status === 'retry_wait' && (!job.nextRunAt || new Date(job.nextRunAt).getTime() <= now));
         if (retryReadyJob) {
             retryReadyJob.status = 'queued';
         }
-        const waitingJob = jobQueue.find(job => job.status === 'awaiting_input' || job.status === 'paused');
-        if (waitingJob) {
-            emitMissionState();
-            return;
-        }
+
+        // [RESILIENCE] Check for a new queued job FIRST. If one exists, auto-clear stale blockers.
         const nextJob = jobQueue.find(job => job.status === 'queued');
-        if (!nextJob) {
+        if (nextJob) {
+            // Clear stale paused/awaiting_input jobs that would block the new one
+            jobQueue.forEach(job => {
+                if (job.id !== nextJob.id && (job.status === 'awaiting_input' || job.status === 'paused')) {
+                    console.log(`[Queue] Auto-clearing stale blocker: ${job.id} (was ${job.status})`);
+                    job.status = 'superseded';
+                    job.finishedAt = job.finishedAt || new Date().toISOString();
+                }
+            });
+        } else {
+            // No new jobs queued. If there's a waiting job, respect it.
+            const waitingJob = jobQueue.find(job => job.status === 'awaiting_input' || job.status === 'paused');
+            if (waitingJob) {
+                emitMissionState();
+                return;
+            }
+            // Nothing to do
             emitMissionState();
             return;
         }
@@ -1898,8 +1981,7 @@ io.on('connection', (socket) => {
 
         try {
             if (nextJob.clientId) {
-                const doc = await db.collection('client_configs').doc(nextJob.clientId).get();
-                const clientConfigs = doc.exists ? doc.data() : {};
+                const clientConfigs = await resolveClientConfigsForExecution(nextJob.clientId, orchestrator);
                 orchestrator.setClientContext(nextJob.clientId, clientConfigs);
             } else {
                 orchestrator.setClientContext(null, {});
@@ -1934,7 +2016,14 @@ io.on('connection', (socket) => {
                     .filter(job => job.status === 'retry_wait' && job.nextRunAt)
                     .map(job => Math.max(0, new Date(job.nextRunAt).getTime() - Date.now()))
                     .sort((a, b) => a - b)[0];
-                setTimeout(processNextJob, typeof nextRetry === 'number' ? Math.min(nextRetry, 1000) : 0);
+                
+                // [THROTTLE] Use a minimum 1000ms delay when the queue is idle to prevent tight-loop log spam
+                let finalDelay = 1000;
+                if (typeof nextRetry === 'number') {
+                    finalDelay = Math.min(nextRetry, 1000); // Check retries as they become ready, but no faster than 1s
+                }
+                if (queueTimer) clearTimeout(queueTimer);
+                queueTimer = setTimeout(processNextJob, finalDelay);
             }
         }
     };
@@ -1980,7 +2069,8 @@ io.on('connection', (socket) => {
                 logs: latestLogs
             });
             const activeJob = jobQueue.find(job => job.id === currentJobId);
-            if (activeJob && activeJob.status === 'running') {
+            if (activeJob && (activeJob.status === 'running' || activeJob.status === 'awaiting_input' || activeJob.status === 'paused')) {
+                console.log(`[Session] Resetting stale job ${activeJob.id} from '${activeJob.status}' to 'queued'`);
                 activeJob.status = 'queued';
                 currentJobId = null;
             }
@@ -2011,7 +2101,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start_new_session', () => {
-        if (orchestrator) orchestrator.reset();
+        if (queueTimer) clearTimeout(queueTimer);
+        queueTimer = null;
+        if (orchestrator) {
+            orchestrator.stop();
+            orchestrator.reset();
+        }
         
         sessionId = `session_${Date.now()}`;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -2031,6 +2126,7 @@ io.on('connection', (socket) => {
         socket.emit('session_created', { sessionId });
         emitMissionState();
         updateOutputsList();
+        saveSession();
     });
 
     socket.on('start_task', async (data) => {
@@ -2067,8 +2163,7 @@ io.on('connection', (socket) => {
         }
         try {
             if (clientId) {
-                const doc = await db.collection('client_configs').doc(clientId).get();
-                const clientConfigs = doc.exists ? doc.data() : {};
+                const clientConfigs = await resolveClientConfigsForExecution(clientId, orchestrator);
                 orchestrator.setClientContext(clientId, clientConfigs);
             }
             orchestrator.manualMissionMode = missionMode || null;
@@ -2136,6 +2231,9 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log('User disconnected');
+        isSocketActive = false;
+        if (queueTimer) clearTimeout(queueTimer);
+        queueTimer = null;
     });
 });
 
@@ -2240,6 +2338,42 @@ app.post('/api/onboard', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Nexus OS Web Interface running on http://localhost:${PORT}`);
-});
+
+/**
+ * [RESILIENCE] Port Recovery Utility
+ * Forcefully terminates any process holding the target port to prevent EADDRINUSE crashes.
+ */
+function forceKillPort(port) {
+    return new Promise((resolve) => {
+        const isWindows = process.platform === 'win32';
+        const command = isWindows 
+            ? `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port}') do taskkill /f /pid %a` 
+            : `lsof -i :${port} | grep LISTEN | awk '{print $2}' | xargs kill -9`;
+        
+        console.log(`[Resilience] Attempting to clear port ${port}...`);
+        require('child_process').exec(command, (err) => {
+            if (err) resolve(false);
+            else resolve(true);
+        });
+    });
+}
+
+function startServer() {
+    server.listen(PORT, () => {
+        console.log(`Nexus OS Web Interface running on http://localhost:${PORT}`);
+    }).on('error', async (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`[Resilience] Port ${PORT} occupied! Auto-clearing...`);
+            await forceKillPort(PORT);
+            setTimeout(() => {
+                server.listen(PORT, () => {
+                    console.log(`[Resilience] Recovery successful. Nexus OS running on http://localhost:${PORT}`);
+                });
+            }, 1000);
+        } else {
+            console.error(`[Server Error] ${err.message}`);
+        }
+    });
+}
+
+startServer();

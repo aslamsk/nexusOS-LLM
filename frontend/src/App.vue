@@ -28,6 +28,7 @@ const vuetifyTheme = useTheme()
 const activeView = ref('chat')
 const chatHistory = ref([{ sender: 'nexus', text: 'Mission control is online, Boss. Give me the objective.' }])
 const runtimeLogs = ref([])
+const missionTrace = ref([])
 const sessionId = ref(localStorage.getItem('nexus_session_id'))
 const promptInput = ref('')
 const isWorking = ref(false)
@@ -59,8 +60,8 @@ const socialWeeks = ref(4)
 const socialTheme = ref('')
 const selectedFinanceClient = ref('')
 const budgetSummary = ref({ allocated: 0, approvedOverage: 0, spent: 0, remaining: 0, requiresBossApproval: false })
-const globalUsageSummary = ref({ totals: { calls: 0, freeCalls: 0, paidCalls: 0, estimatedCostUsd: 0 }, providers: [], models: [] })
-const clientUsageSummary = ref({ totals: { calls: 0, freeCalls: 0, paidCalls: 0, estimatedCostUsd: 0 }, providers: [], models: [] })
+const globalUsageSummary = ref({ totals: { calls: 0, freeCalls: 0, paidCalls: 0, toolCalls: 0, llmCalls: 0, mediaCalls: 0, activeDays: 0, estimatedCostUsd: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 }, providers: [], models: [], tools: [], window: { firstUsedAt: null, lastUsedAt: null }, daily: [] })
+const clientUsageSummary = ref({ totals: { calls: 0, freeCalls: 0, paidCalls: 0, toolCalls: 0, llmCalls: 0, mediaCalls: 0, activeDays: 0, estimatedCostUsd: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 }, providers: [], models: [], tools: [], window: { firstUsedAt: null, lastUsedAt: null }, daily: [] })
 const usagePeriod = ref('all')
 const usageLeaders = ref([])
 const missionModeOverride = ref('chat')
@@ -110,6 +111,7 @@ const isRailCollapsed = ref(false)
 const isMobileViewport = ref(false)
 const isSummaryVisible = ref(true)
 const theme = ref(localStorage.getItem('nexus_theme') || 'light')
+const zoomLevel = ref(parseFloat(localStorage.getItem('nexus_zoom_level') || '1.0'))
 const brandLogoUrl = 'https://jarvis-test-89c81.web.app/assets/nexusOS_logo.png'
 const newClient = ref({ name: '', company: '', email: '', phone: '', notes: '', initialKeys: {} })
 const configToast = ref({ show: false, message: '', type: 'success' })
@@ -219,6 +221,11 @@ const AGENCY_QUOTE_PRESETS = {
     label: 'Website + Content + Ads',
     description: 'Website project, launch content, and multi-channel promotion.',
     values: { campaignName: 'Website + Content + Ads', bannerCount: 2, carouselCount: 1, videoCount: 1, contentDeliverables: 4, tagPackages: 2, reportCount: 2, auditCount: 1, metaAdsWeeks: 4, googleAdsWeeks: 4, linkedinAdsWeeks: 0, websiteProject: true, websitePages: 6, adSpendMonthly: 0, includeStrategyRetainer: true }
+  },
+  multi_channel_social: {
+    label: 'Multi-Channel Social',
+    description: '4 weeks of promotion across Meta, Google, and X.',
+    values: { campaignName: 'Multi-Channel Social', bannerCount: 2, carouselCount: 1, videoCount: 0, contentDeliverables: 4, tagPackages: 2, reportCount: 1, auditCount: 0, metaAdsWeeks: 4, googleAdsWeeks: 4, xAdsWeeks: 4, linkedinAdsWeeks: 0, websiteProject: false, websitePages: 1, adSpendMonthly: 0, includeStrategyRetainer: true }
   }
 }
 
@@ -243,6 +250,7 @@ const SERVICE_SELECTOR_OPTIONS = [
   { key: 'marketing_audit', label: 'Audit', fields: ['auditCount'] },
   { key: 'meta_ads_management', label: 'Meta Promotion', fields: ['metaAdsWeeks', 'adSpendMonthly'] },
   { key: 'google_ads_management', label: 'Google Promotion', fields: ['googleAdsWeeks', 'adSpendMonthly'] },
+  { key: 'x_ads_management', label: 'X Promotion', fields: ['xAdsWeeks', 'adSpendMonthly'] },
   { key: 'linkedin_ads_management', label: 'LinkedIn Promotion', fields: ['linkedinAdsWeeks', 'adSpendMonthly'] },
   { key: 'website_development', label: 'Website Development', fields: ['websiteProject', 'websitePages'] },
   { key: 'strategy_retainer', label: 'Strategy Retainer', fields: ['includeStrategyRetainer'] }
@@ -264,7 +272,11 @@ const CLIENT_KEY_INFO = {
   GOOGLE_ADS_CLIENT_ID: { label: 'Google Ads Client ID', placeholder: 'app.googleusercontent.com', howTo: 'Create OAuth credentials in Google Cloud.', setupPrompt: 'Open Google Cloud Console and guide me step by step to create Google Ads OAuth client credentials for Nexus. Pause for login or consent screen input and continue after I reply.' },
   GOOGLE_ADS_CLIENT_SECRET: { label: 'Google Ads Client Secret', placeholder: 'GOCSPX...', howTo: 'Copy from the same OAuth credentials screen.', setupPrompt: 'Help me retrieve the Google Ads OAuth client secret from Google Cloud Console. Pause for login or navigation input if needed and continue after I reply.' },
   GMAIL_USER: { label: 'Gmail Address', placeholder: 'team@agency.com', howTo: 'Mailbox used for send and read actions.', setupPrompt: 'Help me confirm which Gmail account should be used for Nexus email sending and reading, and guide me through the setup if needed.' },
-  GMAIL_APP_PASSWORD: { label: 'Gmail App Password', placeholder: '16-char app password', howTo: 'Generate from Google Account security settings.', setupPrompt: 'Open Google Account security settings and guide me step by step to generate a Gmail app password for Nexus OS. Pause for login, 2FA, or confirmation input and continue after I reply.' }
+  GMAIL_APP_PASSWORD: { label: 'Gmail App Password', placeholder: '16-char app password', howTo: 'Generate from Google Account security settings.', setupPrompt: 'Open Google Account security settings and guide me step by step to generate a Gmail app password for Nexus OS. Pause for login, 2FA, or confirmation input and continue after I reply.' },
+  X_API_KEY: { label: 'X API Key', placeholder: '...', howTo: 'Create in X Developer Portal (v2).', setupPrompt: 'Open X Developer Portal and help me create a set of API keys for Nexus. Pause for login or project selection when needed.' },
+  X_API_SECRET: { label: 'X API Secret', placeholder: '...', howTo: 'Copy from the API Keys tab in X portal.', setupPrompt: 'Help me retrieve and save the X API Secret safely.' },
+  X_ACCESS_TOKEN: { label: 'X Access Token', placeholder: '...', howTo: 'Generate in the User Authentication Settings of your X App.', setupPrompt: 'Guide me to generate the X User Access Token with Post permissions.' },
+  X_ACCESS_SECRET: { label: 'X Access Secret', placeholder: '...', howTo: 'Copy from the same screen as the Access Token.', setupPrompt: 'Help me save the X Access Secret.' }
 }
 
 const CONFIG_FALLBACK_LABELS = {
@@ -293,6 +305,10 @@ const CONFIG_FALLBACK_LABELS = {
   GOOGLE_ADS_CLIENT_SECRET: 'Google Ads Client Secret',
   GOOGLE_ADS_REFRESH_TOKEN: 'Google Ads Refresh Token',
   GOOGLE_ADS_DEVELOPER_TOKEN: 'Google Ads Developer Token',
+  X_API_KEY: 'X API Key (Consumer Key)',
+  X_API_SECRET: 'X API Secret (Consumer Secret)',
+  X_ACCESS_TOKEN: 'X Access Token',
+  X_ACCESS_SECRET: 'X Access Secret',
   QUOTA_MODE: 'Performance Mode (FREE, NORMAL, HIGH)'
 }
 const LLM_DEFAULT_VALUES = {
@@ -360,7 +376,7 @@ const configGroups = computed(() => {
     },
     {
       title: 'Channels and Outreach',
-      keys: ['META_ACCESS_TOKEN', 'META_AD_ACCOUNT_ID', 'META_PAGE_ID', 'WHATSAPP_PHONE_ID', 'GMAIL_USER', 'GMAIL_APP_PASSWORD', 'LINKEDIN_ACCESS_TOKEN']
+      keys: ['META_ACCESS_TOKEN', 'META_AD_ACCOUNT_ID', 'META_PAGE_ID', 'WHATSAPP_PHONE_ID', 'GMAIL_USER', 'GMAIL_APP_PASSWORD', 'X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_SECRET', 'LINKEDIN_ACCESS_TOKEN']
     },
     {
       title: 'Search, Ads, Billing',
@@ -381,12 +397,37 @@ watch(theme, (value) => {
   vuetifyTheme.global.name.value = value === 'dark' ? 'darkTheme' : 'lightTheme'
 }, { immediate: true })
 
+watch(zoomLevel, (value) => {
+  const scale = Math.max(0.7, Math.min(1.3, value))
+  document.documentElement.style.setProperty('--nexus-zoom', scale.toString())
+  localStorage.setItem('nexus_zoom_level', scale.toString())
+}, { immediate: true })
+
+function adjustZoom(delta) {
+  zoomLevel.value = Math.max(0.7, Math.min(1.3, zoomLevel.value + delta))
+}
+
+function resetZoom() {
+  zoomLevel.value = 1.0
+}
+
 watch(chatHistory, () => {
   if (!sessionId.value) return
   clearTimeout(syncTimeout)
   syncTimeout = setTimeout(() => {
     socket.emit('sync_history', { history: JSON.parse(JSON.stringify(chatHistory.value)), logs: JSON.parse(JSON.stringify(runtimeLogs.value)) })
   }, 500)
+}, { deep: true })
+
+watch(runtimeLogs, () => {
+  missionTrace.value = (Array.isArray(runtimeLogs.value) ? runtimeLogs.value : []).slice(-60).map((entry, idx) => ({
+    id: entry.id || `${String(entry.at || Date.now())}_${idx}`,
+    at: entry.at || new Date().toISOString(),
+    type: entry.type || 'log',
+    tool: entry.name || '',
+    message: entry.message || '',
+    args: entry.args || null
+  }))
 }, { deep: true })
 
 watch(selectedFinanceClient, async (value) => {
@@ -564,6 +605,7 @@ function applyQuotePreset() {
   if (agencyQuoteDraft.value.auditCount > 0) serviceKeys.push('marketing_audit')
   if (agencyQuoteDraft.value.metaAdsWeeks > 0) serviceKeys.push('meta_ads_management')
   if (agencyQuoteDraft.value.googleAdsWeeks > 0) serviceKeys.push('google_ads_management')
+  if (agencyQuoteDraft.value.xAdsWeeks > 0) serviceKeys.push('x_ads_management')
   if (agencyQuoteDraft.value.linkedinAdsWeeks > 0) serviceKeys.push('linkedin_ads_management')
   if (agencyQuoteDraft.value.websiteProject) serviceKeys.push('website_development')
   if (agencyQuoteDraft.value.includeStrategyRetainer) serviceKeys.push('strategy_retainer')
@@ -591,10 +633,11 @@ function buildAgencyScopePayload() {
     auditCount: active.has('marketing_audit') ? Number(agencyQuoteDraft.value.auditCount || 0) : 0,
     metaAdsWeeks: active.has('meta_ads_management') ? Number(agencyQuoteDraft.value.metaAdsWeeks || 0) : 0,
     googleAdsWeeks: active.has('google_ads_management') ? Number(agencyQuoteDraft.value.googleAdsWeeks || 0) : 0,
+    xAdsWeeks: active.has('x_ads_management') ? Number(agencyQuoteDraft.value.xAdsWeeks || 0) : 0,
     linkedinAdsWeeks: active.has('linkedin_ads_management') ? Number(agencyQuoteDraft.value.linkedinAdsWeeks || 0) : 0,
     websiteProject: active.has('website_development') ? Boolean(agencyQuoteDraft.value.websiteProject) : false,
     websitePages: active.has('website_development') ? Number(agencyQuoteDraft.value.websitePages || 1) : 1,
-    adSpendMonthly: (active.has('meta_ads_management') || active.has('google_ads_management') || active.has('linkedin_ads_management')) ? Number(agencyQuoteDraft.value.adSpendMonthly || 0) : 0,
+    adSpendMonthly: (active.has('meta_ads_management') || active.has('google_ads_management') || active.has('x_ads_management') || active.has('linkedin_ads_management')) ? Number(agencyQuoteDraft.value.adSpendMonthly || 0) : 0,
     profitMarginPct: Number(agencyQuoteDraft.value.profitMarginPct || 0),
     taxPct: Number(agencyQuoteDraft.value.taxPct || 0),
     currency: agencyQuoteDraft.value.currency,
@@ -730,15 +773,15 @@ onBeforeUnmount(() => {
       :permanent="!isMobileViewport"
       :temporary="isMobileViewport"
       :rail="!isMobileViewport && isSidebarCollapsed"
-      :width="280"
-      :rail-width="104"
+      :width="260"
+      :rail-width="88"
       class="sidebar app-drawer"
       @update:model-value="isMobileNavOpen = $event"
     >
       <div class="brand">
-        <div class="brand-mark">
+        <!-- <div class="brand-mark">
           <span class="brand-mark-text">N</span>
-        </div>
+        </div> -->
         <div class="brand-copy">
           <img :src="brandLogoUrl" alt="Nexus OS" class="brand-logo-image" />
         </div>
@@ -753,7 +796,7 @@ onBeforeUnmount(() => {
           @click="changeView(item.view)"
         >
           <template #prepend>
-            <v-avatar size="34" class="nav-avatar">{{ item.icon }}</v-avatar>
+            <v-avatar size="28" class="nav-avatar">{{ item.icon }}</v-avatar>
           </template>
           <v-list-item-title class="nav-title">{{ item.label }}</v-list-item-title>
           <v-list-item-subtitle class="nav-sub">{{ item.eyebrow }}</v-list-item-subtitle>
@@ -793,6 +836,15 @@ onBeforeUnmount(() => {
             {{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}
           </v-btn>
           <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="enableNotifications">Alerts</v-btn>
+          
+          <div class="desktop-only zoom-controls action-row">
+            <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(-0.05)">-</v-btn>
+            <v-btn class="ghost" rounded="pill" variant="outlined" size="small" style="min-width: 64px;" @click="resetZoom">
+              {{ Math.round(zoomLevel * 100) }}%
+            </v-btn>
+            <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(0.05)">+</v-btn>
+          </div>
+
           <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="toggleTheme">{{ theme === 'dark' ? 'Light' : 'Dark' }}</v-btn>
           <v-btn class="ghost mobile-only" rounded="pill" variant="outlined" @click="isMobileNavOpen = !isMobileNavOpen">Menu</v-btn>
           <v-btn
@@ -868,19 +920,27 @@ onBeforeUnmount(() => {
           :format-message="formatMessage"
           :is-voice-listening="isVoiceListening"
           :is-working="isWorking"
-          :llm-status="llmStatus"
-          :mission-status="missionStatus"
+            :llm-status="llmStatus"
+            :mission-status="missionStatus"
+            :mission-mode-override="missionModeOverride"
+          :mission-summary="missionSummary"
+          :mission-trace="missionTrace"
           :mode-routing-hint="modeRoutingHint"
-          :pending-approval-summary="pendingApprovalSummary"
-          :prompt-input="promptInput"
-          :selected-client-for-chat="selectedClientForChat"
+            :output-files="outputFiles"
+            :pending-approval-summary="pendingApprovalSummary"
+            :prompt-input="promptInput"
+            :selected-client-for-chat="selectedClientForChat"
           :suggested-reply-chips="suggestedReplyChips"
+          :uploaded-context-files="uploadedContextFiles"
           @file-upload="handleFileUpload"
           @reply-chip="useReplyChip"
           @stop-voice="stopVoiceInput"
           @submit="submitTask"
           @terminate="terminateTask"
           @toggle-voice="startVoiceInput"
+          @requeue-job="requeueJob"
+          @retry-job="retryJobNow"
+          @update:mission-mode-override="missionModeOverride = $event"
           @update:prompt-input="promptInput = $event"
           @update:selected-client-for-chat="selectedClientForChat = $event"
         />

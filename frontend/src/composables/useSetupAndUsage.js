@@ -66,7 +66,7 @@ export function useSetupAndUsage(options) {
 
   async function loadClientUsageSummary(clientId) {
     if (!clientId) {
-      clientUsageSummary.value = { totals: { calls: 0, freeCalls: 0, paidCalls: 0, estimatedCostUsd: 0 }, providers: [], models: [] }
+      clientUsageSummary.value = { totals: { calls: 0, freeCalls: 0, paidCalls: 0, toolCalls: 0, llmCalls: 0, mediaCalls: 0, activeDays: 0, estimatedCostUsd: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 }, providers: [], models: [], tools: [], window: { firstUsedAt: null, lastUsedAt: null }, daily: [] }
       return
     }
     clientUsageSummary.value = (await fetchJson(`/api/usage/summary?clientId=${encodeURIComponent(clientId)}&period=${encodeURIComponent(usagePeriod.value)}`)).summary || clientUsageSummary.value

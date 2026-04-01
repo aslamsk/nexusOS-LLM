@@ -9,12 +9,21 @@ const axios = require('axios');
 class LLMService {
     constructor() {
         this.modelName = 'gemini-2.5-flash';
+        this.fallbackModels = [
+            'gemini-2.5-flash',
+            'gemini-2.5-pro',
+            'gemini-3.1-pro-preview',
+            'gemini-2.0-flash',
+            'deep-research-pro-preview-12-2025'
+        ];
         this.stopRequested = false;
         this.activeControllers = new Set();
+        this.pinnedKeys = new Map(); // [RESILIENCE] sessionId -> successfulKeyName
         this.planOpenRouterModels = [
-            'nousresearch/hermes-3-llama-3.1-405b:free',
-            'arcee-ai/trinity-large-preview:free',
-            'z-ai/glm-4.5-air:free'
+            'openai/gpt-oss-20b:free',
+            'openai/gpt-oss-120b:free',
+            'google/gemma-3-27b-it:free',
+            'google/gemma-3-12b-it:free'
         ];
     }
 
@@ -23,7 +32,7 @@ class LLMService {
         for (const controller of this.activeControllers) {
             try {
                 controller.abort();
-            } catch (_) {}
+            } catch (_) { }
         }
         this.activeControllers.clear();
     }
@@ -42,7 +51,7 @@ class LLMService {
     async _getClient(keyName = 'GEMINI_API_KEY') {
         const apiKey = await ConfigService.get(keyName);
         if (!apiKey) return null;
-        return new GoogleGenAI({ apiKey, apiVersion: 'v1beta' });
+        return new GoogleGenAI({ apiKey, apiVersion: 'v1' });
     }
 
     _getOpenAITools() {
@@ -249,10 +258,10 @@ class LLMService {
                 parameters: {
                     type: "object",
                     properties: {
-                        action: { 
-                            type: "string", 
-                            enum: ["open", "click", "clickPixel", "clickText", "type", "clearAndType", "focus", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle", "waitForSelector"], 
-                            description: "The action to perform. Use only supported browser actions. Prefer 'open' for navigation, 'waitForSelector' to confirm page state, 'clearAndType' for login fields, 'getMarkdown' for a hierarchical page view, 'extractActiveElements' for interactive items with coordinates, and 'clickPixel' only if CSS selectors fail." 
+                        action: {
+                            type: "string",
+                            enum: ["open", "click", "clickPixel", "clickText", "type", "clearAndType", "focus", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle", "waitForSelector"],
+                            description: "The action to perform. Use only supported browser actions. Prefer 'open' for navigation, 'waitForSelector' to confirm page state, 'clearAndType' for login fields, 'getMarkdown' for a hierarchical page view, 'extractActiveElements' for interactive items with coordinates, and 'clickPixel' only if CSS selectors fail."
                         },
                         url: { type: "string", description: "URL to open (for 'open')." },
                         selector: { type: "string", description: "CSS selector (for 'click', 'type', 'hover', 'scroll', 'extract')." },
@@ -321,7 +330,9 @@ class LLMService {
                     type: "object",
                     properties: {
                         prompt: { type: "string", description: "Description of the image." },
-                        savePath: { type: "string", description: "Absolute path to save the .png file." }
+                        savePath: { type: "string", description: "Absolute path to save the .png file." },
+                        aspectRatio: { type: "string", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], description: "The aspect ratio of the generated image. Default is 1:1." },
+                        refine: { type: "boolean", description: "Whether to autonomously expand and improve the prompt for higher quality results. Default is true." }
                     },
                     required: ["prompt", "savePath"]
                 }
@@ -450,9 +461,43 @@ class LLMService {
                     type: "object",
                     properties: {
                         urn: { type: "string", description: "LinkedIn organization URN." },
-                        text: { type: "string", description: "Post text." }
+                        text: { type: "string", description: "Post text." },
+                        imagePath: { type: "string", description: "Optional local image path to attach." }
                     },
                     required: ["urn", "text"]
+                }
+            },
+            {
+                name: "linkedinDeletePost",
+                description: "Delete the latest or specified LinkedIn organic post.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        postId: { type: "string", description: "LinkedIn post id/URN returned from publish." }
+                    }
+                }
+            },
+            {
+                name: "xAds",
+                description: "Publish organic posts to X (formerly Twitter). Supports text and image paths.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        text: { type: "string", description: "The content of the tweet/post." },
+                        imagePath: { type: "string", description: "Optional local path or URL to an image." },
+                        boss_approved: { type: "boolean", description: "Set to true once the Boss has seen the draft and given the go-ahead." }
+                    },
+                    required: ["text"]
+                }
+            },
+            {
+                name: "xDeletePost",
+                description: "Delete an X post by its public URL.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        postUrl: { type: "string", description: "Public URL of the X post to delete." }
+                    }
                 }
             },
             {
@@ -490,7 +535,19 @@ class LLMService {
                     properties: {
                         to: { type: "string" },
                         subject: { type: "string" },
-                        body: { type: "string" }
+                        body: { type: "string" },
+                        attachments: {
+                            type: "array",
+                            description: "Optional local attachments for the email.",
+                            items: {
+                                type: "object",
+                                properties: {
+                                    filename: { type: "string" },
+                                    path: { type: "string" }
+                                },
+                                required: ["path"]
+                            }
+                        }
                     },
                     required: ["to", "subject", "body"]
                 }
@@ -699,6 +756,22 @@ class LLMService {
                 parameters: { type: "object", properties: {} }
             },
             {
+                name: "listAgenticSkills",
+                description: "List all available Standard Operating Procedures (SOPs) from the Antigravity Awesome Skills library.",
+                parameters: { type: "object", properties: {} }
+            },
+            {
+                name: "readAgenticSkill",
+                description: "Read a specific agentic skill SOP (e.g., '@seo-audit' or '@react-patterns') to load its playbook instructions before performing complex tasks.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        skillName: { type: "string", description: "The name of the skill to read, e.g., @c4-context" }
+                    },
+                    required: ["skillName"]
+                }
+            },
+            {
                 name: "askUserForInput",
                 description: "Ask the user a question.",
                 parameters: {
@@ -728,6 +801,8 @@ class LLMService {
                 'createSkill',
                 'executeSkill',
                 'listSkills',
+                'listAgenticSkills',
+                'readAgenticSkill',
                 'scanNiche',
                 'proposeCampaign',
                 'askUserForInput'
@@ -741,6 +816,55 @@ class LLMService {
     }
 
     /**
+     * Map Nexus messages to Gemini-compatible format.
+     */
+    formatMessagesForGemini(messages) {
+        // IMPORTANT: Gemini v1 expects snake_case keys in request payloads (function_call/function_response).
+        // Do not send thought/thought_signature back to the API; it is not part of the request schema.
+        return messages.map((msg) => {
+            if (msg.role === 'system') {
+                return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
+            }
+
+            if (msg.role === 'assistant') {
+                const parts = [];
+
+                // If raw parts exist (from prior provider), only keep text fields to avoid schema violations.
+                if (msg.parts && Array.isArray(msg.parts)) {
+                    for (const part of msg.parts) {
+                        if (part && typeof part.text === 'string' && part.text.trim()) parts.push({ text: part.text });
+                    }
+                }
+
+                if (msg.content) parts.push({ text: msg.content });
+                if (msg.toolCall) {
+                    parts.push({
+                        function_call: {
+                            name: msg.toolCall.name,
+                            args: msg.toolCall.args || {}
+                        }
+                    });
+                }
+                return { role: 'model', parts };
+            }
+
+            if (msg.role === 'tool') {
+                return {
+                    role: 'user',
+                    parts: [{
+                        function_response: {
+                            name: msg.name,
+                            response: { result: msg.content }
+                        }
+                    }]
+                };
+            }
+
+            return { role: 'user', parts: [{ text: msg.content }] };
+        });
+    }
+
+    /**
      * Send conversation history to the LLM and get the next response.
      */
     async generateResponse(messages, options = {}) {
@@ -748,35 +872,7 @@ class LLMService {
             this.resetStop();
             const mode = String(options.mode || 'execute').toLowerCase();
             const enableTools = options.enableTools !== false && mode !== 'chat';
-            let formattedContents = messages.map(msg => {
-                if (msg.role === 'system') {
-                    return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
-                } else if (msg.role === 'assistant') {
-                    const parts = [];
-                    if (msg.content) parts.push({ text: msg.content });
-                    if (msg.toolCall) {
-                        parts.push({
-                            functionCall: {
-                                name: msg.toolCall.name,
-                                args: msg.toolCall.args
-                            }
-                        });
-                    }
-                    return { role: 'model', parts: parts };
-                } else if (msg.role === 'tool') {
-                    return {
-                        role: 'user',
-                        parts: [{
-                            functionResponse: {
-                                name: msg.name,
-                                response: { result: msg.content }
-                            }
-                        }]
-                    };
-                } else {
-                    return { role: 'user', parts: [{ text: msg.content }] };
-                }
-            });
+            let formattedContents = this.formatMessagesForGemini(messages);
 
             // CRITICAL BUG FIX: Guard against "contents are required" Google SDK error
             // If empty, inject a default hello to keep the session alive
@@ -786,7 +882,13 @@ class LLMService {
 
             let systemInstruction = null;
             if (messages[0] && messages[0].role === 'system') {
-                systemInstruction = { parts: [{ text: messages[0].content }] };
+                const hardenedInstruction = messages[0].content + 
+                    "\n\nCRITICAL PROTOCOL: DO NOT ever use text placeholders like [Image: description] or [Video:] in your response. " +
+                    "As an autonomous agent, if you do not call the 'generateImage' or 'generateVideo' tools, then the asset DOES NOT EXIST. " +
+                    "If you determine an image is needed, you MUST call the tool in the same turn. " +
+                    "If you claim the mission is 'Complete', you MUST have performed all required actions via tools first.";
+                
+                systemInstruction = { parts: [{ text: hardenedInstruction }] };
                 // Only shift if we have more than one message to avoid leaving formattedContents empty
                 if (formattedContents.length > 1) {
                     formattedContents.shift();
@@ -838,8 +940,19 @@ class LLMService {
             ];
 
             for (const provider of orderedProviders) {
-                if (provider.name === 'Gemini') break;
-                if (!provider.apiKey) continue;
+                if (!provider.apiKey && provider.name !== 'Gemini') continue;
+
+                if (provider.name === 'Gemini') {
+                    // [RESILIENCE] Integrated Gemini Multi-Key Rotation
+                    try {
+                        const geminiResponse = await this._generateWithGeminiMultiKey(messages, systemInstruction, mode, enableTools, options);
+                        if (geminiResponse && !geminiResponse.text.startsWith('Error calling LLM:')) return geminiResponse;
+                        console.warn(`[LLM Gemini Failure] Rotating to backup provider chain...`);
+                    } catch (err) {
+                        console.error(`[LLM Gemini Fatal Error]`, err.message);
+                    }
+                    continue;
+                }
 
                 const candidateModels = Array.isArray(provider.modelCandidates) && provider.modelCandidates.length
                     ? provider.modelCandidates
@@ -847,7 +960,7 @@ class LLMService {
 
                 for (const candidateModel of candidateModels) {
                     try {
-                        console.log(`[LLM] Falling back to ${provider.name} using model ${candidateModel}...`);
+                        console.log(`[LLM] Attempting fallback to ${provider.name} using model ${candidateModel}...`);
                         const fallbackResponse = await this._generateWithOpenAICompatible({
                             providerName: provider.name,
                             baseUrl: provider.baseUrl,
@@ -868,83 +981,6 @@ class LLMService {
                 }
             }
 
-            const keys = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'];
-            let currentKeyIdx = 0;
-            let retryCount = 0;
-            const maxRetriesPerKey = 3;
-            let delay = 2000;
-
-            while (currentKeyIdx < keys.length) {
-                const keyName = keys[currentKeyIdx];
-                const ai = await this._getClient(keyName);
-                
-                if (!ai) {
-                    currentKeyIdx++;
-                    continue;
-                }
-
-                try {
-                    const response = await ai.models.generateContent({
-                        model: this.modelName,
-                        systemInstruction: systemInstruction,
-                        contents: formattedContents,
-                        config: {
-                            ...(enableTools ? { tools: [{ functionDeclarations: this.getToolDefinitions(mode) }] } : {}),
-                            generationConfig: { temperature: 0.2 }
-                        }
-                    });
-
-                    if (this.stopRequested) {
-                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: this.modelName };
-                    }
-
-                    const functionCall = response.functionCalls?.[0];
-                    let textContent = '';
-                    try {
-                        if (response.candidates?.[0]?.content?.parts?.some(p => p.text)) {
-                            textContent = response.text;
-                        }
-                    } catch (e) {
-                        textContent = '';
-                    }
-
-                    return {
-                        text: textContent,
-                        toolCall: functionCall ? { name: functionCall.name, args: functionCall.args } : null,
-                        provider: 'Gemini',
-                        model: this.modelName,
-                        usage: this._extractUsage(response.usageMetadata || response.usage || {})
-                    };
-                } catch (error) {
-                    if (this.stopRequested) {
-                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: this.modelName };
-                    }
-                    const isRetryable = error.message.includes('429') ||
-                        error.message.includes('503') ||
-                        error.message.includes('UNAVAILABLE') ||
-                        error.message.includes('INTERNAL');
-
-                    if (isRetryable) {
-                        const errorType = error.message.includes('429') ? '429 Rate Limit' : '503/UNAVAILABLE';
-                        console.log(`[LLM] ${errorType} on ${keyName}.`);
-                        if (retryCount < maxRetriesPerKey) {
-                            console.log(`[LLM] Retrying ${keyName} in ${delay / 1000}s... (Attempt ${retryCount + 1}/${maxRetriesPerKey})`);
-                            await new Promise(r => setTimeout(r, delay));
-                            retryCount++;
-                            delay *= 2;
-                            continue;
-                        }
-                        console.log(`[LLM] Rotating to backup Gemini API key...`);
-                        currentKeyIdx++;
-                        retryCount = 0;
-                        delay = 2000;
-                        continue;
-                    }
-                    console.error("[LLM API Error]", error.message);
-                    return { text: `Error calling LLM: ${error.message}`, toolCall: null };
-                }
-            }
-
             const quotaMsg = "Nexus OS has exhausted Gemini and no configured fallback provider succeeded. Add a fresh Gemini key or configure OpenRouter, Groq, or NVIDIA fallback settings.";
             console.error(`[LLM Max Retries] ${quotaMsg}`);
             return { text: `MISSION BREACH: API Quota Exhausted. ${quotaMsg}`, toolCall: null };
@@ -953,6 +989,162 @@ class LLMService {
             console.error("[LLM Error]", error);
             return { text: `Error calling LLM: ${error.message}`, toolCall: null };
         }
+    }
+
+    /**
+     * [RESILIENCE] Encapsulated Gemini Multi-Key Rotation Logic
+     */
+    async _generateWithGeminiMultiKey(messages, systemInstruction, mode, enableTools, options) {
+        const { sessionId = null } = options;
+        const keys = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'];
+        let formattedContents = this.formatMessagesForGemini(messages);
+        if (!Array.isArray(formattedContents) || formattedContents.length === 0) {
+            formattedContents = [{ role: 'user', parts: [{ text: 'Hello Nexus.' }] }];
+        }
+
+        // [RESILIENCE] Use pinned key for session continuity (prevents thought_signature errors)
+        const pinnedKey = sessionId ? this.pinnedKeys.get(sessionId) : null;
+        const keysToTry = pinnedKey ? [pinnedKey, ...keys.filter(k => k !== pinnedKey)] : keys;
+
+        let currentKeyIdx = 0;
+        let currentModelIdx = 0;
+        let retryCount = 0;
+        const maxRetriesPerKey = 3;
+        let delay = 2000;
+
+        while (currentKeyIdx < keysToTry.length) {
+            const keyName = keysToTry[currentKeyIdx];
+            const ai = await this._getClient(keyName);
+
+            if (!ai) {
+                currentKeyIdx++;
+                continue;
+            }
+
+            const currentModel = this.fallbackModels[currentModelIdx] || this.modelName;
+
+            let innerRetry = 0;
+            const maxInnerRetries = 3;
+            let delay = 2000;
+
+            while (true) {
+                try {
+                    // [SDK v1] Use snake_case "function_declarations" for the REST-to-SDK mapping
+                    const tools = enableTools ? [{ function_declarations: this.getToolDefinitions(mode) }] : [];
+
+                    // [SDK v1] The @google/genai (Unified SDK) pattern
+                    // Use snake_case "system_instruction" with "parts" array
+                    const result = await ai.models.generateContent({
+                        model: currentModel,
+                        contents: formattedContents,
+                        system_instruction: systemInstruction || undefined,
+                        generationConfig: { temperature: 0.2 },
+                        tools: (tools && tools.length > 0) ? tools : undefined
+                    });
+
+                    const response = result;
+
+                    if (this.stopRequested) {
+                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: currentModel };
+                    }
+
+                    const parts = (response.candidates?.[0]?.content?.parts) || [];
+                    const funCallPart = parts.find((p) => p.function_call || p.functionCall);
+                    const functionCall = funCallPart?.function_call || funCallPart?.functionCall || (typeof response.functionCalls === 'function' ? response.functionCalls()[0] : null);
+
+                    let textContent = "";
+                    if (typeof response.text === 'function') {
+                        try { textContent = response.text(); } catch (_) { }
+                    } else {
+                        textContent = response.text || "";
+                    }
+                    
+                    const finishReason = response.candidates?.[0]?.finishReason;
+                    if (finishReason === 'UNEXPECTED_TOOL_CALL') {
+                        textContent = "MISSION BREACH: The LLM hallucinated an invalid tool or parameter (UNEXPECTED_TOOL_CALL).";
+                    }
+
+                    if (!textContent && !functionCall) {
+                        parts.forEach(p => { if (p.text) textContent += p.text; });
+                        // [RESILIENCE] If still empty after scanning parts, return a safe fallback
+                        // to prevent the orchestrator from crashing and retrying infinitely.
+                        if (!textContent) {
+                            console.warn(`[LLM] Empty response from ${currentModel}. Returning safe fallback.`);
+                            return {
+                                text: "I received an empty response from the AI model. This can happen due to content filtering or a model glitch. Please try rephrasing your request or try again in a moment.",
+                                thought: null, thoughtSignature: null, parts: [],
+                                toolCall: null, provider: 'Gemini', model: currentModel,
+                                usage: this._extractUsage(response.usageMetadata || {})
+                            };
+                        }
+                    }
+
+                    // [RESILIENCE] Pin successful key for this session
+                    if (sessionId) {
+                        this.pinnedKeys.set(sessionId, keyName);
+                    }
+
+                    return {
+                        text: textContent,
+                        parts,
+                        toolCall: functionCall ? { name: functionCall.name, args: functionCall.args || {} } : null,
+                        provider: 'Gemini',
+                        model: currentModel,
+                        usage: this._extractUsage(response.usageMetadata || response.usage || {})
+                    };
+
+                } catch (error) {
+                    if (this.stopRequested) {
+                        return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: 'Gemini', model: currentModel };
+                    }
+
+                    const errorMsg = String(error.message || error).toLowerCase();
+
+                    // [CIRCUIT BREAKER] Detect empty-output SDK errors (not retryable, return gracefully)
+                    const isEmptyOutputError = errorMsg.includes('model output must contain') || 
+                                               errorMsg.includes('output text or tool calls') ||
+                                               errorMsg.includes('both be empty');
+                    if (isEmptyOutputError) {
+                        console.warn(`[LLM] Empty output SDK error from ${currentModel}. Returning safe fallback to prevent infinite loop.`);
+                        return {
+                            text: "⚠️ The AI model returned an empty response (likely due to content filtering or a safety block). Please rephrase your request and try again.",
+                            thought: null, thoughtSignature: null, parts: [],
+                            toolCall: null, provider: 'Gemini', model: currentModel,
+                            usage: {}
+                        };
+                    }
+
+                    const isRateLimit = errorMsg.includes('429') || errorMsg.includes('resource_exhausted');
+                    const isTransient = errorMsg.includes('500') || errorMsg.includes('timeout') || errorMsg.includes('unavailable') || errorMsg.includes('internal');
+                    const isModelError = errorMsg.includes('404') || errorMsg.includes('not found');
+
+                    if (isModelError && currentModelIdx < this.fallbackModels.length - 1) {
+                        console.warn(`[LLM Warning] Model ${currentModel} failed: ${errorMsg}. Rotating to next fallback...`);
+                        currentModelIdx++;
+                        break; // Break inner loop to pick up new model in outer loop
+                    }
+
+                    if ((isRateLimit || isTransient) && innerRetry < maxInnerRetries) {
+                        innerRetry++;
+                        const delayMs = isRateLimit ? Math.pow(2, innerRetry) * 1000 : delay;
+                        console.warn(`[LLM] Gemini Error (${errorMsg}). Retrying ${keyName} in ${delayMs}ms... (Attempt ${innerRetry}/${maxInnerRetries})`);
+                        await new Promise(r => setTimeout(r, delayMs));
+                        continue;
+                    }
+
+                    // If we exhausted retries or hit a non-retryable error, try rotating the key
+                    if (currentKeyIdx < keysToTry.length - 1) {
+                        console.warn(`[LLM] Key ${keyName} failing consistently. Rotating to next Gemini key...`);
+                        currentKeyIdx++;
+                        currentModelIdx = 0;
+                        break; // Break inner loop to try next key in outer loop
+                    }
+
+                    throw error;
+                }
+            }
+        }
+        return null;
     }
 }
 

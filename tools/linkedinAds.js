@@ -94,6 +94,27 @@ class LinkedInAdsTool {
         return assetUrn;
     }
 
+    async deletePost(postId) {
+        const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
+        if (!accessToken) return { error: "LINKEDIN_ACCESS_TOKEN missing in Firestore" };
+        if (!postId) return { error: "LinkedIn post id is required for delete." };
+
+        try {
+            await axios.delete(
+                `https://api.linkedin.com/v2/ugcPosts/${encodeURIComponent(postId)}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'X-Restli-Protocol-Version': '2.0.0'
+                    }
+                }
+            );
+            return { success: true, deleted: true, id: postId };
+        } catch (error) {
+            return { error: "LinkedIn delete failed", details: error.response?.data || error.message };
+        }
+    }
+
     async getMemberInfo() {
         const accessToken = await ConfigService.get('LINKEDIN_ACCESS_TOKEN');
         if (!accessToken) return { error: "Missing token" };

@@ -2,6 +2,22 @@ const SetupPlaybooks = require('./setupPlaybooks');
 
 const TASK_REQUIREMENTS = [
     {
+        id: 'image_gen',
+        match: /\b(generate|create|design|make)\b.*\b(image|poster|banner|creative|thumbnail|logo)\b/,
+        keysAny: ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'],
+        keysAll: [],
+        title: 'Image generation setup incomplete',
+        impact: 'Generating new images requires a working Gemini key for Imagen.'
+    },
+    {
+        id: 'video_gen',
+        match: /\b(generate|create|make)\b.*\b(video|reel|short)\b/,
+        keysAny: ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'REPLICATE_API_TOKEN'],
+        keysAll: [],
+        title: 'Video generation setup incomplete',
+        impact: 'Generative video needs a Gemini key (Veo) or Replicate token. Local FFmpeg fallback requires a source image.'
+    },
+    {
         id: 'meta',
         match: /\bmeta\b|\bfacebook\b|\binstagram\b/,
         keysAny: ['META_ACCESS_TOKEN'],
@@ -64,6 +80,14 @@ const TASK_REQUIREMENTS = [
         keysAll: [],
         title: 'Fallback LLM provider missing',
         impact: 'Nexus has fewer recovery options when Gemini quota or provider issues occur.'
+    },
+    {
+        id: 'stripe',
+        match: /\bstripe\b|\bpayment link\b|\bcheckout\b/,
+        keysAny: [],
+        keysAll: ['STRIPE_SECRET_KEY'],
+        title: 'Stripe payments setup incomplete',
+        impact: 'Invoices can be created without Stripe, but payment links require STRIPE_SECRET_KEY.'
     }
 ];
 

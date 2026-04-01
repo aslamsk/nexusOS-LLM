@@ -12,13 +12,21 @@ class ConfigService {
         this.lastFetch = 0;
         this.defaultCompanyId = 'default';
         this.clientOverrides = {}; // Dynamic multi-tenant isolated keys
+        this.clientOverrideOptions = {
+            strict: false,
+            clientId: null
+        };
     }
 
     /**
      * Set dynamic overrides for the current execution context (Client specific keys)
      */
-    setClientOverrides(configs) {
+    setClientOverrides(configs, options = {}) {
         this.clientOverrides = configs || {};
+        this.clientOverrideOptions = {
+            strict: Boolean(options.strict),
+            clientId: options.clientId || null
+        };
     }
 
     /**
@@ -31,6 +39,11 @@ class ConfigService {
         // 0. Check dynamic client overrides first to ensure true isolation
         if (this.clientOverrides[key]) {
             return this.clientOverrides[key];
+        }
+
+        // When a client context is active in strict mode, never fall back to boss/default keys.
+        if (this.clientOverrideOptions.strict) {
+            return null;
         }
 
         // 1. Ensure cache is populated for the requested company
@@ -63,7 +76,17 @@ class ConfigService {
     async getAll(companyId = this.defaultCompanyId) {
         await this._ensureCache(companyId);
         const baseConfigs = this.cache.get(companyId) || {};
+        if (this.clientOverrideOptions.strict) {
+            return { ...this.clientOverrides };
+        }
         return { ...baseConfigs, ...this.clientOverrides };
+    }
+
+    getExecutionContext() {
+        return {
+            ...this.clientOverrideOptions,
+            hasOverrides: Object.keys(this.clientOverrides || {}).length > 0
+        };
     }
 
     /**

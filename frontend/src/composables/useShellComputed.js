@@ -134,6 +134,7 @@ export function useShellComputed(options) {
   const hasWaitingMission = computed(() => {
     return missionStatus.value === 'paused' ||
       !!missionSummary.value.pendingApproval ||
+      !!missionSummary.value.pendingRequirement ||
       !!missionSummary.value.pendingRepair ||
       !!missionSummary.value.blocker ||
       !!missionSummary.value.queue?.activeWaitingJobId
@@ -226,3 +227,5 @@ export function useShellComputed(options) {
     suggestedReplyChips
   }
 }
+
+

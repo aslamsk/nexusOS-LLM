@@ -38,9 +38,16 @@ class FileSystemTool {
 
     static readFile(absolutePath) {
         try {
-            return fs.readFileSync(absolutePath, 'utf8');
+            const content = fs.readFileSync(absolutePath, 'utf8');
+            return JSON.stringify({
+                ok: true,
+                action: 'readFile',
+                absolutePath,
+                size: content.length,
+                content: content.slice(0, 5000) // Truncate for orchestrator safety
+            }, null, 2);
         } catch (error) {
-            return `Error reading file: ${error.message}`;
+            return JSON.stringify({ ok: false, action: 'readFile', absolutePath, error: error.message, classification: 'permission_or_missing' }, null, 2);
         }
     }
 
@@ -65,9 +72,16 @@ class FileSystemTool {
 
     static listDir(absolutePath) {
         try {
-            return fs.readdirSync(absolutePath).join('\n');
+            const files = fs.readdirSync(absolutePath);
+            return JSON.stringify({
+                ok: true,
+                action: 'listDir',
+                absolutePath,
+                count: files.length,
+                files
+            }, null, 2);
         } catch (error) {
-            return `Error listing directory: ${error.message}`;
+            return JSON.stringify({ ok: false, action: 'listDir', absolutePath, error: error.message, classification: 'permission_or_missing' }, null, 2);
         }
     }
 

@@ -123,7 +123,9 @@
                     type: "object",
                     properties: {
                         prompt: { type: "string", description: "Description of the image." },
-                        savePath: { type: "string", description: "Absolute path to save the .png file." }
+                        savePath: { type: "string", description: "Absolute path to save the .png file." },
+                        aspectRatio: { type: "string", enum: ["1:1", "16:9", "9:16", "4:3", "3:4"], description: "The aspect ratio of the generated image. Default is 1:1." },
+                        refine: { type: "boolean", description: "Whether to autonomously expand and improve the prompt for higher quality results. Default is true." }
                     },
                     required: ["prompt", "savePath"]
                 }
@@ -499,6 +501,22 @@
                 name: "listSkills",
                 description: "List all autonomous skills.",
                 parameters: { type: "object", properties: {} }
+            },
+            {
+                name: "listAgenticSkills",
+                description: "List all available Standard Operating Procedures (SOPs) from the Antigravity Awesome Skills library.",
+                parameters: { type: "object", properties: {} }
+            },
+            {
+                name: "readAgenticSkill",
+                description: "Read a specific agentic skill SOP (e.g., '@seo-audit' or '@react-patterns') to load its playbook instructions before performing complex tasks.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        skillName: { type: "string", description: "The name of the skill to read, e.g., @c4-context" }
+                    },
+                    required: ["skillName"]
+                }
             },
             {
                 name: "askUserForInput",

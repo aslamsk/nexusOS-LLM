@@ -13,7 +13,11 @@ class GovernanceService {
             'googleAdsAddKeywords',
             'googleAdsCreateResponsiveSearchAd',
             'linkedinAds',
-            'linkedinPublishPost'
+            'linkedinPublishPost',
+            'linkedinDeletePost',
+            'xAds',
+            'xDeletePost',
+            'twitterAds'
         ]);
         this.commandRiskPatterns = [
             /\bnpm\s+publish\b/i,
@@ -89,7 +93,7 @@ class GovernanceService {
         if (name === 'metaAds') {
             const riskyActions = new Set([
                 'createCampaign', 'createAdSet', 'createAdCreative', 'createAd',
-                'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'
+                'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel', 'deleteObject'
             ]);
             if (riskyActions.has(args.action)) {
                 let details = {
@@ -113,9 +117,15 @@ class GovernanceService {
                         link: args.link || null
                     };
                 }
+                if (args.action === 'deleteObject') {
+                    details = {
+                        type: 'meta_delete',
+                        objectId: args.objectId || null
+                    };
+                }
                 return {
                     requiresApproval: true,
-                    reason: 'This action can spend budget or publish to a public surface.',
+                    reason: 'This action can spend budget, publish publicly, or delete a public Meta object.',
                     preview: `${args.action}: ${JSON.stringify(args)}`,
                     details
                 };
@@ -131,7 +141,8 @@ class GovernanceService {
                     type: 'email',
                     to: args.to || null,
                     subject: args.subject || '',
-                    bodyPreview: String(args.body || '').slice(0, 500)
+                    bodyPreview: String(args.body || '').slice(0, 500),
+                    attachments: Array.isArray(args.attachments) ? args.attachments.map((item) => ({ filename: item?.filename || null, path: item?.path || null })) : []
                 }
             };
         }
@@ -176,6 +187,18 @@ class GovernanceService {
             };
         }
 
+        if (name === 'linkedinDeletePost' || (name === 'linkedinAds' && args.action === 'deletePost')) {
+            return {
+                requiresApproval: true,
+                reason: 'This action will delete a public LinkedIn post.',
+                preview: `LinkedIn delete: ${args.postId || 'latest post'}`,
+                details: {
+                    type: 'linkedin_delete',
+                    postId: args.postId || null
+                }
+            };
+        }
+
         if (name === 'googleAds' || ['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
             return {
                 requiresApproval: true,
@@ -186,6 +209,31 @@ class GovernanceService {
                     customerId: args.customerId || null,
                     campaignName: args.campaignData?.name || null,
                     budgetResource: args.campaignData?.budget_resource_name || args.amountMicros || null
+                }
+            };
+        }
+
+        if (name === 'xAds' || name === 'twitterAds') {
+            return {
+                requiresApproval: true,
+                reason: 'This action will post content publicly to X (formerly Twitter).',
+                preview: `X Post: ${args.text || args.message || 'No text provided'}`,
+                details: {
+                    type: 'x_post',
+                    text: args.text || args.message || null,
+                    imagePath: args.imagePath || null
+                }
+            };
+        }
+
+        if (name === 'xDeletePost') {
+            return {
+                requiresApproval: true,
+                reason: 'This action will delete a public X post.',
+                preview: `X delete: ${args.postUrl || 'post URL required'}`,
+                details: {
+                    type: 'x_delete',
+                    postUrl: args.postUrl || null
                 }
             };
         }
@@ -218,3 +266,6 @@ class GovernanceService {
 }
 
 module.exports = new GovernanceService();
+
+
+
