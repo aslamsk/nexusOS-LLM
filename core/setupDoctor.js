@@ -1,4 +1,36 @@
 const SetupPlaybooks = require('./setupPlaybooks');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+const IDEBridge = require('./bridge');
+
+/**
+ * [STABILIZATION] Check if a binary is available on the system.
+ */
+function checkBinary(cmd) {
+    try {
+        execSync(`${cmd} --version`, { stdio: 'ignore' });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * [STABILIZATION] Check if a path is writeable.
+ */
+function checkPath(p) {
+    try {
+        const fullPath = path.resolve(__dirname, '..', p);
+        if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
+        const testFile = path.join(fullPath, '.nexus_test');
+        fs.writeFileSync(testFile, 'ok');
+        fs.unlinkSync(testFile);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
 
 const TASK_REQUIREMENTS = [
     {
@@ -146,6 +178,19 @@ function buildSetupDoctor({ has, firestoreReady = false, prompt = '' }) {
         };
     });
 
+    // ─── [STABILIZATION] Architectural Health ──────────────────────────
+    const architecturalHealth = {
+        git: checkBinary('git'),
+        rg: checkBinary('rg') || fs.existsSync(path.join(__dirname, '../node_modules/.bin/rg.exe')) || fs.existsSync(path.join(__dirname, '../node_modules/.bin/rg')),
+        node: process.version,
+        paths: {
+            logs: checkPath('outputs/logs'),
+            worktrees: checkPath('outputs/worktrees'),
+            uploads: checkPath('uploads')
+        },
+        bridge: IDEBridge.getStatus()
+    };
+
     const blockers = [];
     if (!firestoreReady) {
         blockers.push({
@@ -194,7 +239,8 @@ function buildSetupDoctor({ has, firestoreReady = false, prompt = '' }) {
         summary,
         blockers,
         recommendations: collectRecommendations(blockers),
-        providers
+        providers,
+        architecturalHealth
     };
 }
 

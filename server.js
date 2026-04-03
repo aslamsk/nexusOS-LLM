@@ -2337,30 +2337,61 @@ app.post('/api/onboard', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+const IDEBridge = require('./core/bridge');
+
+// [CLAUDE-IDE-BRIDGE] Endpoints
+app.post('/api/bridge/heartbeat', (req, res) => {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    const actions = IDEBridge.heartbeat(sessionId);
+    res.json({ actions });
+});
+
+app.post('/api/bridge/sync', (req, res) => {
+    const { sessionId, eventType, data } = req.body;
+    if (!sessionId || !eventType) return res.status(400).json({ error: 'sessionId and eventType required' });
+    IDEBridge.handleIDESync(sessionId, eventType, data);
+    res.json({ success: true });
+});
+
+app.get('/api/bridge/events/:sessionId', (req, res) => {
+    const { sessionId } = req.params;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const onEvent = (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    IDEBridge.on(`ide_event_${sessionId}`, onEvent);
+    req.on('close', () => IDEBridge.off(`ide_event_${sessionId}`, onEvent));
+});
+
+// Periodic cleanup of stale bridge sessions
+setInterval(() => IDEBridge.cleanup(), 60000);
+
 const PORT = process.env.PORT || 3000;
 
 /**
  * [RESILIENCE] Port Recovery Utility
- * Forcefully terminates any process holding the target port to prevent EADDRINUSE crashes.
+ * Forcefully terminates any process holding the target port.
  */
 function forceKillPort(port) {
     return new Promise((resolve) => {
         const isWindows = process.platform === 'win32';
         const command = isWindows 
             ? `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port}') do taskkill /f /pid %a` 
-            : `lsof -i :${port} | grep LISTEN | awk '{print $2}' | xargs kill -9`;
+            : `lsof -ti:${port} | xargs kill -9`;
         
         console.log(`[Resilience] Attempting to clear port ${port}...`);
-        require('child_process').exec(command, (err) => {
-            if (err) resolve(false);
-            else resolve(true);
-        });
+        require('child_process').exec(command, () => resolve(true));
     });
 }
 
 function startServer() {
     server.listen(PORT, () => {
-        console.log(`Nexus OS Web Interface running on http://localhost:${PORT}`);
+        console.log(`[Nexus OS] 🚀 Mission Control initialized at http://localhost:${PORT}`);
     }).on('error', async (err) => {
         if (err.code === 'EADDRINUSE') {
             console.error(`[Resilience] Port ${PORT} occupied! Auto-clearing...`);

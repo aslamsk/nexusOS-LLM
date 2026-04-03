@@ -15,7 +15,7 @@ const props = defineProps({
   downloadUsageReport: { type: Function, required: true }
 })
 
-const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
+const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod', 'open-chat', 'open-marketing', 'open-finance'])
 </script>
 
 <template>
@@ -25,6 +25,15 @@ const emit = defineEmits(['update:selectedFinanceClient', 'update:usagePeriod'])
         <div><span class="tiny-label">Client operations</span>
           <h3>Accounts and isolated keys</h3>
         </div><v-btn class="ghost" rounded="pill" variant="outlined" @click="props.loadClients">Refresh</v-btn>
+      </div>
+      <div class="stack-item">
+        <strong>Next step after adding a client</strong>
+        <p class="muted">First open the client's Keys if they need their own credentials. Then use Context to make that client active in Mission Control. Use Marketing or Finance only for those dedicated workflows.</p>
+        <div class="action-row">
+          <v-btn class="primary subtle" rounded="pill" @click="emit('open-chat')">Open Mission Control</v-btn>
+          <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-marketing')">Open Marketing</v-btn>
+          <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-finance')">Open Finance</v-btn>
+        </div>
       </div>
       <div class="card-grid">
         <div v-for="client in props.clients" :key="client.id" class="mini-card">

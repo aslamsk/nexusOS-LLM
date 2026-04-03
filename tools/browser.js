@@ -123,6 +123,65 @@ class BrowserTool {
         }
     }
 
+    async _clickElement(selector, timeout = 10000) {
+        await this.page.waitForSelector(selector, { visible: true, timeout });
+        const element = await this.page.$(selector);
+        if (!element) {
+            throw new Error(`Element not found for selector: ${selector}`);
+        }
+
+        await element.evaluate((el) => {
+            el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        });
+
+        const box = await element.boundingBox();
+        if (box) {
+            await this.page.mouse.click(box.x + (box.width / 2), box.y + (box.height / 2));
+            await new Promise(r => setTimeout(r, 250));
+        }
+
+        await element.evaluate((el) => {
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            el.click();
+            if ((el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['submit', 'button'].includes((el.type || '').toLowerCase()))) && el.form) {
+                if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit(el);
+                else el.form.submit();
+            }
+        });
+
+        await new Promise(r => setTimeout(r, 700));
+    }
+
+    async _setFieldValue(selector, text, timeout = 5000) {
+        await this.page.waitForSelector(selector, { visible: true, timeout });
+        await this.page.focus(selector);
+        await this.page.$eval(selector, (el, value) => {
+            if ('value' in el) {
+                el.value = '';
+                el.focus();
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }, text);
+        await this.page.type(selector, text, { delay: 25 });
+        await this.page.$eval(selector, (el) => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+        });
+    }
+
+    _normalizeSelector(selector) {
+        const value = String(selector || '').trim();
+        if (!value) return value;
+        const containsMatch = value.match(/^([a-z0-9_-]+)\s*:\s*contains\((['"])(.*?)\2\)$/i);
+        if (containsMatch) {
+            return `::-p-text(${containsMatch[3]})`;
+        }
+        return value;
+    }
+
     /**
      * Dispatcher for browser actions requested by the LLM
      */
@@ -169,8 +228,10 @@ class BrowserTool {
 
                 case 'click':
                     if (!args.selector) return 'Error: action=click requires selector';
-                    await this.page.waitForSelector(args.selector, { visible: true, timeout: args.timeout || 10000 });
-                    await this.page.click(args.selector);
+                    {
+                        const selector = this._normalizeSelector(args.selector);
+                        await this._clickElement(selector, args.timeout || 10000);
+                    }
                     return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'type':
@@ -182,10 +243,10 @@ class BrowserTool {
 
                 case 'clearAndType':
                     if (!args.selector || !args.text) return 'Error: action=clearAndType requires selector and text';
-                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
-                    await this.page.click(args.selector, { clickCount: 3 });
-                    await this.page.keyboard.press('Backspace');
-                    await this.page.type(args.selector, args.text);
+                    {
+                        const selector = this._normalizeSelector(args.selector);
+                        await this._setFieldValue(selector, args.text, args.timeout || 5000);
+                    }
                     return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, cleared: true, page: await this._describePageState() }, null, 2);
 
                 case 'focus':
@@ -242,7 +303,8 @@ class BrowserTool {
                 case 'waitForSelector':
                     if (!args.selector) return 'Error: action=waitForSelector requires selector';
                     try {
-                        await this.page.waitForSelector(args.selector, { timeout: args.timeout || 10000 });
+                        const selector = this._normalizeSelector(args.selector);
+                        await this.page.waitForSelector(selector, { timeout: args.timeout || 10000 });
                         return JSON.stringify({ ok: true, action, selector: args.selector, found: true, page: await this._describePageState() }, null, 2);
                     } catch (err) {
                         return JSON.stringify({ ok: false, action, selector: args.selector, found: false, classification: 'timeout', page: await this._describePageState(), error: err.message }, null, 2);
@@ -254,21 +316,20 @@ class BrowserTool {
                         // Use Puppeteer's built-in text selector which finds the deepest matching element
                         const safeText = String(args.text).replace(/[\\()]/g, '\\$&');
                         const selector = `::-p-text(${safeText})`;
-                        await this.page.waitForSelector(selector, { visible: true, timeout: args.timeout || 10000 });
-                        // Click via evaluate to bypass strict visibility/overlay checks
-                        await this.page.$eval(selector, el => {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            el.click();
-                        });
-                        return `Successfully clicked element containing text: '${args.text}'`;
+                        await this._clickElement(selector, args.timeout || 10000);
+                        return JSON.stringify({ ok: true, action, text: args.text, page: await this._describePageState() }, null, 2);
                     } catch (err) {
                         return JSON.stringify({ ok: false, action, text: args.text, error: err.message, classification: 'interaction_failure', page: await this._describePageState() }, null, 2);
                     }
 
                 case 'extract':
                     if (!args.selector) return 'Error: action=extract requires selector';
-                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
-                    const textContent = await this.page.$eval(args.selector, el => el.innerText || el.textContent || '');
+                    let textContent = '';
+                    {
+                        const selector = this._normalizeSelector(args.selector);
+                        await this.page.waitForSelector(selector, { timeout: 5000 });
+                        textContent = await this.page.$eval(selector, el => el.innerText || el.textContent || '');
+                    }
                     return JSON.stringify({ ok: true, action, selector: args.selector, text: textContent, page: await this._describePageState() }, null, 2);
 
                 case 'getMarkdown':

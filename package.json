@@ -6,10 +6,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "dev:all": "powershell -Command \"Start-Process powershell -ArgumentList '-NoExit','-Command','cd frontend; npm.cmd run dev'; npm.cmd run dev\"",
     "test": "node tests/run-marketing-tests.js",
     "test:nexus-guards": "node tests/test_nexus_regression_guards.js",
     "test:browser": "node tests/browser-tool-smoke.js",
-    "verify:deploy": "node -c server.js && node -c index.js && node -c core/marketing.js && node -c core/marketingPrompts.js && node -c core/marketingTemplates.js && node -c tools/marketingUtils.js && npm.cmd test && npm.cmd run test:nexus-guards && cd frontend && npm.cmd run build -- --configLoader native"
+    "verify:deploy": "node -c server.js && node -c index.js && node -c core/marketing.js && node -c core/marketingPrompts.js && node -c core/marketingTemplates.js && node -c tools/marketingUtils.js && npm.cmd test && npm.cmd run test:nexus-guards && cd frontend && npm.cmd run build -- --configLoader native",
+    "test:tools-smoke": "node tests/tool_smoke_matrix.js",
+    "test:e2e-critical:plan": "node -e \"console.log('See tests/TOOL_STABILITY_PLAN.md for the critical E2E execution order.')\""
   },
   "keywords": [],
   "author": "",
@@ -31,5 +34,8 @@
     "puppeteer": "^22.6.0",
     "replicate": "^1.4.0",
     "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "vscode-ripgrep": "^1.13.2"
   }
 }

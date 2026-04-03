@@ -9,7 +9,7 @@ const props = defineProps({
   alertsEnabled: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['open-settings', 'open-tools'])
+const emit = defineEmits(['open-settings', 'open-tools', 'open-clients'])
 </script>
 
 <template>
@@ -22,6 +22,15 @@ const emit = defineEmits(['open-settings', 'open-tools'])
         <v-btn class="ghost" rounded="pill" variant="outlined" @click="props.loadSetupCenter(props.latestNexusMessage)">Refresh Doctor</v-btn>
       </div>
       <div class="stack-list">
+        <div class="stack-item">
+          <strong>Next step after setup</strong>
+          <p class="muted">After provider onboarding, save Boss keys in Settings, then verify readiness in Capabilities, then move to Clients.</p>
+          <div class="action-row">
+            <v-btn class="primary subtle" rounded="pill" @click="emit('open-settings')">Go to Settings</v-btn>
+            <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-tools')">Open Capabilities</v-btn>
+            <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-clients')">Skip to Clients</v-btn>
+          </div>
+        </div>
         <div class="stack-item">
           <strong>Guided onboarding</strong>
           <p class="muted">Launch provider setup missions directly from Nexus. If login, OTP, MFA, or account selection is needed, answer in chat and Nexus should continue the same setup flow.</p>
@@ -60,6 +69,27 @@ const emit = defineEmits(['open-settings', 'open-tools'])
           </div>
         </div>
         <div class="stack-item">
+          <strong>System health & Connectivity</strong>
+          <div class="run-head"><strong>Environment Binaries</strong></div>
+          <p class="muted">
+            Git: <span class="badge" :class="props.setupDoctor.architecturalHealth?.git ? 'success' : 'warning'">{{ props.setupDoctor.architecturalHealth?.git ? 'Available' : 'Missing' }}</span> · 
+            Ripgrep: <span class="badge" :class="props.setupDoctor.architecturalHealth?.rg ? 'success' : 'warning'">{{ props.setupDoctor.architecturalHealth?.rg ? 'Available' : 'Missing' }}</span>
+          </p>
+          
+          <div class="run-head"><strong>IDE Bridge (VS Code)</strong></div>
+          <p class="muted">
+            Status: <span class="badge" :class="props.setupDoctor.architecturalHealth?.bridge?.isHealthy ? 'success' : 'warning'">{{ props.setupDoctor.architecturalHealth?.bridge?.isHealthy ? 'Connected' : 'Offline' }}</span> · 
+            Active: {{ props.setupDoctor.architecturalHealth?.bridge?.activeCount }} session(s)
+          </p>
+
+          <div class="run-head"><strong>Path Integrity</strong></div>
+          <ul class="muted smaller-list">
+            <li v-for="(ok, path) in props.setupDoctor.architecturalHealth?.paths" :key="path">
+              {{ path }}: {{ ok ? '✅ Writeable' : '❌ Blocked' }}
+            </li>
+          </ul>
+        </div>
+        <div class="stack-item">
           <strong>Boss alerts</strong>
           <p class="muted">When enabled, Nexus sends local notifications for tool actions, results, approvals needed, errors, and mission completion.</p>
           <div class="action-row"><v-btn class="ghost" rounded="pill" variant="outlined" @click="props.enableNotifications">{{ props.alertsEnabled ? 'Alerts Enabled' : 'Enable Alerts' }}</v-btn></div>
@@ -72,3 +102,15 @@ const emit = defineEmits(['open-settings', 'open-tools'])
     </div>
   </section>
 </template>
+
+<style scoped>
+.smaller-list {
+  padding-left: 20px;
+  margin-top: 5px;
+  list-style: none;
+}
+.success {
+  background: #4caf50;
+  color: white;
+}
+</style>

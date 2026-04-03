@@ -91,10 +91,35 @@ export function useShellComputed(options) {
       estimatedCostUsd: Number(estimatedCostUsd.toFixed(6))
     }
   })
-  const llmStatus = computed(() => ({
-    provider: missionSummary.value.activeRun?.lastLlmProvider || llmStatusSource.provider,
-    model: missionSummary.value.activeRun?.lastLlmModel || llmStatusSource.model
-  }))
+  const llmStatus = computed(() => {
+    const provider = missionSummary.value.activeRun?.lastLlmProvider || llmStatusSource.provider
+    const model = missionSummary.value.activeRun?.lastLlmModel || llmStatusSource.model
+    const latestLlmStatusLog = [...runtimeLogs.value].reverse().find((entry) =>
+      entry.type === 'thought' && String(entry.message || '').startsWith('LLM Status:')
+    )
+    const detail = latestLlmStatusLog
+      ? String(latestLlmStatusLog.message || '').replace(/^LLM Status:\s*/, '').trim()
+      : ''
+    const lower = detail.toLowerCase()
+    let badgeLabel = provider || 'AI'
+    let badgeClass = 'success'
+
+    if (lower.includes('retrying in') || lower.includes('quota/backoff')) {
+      badgeLabel = 'Gemini waiting'
+      badgeClass = 'warning'
+    } else if (lower.includes('rotating to next key')) {
+      badgeLabel = 'Gemini rotating'
+      badgeClass = 'warning'
+    } else if (lower.includes('fallback provider') || lower.includes('trying fallback provider')) {
+      badgeLabel = 'Fallback active'
+      badgeClass = 'warning'
+    } else if (missionSummary.value.activeRun?.lastTool === 'browserAction' && missionStatus.value === 'active') {
+      badgeLabel = 'Browser running'
+      badgeClass = 'success'
+    }
+
+    return { provider, model, detail, badgeLabel, badgeClass }
+  })
   const activeMissionMode = computed(() => missionSummary.value.missionMode || activeMissionModeSource)
   const pendingApprovalSummary = computed(() => {
     const pending = missionSummary.value.pendingApproval

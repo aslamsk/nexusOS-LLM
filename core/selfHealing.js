@@ -22,6 +22,20 @@ class SelfHealingService {
             };
         }
 
+        if ((name === 'browserAction' || text.includes('quiz') || text.includes('question')) && (
+            text.includes('do not have the inherent knowledge') ||
+            text.includes('i do not have the inherent knowledge') ||
+            text.includes('need your instructions on how to determine') ||
+            text.includes('provide the correct answers') ||
+            text.includes('cannot determine the correct answers')
+        )) {
+            return {
+                type: 'browser_reasoning_gap',
+                severity: 'medium',
+                summary: 'The browser mission paused too early instead of continuing from page state and available reasoning.'
+            };
+        }
+
         if (text.includes('missing page id') || text.includes('missing') || text.includes('not initialized')) {
             return {
                 type: 'configuration_gap',
@@ -74,6 +88,12 @@ class SelfHealingService {
                     strategy: 'auto_scan',
                     safe: true,
                     message: 'Run browser element extraction and retry with updated page context.'
+                };
+            case 'browser_reasoning_gap':
+                return {
+                    strategy: 'browser_continue',
+                    safe: true,
+                    message: 'Re-scan the page, infer the next step from visible UI, and continue the browser mission without asking the Boss unless truly blocked.'
                 };
             case 'timeout':
                 return {

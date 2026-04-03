@@ -11,7 +11,7 @@ const props = defineProps({
   saveConfig: { type: Function, required: true }
 })
 
-const emit = defineEmits(['update:usagePeriod'])
+const emit = defineEmits(['update:usagePeriod', 'open-tools', 'open-clients'])
 </script>
 
 <template>
@@ -25,6 +25,14 @@ const emit = defineEmits(['update:usagePeriod'])
       <div class="stack-item">
         <strong>Boss / Global default mode</strong>
         <p class="muted">Primary Gemini first, then OpenRouter, Groq, and NVIDIA fallback when configured.</p>
+      </div>
+      <div class="stack-item">
+        <strong>Next step after Boss keys</strong>
+        <p class="muted">Once your internal company keys are saved, open Capabilities to confirm readiness. Then go to Clients and attach client-specific keys only where needed.</p>
+        <div class="action-row">
+          <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-tools')">Go to Capabilities</v-btn>
+          <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('open-clients')">Go to Clients</v-btn>
+        </div>
       </div>
       <div class="action-row">
         <v-select

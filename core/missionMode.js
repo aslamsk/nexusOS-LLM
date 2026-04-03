@@ -14,24 +14,23 @@ function detectMissionMode(text, override = null) {
         /\b(analyze|audit|review|check|understand|look into|investigate|help me with|what is wrong|why|how to|strategy|plan)\b/.test(value) &&
         !needsExecution;
     
-    // [RESILIENCE] Mode routing:
-    // - Browser quizzes/forms are safer in PLAN mode (scan -> decide -> act).
-    // - Other automation intent stays in EXECUTE for direct tool use.
-    const isQuizOrFormIntent = /\b(quiz|form|submit|fill|read questions?)\b/.test(value);
-    if (isQuizOrFormIntent) {
-        console.log(`[MissionMode] Quiz/form intent detected. Using PLAN mode.`);
-        return 'plan';
-    }
-    const isAutomationIntent = /\b(open|browser|url|http|click|navigate|proofread website)\b/.test(value);
-    if (isAutomationIntent) {
-        console.log(`[RESILIENCE] Automation intent detected. Escalating to EXECUTE mode (ignoring override: ${override}).`);
+    // Generic browser-first routing:
+    // Any request that clearly involves live page interaction should stay in EXECUTE.
+    // This is intentionally page/task agnostic: routing should not depend on site-specific flows.
+    const hasUrl = /https?:\/\//.test(value);
+    const hasBrowserSurface = /\b(browser|website|site|page|portal|dashboard|console|url|link)\b/.test(value);
+    const hasInteractiveIntent = /\b(open|visit|navigate|click|fill|type|enter|submit|select|scroll|read|check|inspect|login|log in|sign in|signin)\b/.test(value);
+    const isBrowserAutomationIntent = hasUrl || (hasBrowserSurface && hasInteractiveIntent);
+
+    if (isBrowserAutomationIntent) {
+        console.log(`[MissionMode] Browser automation detected. Using EXECUTE mode.`);
         return 'execute';
     }
 
     if (override && ['chat', 'discuss', 'plan', 'execute'].includes(String(override).toLowerCase())) {
         const normalized = String(override).toLowerCase();
         // Never allow a "chat" override to suppress real execution when the Boss asked for work.
-        if (normalized === 'chat' && needsExecution) {
+        if (normalized === 'chat' && (needsExecution || isBrowserAutomationIntent)) {
             console.log(`[MissionMode] Ignoring CHAT override because execution is required.`);
             return 'execute';
         }

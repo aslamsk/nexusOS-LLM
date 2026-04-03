@@ -25,7 +25,7 @@ import EditToolModal from './components/EditToolModal.vue'
 
 const socket = io()
 const vuetifyTheme = useTheme()
-const activeView = ref('chat')
+const activeView = ref('setup')
 const chatHistory = ref([{ sender: 'nexus', text: 'Mission control is online, Boss. Give me the objective.' }])
 const runtimeLogs = ref([])
 const missionTrace = ref([])
@@ -107,7 +107,7 @@ const clientKeyLabels = ref({})
 const isMobileNavOpen = ref(false)
 const isMobileRailOpen = ref(false)
 const isSidebarCollapsed = ref(false)
-const isRailCollapsed = ref(false)
+const isRailCollapsed = ref(true)
 const isMobileViewport = ref(false)
 const isSummaryVisible = ref(true)
 const theme = ref(localStorage.getItem('nexus_theme') || 'light')
@@ -139,7 +139,7 @@ function startVoiceInput() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
     showToast('Voice recognition not supported in this browser. Try Chrome or Edge, Boss.', 'error'); return
   }
-  
+
   try {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     voiceRecognition = new SpeechRecognition()
@@ -147,7 +147,7 @@ function startVoiceInput() {
     voiceRecognition.interimResults = false
     // Use Indian English for better accuracy in target region, fallback to US
     voiceRecognition.lang = 'en-IN'
-    
+
     voiceRecognition.onstart = () => {
       isVoiceListening.value = true
       showToast('I am listening, Boss...', 'success')
@@ -230,14 +230,24 @@ const AGENCY_QUOTE_PRESETS = {
 }
 
 const navItems = [
-  { view: 'chat', label: 'Mission Control', eyebrow: 'Live operations', icon: 'MC' },
-  { view: 'clients', label: 'Clients', eyebrow: 'Contexts and keys', icon: 'CL' },
-  { view: 'finance', label: 'Finance', eyebrow: 'Quotes and invoices', icon: 'FN' },
-  { view: 'marketing', label: 'Marketing', eyebrow: 'Workflows and briefs', icon: 'MK' },
-  { view: 'usage', label: 'Usage', eyebrow: 'Models and costs', icon: 'US' },
-  { view: 'setup', label: 'Setup Center', eyebrow: 'Provider onboarding', icon: 'SC' },
-  { view: 'tools', label: 'Capabilities', eyebrow: 'Provider readiness', icon: 'CP' },
-  { view: 'settings', label: 'Settings', eyebrow: 'System configuration', icon: 'ST' }
+  { view: 'setup', label: 'Setup Center', eyebrow: 'Step 1 - Provider onboarding', icon: 'SC' },
+  { view: 'settings', label: 'Settings', eyebrow: 'Step 2 - Boss keys and defaults', icon: 'ST' },
+  { view: 'tools', label: 'Capabilities', eyebrow: 'Step 3 - Provider readiness', icon: 'CP' },
+  { view: 'clients', label: 'Clients', eyebrow: 'Step 4 - Add clients and keys', icon: 'CL' },
+  { view: 'chat', label: 'Mission Control', eyebrow: 'Step 5 - Run client work', icon: 'MC' },
+  { view: 'marketing', label: 'Marketing', eyebrow: 'Step 6 - Structured marketing workflows', icon: 'MK' },
+  { view: 'finance', label: 'Finance', eyebrow: 'Step 7 - Quotes and invoices', icon: 'FN' },
+  { view: 'usage', label: 'Usage', eyebrow: 'Step 8 - Costs and analytics', icon: 'US' }
+]
+
+const recommendedFlow = [
+  { view: 'setup', title: 'Setup Nexus', note: 'Run Setup Doctor and connect providers.' },
+  { view: 'settings', title: 'Add Boss Keys', note: 'Save internal company defaults and global keys.' },
+  { view: 'tools', title: 'Check Capabilities', note: 'Confirm which tools are ready before client work.' },
+  { view: 'clients', title: 'Add Client', note: 'Create the client, then attach client-specific keys if needed.' },
+  { view: 'chat', title: 'Run Mission', note: 'Select context and ask Nexus to do the actual task.' },
+  { view: 'marketing', title: 'Marketing Work', note: 'Use for audit bundles, briefs, and social workflows.' },
+  { view: 'finance', title: 'Finance Work', note: 'Use for quotes, invoices, and commercial follow-up.' }
 ]
 
 const SERVICE_SELECTOR_OPTIONS = [
@@ -767,17 +777,9 @@ onBeforeUnmount(() => {
 
 <template>
   <v-app class="app-shell" :class="{ compact: isSidebarCollapsed, railHidden: isRailCollapsed }">
-    <v-navigation-drawer
-      :app="!isMobileViewport"
-      :model-value="isMobileViewport ? isMobileNavOpen : true"
-      :permanent="!isMobileViewport"
-      :temporary="isMobileViewport"
-      :rail="!isMobileViewport && isSidebarCollapsed"
-      :width="260"
-      :rail-width="88"
-      class="sidebar app-drawer"
-      @update:model-value="isMobileNavOpen = $event"
-    >
+    <v-navigation-drawer :app="!isMobileViewport" :model-value="isMobileViewport ? isMobileNavOpen : true"
+      :permanent="!isMobileViewport" :temporary="isMobileViewport" :rail="!isMobileViewport && isSidebarCollapsed"
+      :width="232" :rail-width="78" class="sidebar app-drawer" @update:model-value="isMobileNavOpen = $event">
       <div class="brand">
         <!-- <div class="brand-mark">
           <span class="brand-mark-text">N</span>
@@ -787,14 +789,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <v-list class="sidebar-list" bg-color="transparent" nav>
-        <v-list-item
-          v-for="item in navItems"
-          :key="item.view"
-          :active="activeView === item.view"
-          class="nav-item"
-          rounded="xl"
-          @click="changeView(item.view)"
-        >
+        <v-list-item v-for="item in navItems" :key="item.view" :active="activeView === item.view" class="nav-item"
+          rounded="xl" @click="changeView(item.view)">
           <template #prepend>
             <v-avatar size="28" class="nav-avatar">{{ item.icon }}</v-avatar>
           </template>
@@ -808,528 +804,426 @@ onBeforeUnmount(() => {
       </div>
       <div class="sidebar-card"> <br>
         <span class="tiny-label">Context - </span><strong>{{ activeClientName }}</strong> <br><span
-          class="tiny-copy">Session {{ sessionId || 'pending' }}</span>
+          class="tiny-copy">Session
+          {{ sessionId || 'pending' }}</span>
       </div>
     </v-navigation-drawer>
 
     <v-main class="workspace-main">
-    <main class="workspace" :class="{ 'chat-mode': activeView === 'chat' }">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">{{ currentViewMeta.eyebrow }}</p>
-          <h1>{{ currentViewMeta.label }}</h1>
-        </div>
-        <div class="action-row topbar-actions">
-          <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="isSidebarCollapsed = !isSidebarCollapsed">
-            {{ isSidebarCollapsed ? 'Show Left' : 'Hide Left' }}
-          </v-btn>
-          <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="isRailCollapsed = !isRailCollapsed">
-            {{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}
-          </v-btn>
-          <v-btn
-            v-if="!isRailCollapsed"
-            class="ghost desktop-only"
-            rounded="pill"
-            variant="outlined"
-            @click="isSummaryVisible = !isSummaryVisible"
-          >
-            {{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}
-          </v-btn>
-          <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="enableNotifications">Alerts</v-btn>
-          
-          <div class="desktop-only zoom-controls action-row">
-            <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(-0.05)">-</v-btn>
-            <v-btn class="ghost" rounded="pill" variant="outlined" size="small" style="min-width: 64px;" @click="resetZoom">
-              {{ Math.round(zoomLevel * 100) }}%
+      <main class="workspace" :class="{ 'chat-mode': activeView === 'chat' }">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">{{ currentViewMeta.eyebrow }}</p>
+            <h1>{{ currentViewMeta.label }}</h1>
+          </div>
+          <div class="action-row topbar-actions">
+            <v-btn class="ghost desktop-only" rounded="pill" variant="outlined"
+              @click="isSidebarCollapsed = !isSidebarCollapsed">
+              {{ isSidebarCollapsed ? 'Show Left' : 'Hide Left' }}
             </v-btn>
-            <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(0.05)">+</v-btn>
-          </div>
+            <v-btn class="ghost desktop-only" rounded="pill" variant="outlined"
+              @click="isRailCollapsed = !isRailCollapsed">
+              {{ isRailCollapsed ? 'Show Right' : 'Hide Right' }}
+            </v-btn>
+            <v-btn v-if="!isRailCollapsed" class="ghost desktop-only" rounded="pill" variant="outlined"
+              @click="isSummaryVisible = !isSummaryVisible">
+              {{ isSummaryVisible ? 'Hide Overview' : 'Show Overview' }}
+            </v-btn>
+            <v-btn class="ghost desktop-only" rounded="pill" variant="outlined"
+              @click="enableNotifications">Alerts</v-btn>
 
-          <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="toggleTheme">{{ theme === 'dark' ? 'Light' : 'Dark' }}</v-btn>
-          <v-btn class="ghost mobile-only" rounded="pill" variant="outlined" @click="isMobileNavOpen = !isMobileNavOpen">Menu</v-btn>
-          <v-btn
-            v-if="activeView === 'chat'"
-            class="ghost mobile-only"
-            rounded="pill"
-            variant="outlined"
-            @click="isMobileRailOpen = !isMobileRailOpen"
-          >
-            {{ isMobileRailOpen ? 'Hide Overview' : 'Overview' }}
-          </v-btn>
-          <div class="mobile-only mobile-actions-menu">
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <v-btn class="ghost" rounded="pill" variant="outlined" v-bind="props">More</v-btn>
-              </template>
-              <v-list density="comfortable" class="mobile-overflow-list">
-                <v-list-item @click="enableNotifications">
-                  <v-list-item-title>Alerts</v-list-item-title>
-                </v-list-item>
-                <v-list-item @click="toggleTheme">
-                  <v-list-item-title>{{ theme === 'dark' ? 'Light Mode' : 'Dark Mode' }}</v-list-item-title>
-                </v-list-item>
-                <v-list-item v-if="activeView !== 'chat'" @click="changeView('chat')">
-                  <v-list-item-title>Mission Control</v-list-item-title>
-                </v-list-item>
-              </v-list>
-            </v-menu>
-          </div>
-          <v-btn v-if="activeView === 'clients'" class="primary" rounded="pill" @click="isAddingClient = true">Add Client</v-btn>
-          <v-btn v-else class="primary" rounded="pill" @click="startNewOrchestration">New Session</v-btn>
-        </div>
-      </header>
-
-      <section v-if="activeView !== 'chat'" class="hero-grid compact-bar"
-        :class="{ expanded: isRailCollapsed, docked: !isRailCollapsed }">
-        <article class="hero-card">
-          <span class="tiny-label">Mission posture</span>
-          <h2>
-            {{ missionStatus === 'active' ? 'Operation in progress' : missionStatus === 'paused' ? 'Awaiting Boss input'
-              : 'Ready for next mission' }}</h2>
-          <p class="muted">Run client missions, review outputs, monitor queue health, and track Nexus-tracked usage from one
-            place.</p>
-          <div class="pill-row"><span class="pill">{{ missionSummary.totals.missions }} missions</span><span
-              class="pill">{{ missionSummary.totals.successRate }}% success</span><span class="pill">{{
-                activeIntegrationCount }} integrations</span><span class="pill">{{
-                dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est. cost</span></div>
-        </article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
-          missionSummary.totals.toolCalls }}</strong>
-          <p>Total calls</p>
-        </article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
-          missionSummary.queue?.totals?.queued || 0 }}</strong>
-          <p>Waiting missions</p>
-        </article>
-        <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
-          missionSummary.totals.llmCalls || 0 }}</strong>
-          <p>LLM calls</p>
-        </article>
-      </section>
-
-      <section v-if="activeView === 'chat'" class="chat-layout">
-        <ChatMissionPanel
-          ref="chatMissionPanel"
-          :active-mission-mode="activeMissionMode"
-          :chat-history="chatHistory"
-          :clients="clients"
-          :current-blocker="currentBlocker"
-          :current-engine="currentEngine"
-          :current-stage="currentStage"
-          :engine-theme-class="engineThemeClass"
-          :format-message="formatMessage"
-          :is-voice-listening="isVoiceListening"
-          :is-working="isWorking"
-            :llm-status="llmStatus"
-            :mission-status="missionStatus"
-            :mission-mode-override="missionModeOverride"
-          :mission-summary="missionSummary"
-          :mission-trace="missionTrace"
-          :mode-routing-hint="modeRoutingHint"
-            :output-files="outputFiles"
-            :pending-approval-summary="pendingApprovalSummary"
-            :prompt-input="promptInput"
-            :selected-client-for-chat="selectedClientForChat"
-          :suggested-reply-chips="suggestedReplyChips"
-          :uploaded-context-files="uploadedContextFiles"
-          @file-upload="handleFileUpload"
-          @reply-chip="useReplyChip"
-          @stop-voice="stopVoiceInput"
-          @submit="submitTask"
-          @terminate="terminateTask"
-          @toggle-voice="startVoiceInput"
-          @requeue-job="requeueJob"
-          @retry-job="retryJobNow"
-          @update:mission-mode-override="missionModeOverride = $event"
-          @update:prompt-input="promptInput = $event"
-          @update:selected-client-for-chat="selectedClientForChat = $event"
-        />
-        <v-navigation-drawer
-          v-if="(!isMobileViewport && !isRailCollapsed) || (isMobileViewport && isMobileRailOpen)"
-          :app="!isMobileViewport"
-          :model-value="isMobileViewport ? isMobileRailOpen : true"
-          :permanent="!isMobileViewport"
-          :temporary="isMobileViewport"
-          location="right"
-          :width="320"
-          class="rail app-rail-drawer"
-          @update:model-value="isMobileRailOpen = $event"
-        >
-          <div v-if="isSummaryVisible" class="panel summary-panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Operations</span>
-                <h3>Mission overview</h3>
-              </div>
+            <div class="desktop-only zoom-controls action-row">
+              <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(-0.05)">-</v-btn>
+              <v-btn class="ghost" rounded="pill" variant="outlined" size="small" style="min-width: 64px;"
+                @click="resetZoom">
+                {{ Math.round(zoomLevel * 100) }}%
+              </v-btn>
+              <v-btn class="ghost" size="x-small" variant="text" @click="adjustZoom(0.05)">+</v-btn>
             </div>
-            <div class="summary-scroll">
-              <article class="hero-card summary-hero">
-                <span class="tiny-label">Mission posture</span>
-                <h2>
-                  {{ missionStatus === 'active' ? 'Operation in progress' :
-                    missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}
-                </h2>
-                <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage
-                  from one place.</p>
-                <div class="pill-row">
-                  <span class="pill">{{ missionSummary.totals.missions }} missions</span>
-                  <span class="pill">{{ missionSummary.totals.successRate }}% success</span>
-                  <span class="pill">{{ activeIntegrationCount }} integrations</span>
-                  <span class="pill">{{ dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est.
-                    cost</span>
+
+            <v-btn class="ghost desktop-only" rounded="pill" variant="outlined" @click="toggleTheme">{{ theme === 'dark'
+              ?
+              'Light' : 'Dark' }}</v-btn>
+            <v-btn class="ghost mobile-only" rounded="pill" variant="outlined"
+              @click="isMobileNavOpen = !isMobileNavOpen">Menu</v-btn>
+            <v-btn v-if="activeView === 'chat'" class="ghost mobile-only" rounded="pill" variant="outlined"
+              @click="isMobileRailOpen = !isMobileRailOpen">
+              {{ isMobileRailOpen ? 'Hide Right Panel' : 'Show Right Panel' }}
+            </v-btn>
+            <div class="mobile-only mobile-actions-menu">
+              <v-menu location="bottom end">
+                <template #activator="{ props }">
+                  <v-btn class="ghost" rounded="pill" variant="outlined" v-bind="props">More</v-btn>
+                </template>
+                <v-list density="comfortable" class="mobile-overflow-list">
+                  <v-list-item @click="enableNotifications">
+                    <v-list-item-title>Alerts</v-list-item-title>
+                  </v-list-item>
+                  <v-list-item @click="toggleTheme">
+                    <v-list-item-title>{{ theme === 'dark' ? 'Light Mode' : 'Dark Mode' }}</v-list-item-title>
+                  </v-list-item>
+                  <v-list-item v-if="activeView !== 'chat'" @click="changeView('chat')">
+                    <v-list-item-title>Mission Control</v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-menu>
+            </div>
+            <v-btn v-if="activeView === 'clients'" class="primary" rounded="pill" @click="isAddingClient = true">Add
+              Client</v-btn>
+            <v-btn v-else class="primary" rounded="pill" @click="startNewOrchestration">New Session</v-btn>
+          </div>
+        </header>
+
+
+        <section v-if="activeView !== 'chat'" class="hero-grid compact-bar"
+          :class="{ expanded: isRailCollapsed, docked: !isRailCollapsed }">
+          <article class="hero-card">
+            <span class="tiny-label">Mission posture</span>
+            <h2>
+              {{ missionStatus === 'active' ? 'Operation in progress' : missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}</h2>
+            <p class="muted">Run client missions, review outputs, monitor queue health, and track Nexus-tracked usage
+              from
+              one
+              place.</p>
+            <div class="pill-row"><span class="pill">{{ missionSummary.totals.missions }} missions</span><span
+                class="pill">{{ missionSummary.totals.successRate }}% success</span><span class="pill">{{
+                  activeIntegrationCount }} integrations</span><span class="pill">{{
+                  dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est. cost</span></div>
+          </article>
+          <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
+            missionSummary.totals.toolCalls }}</strong>
+            <p>Total calls</p>
+          </article>
+          <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
+            missionSummary.queue?.totals?.queued || 0 }}</strong>
+            <p>Waiting missions</p>
+          </article>
+          <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
+            missionSummary.totals.llmCalls || 0 }}</strong>
+            <p>LLM calls</p>
+          </article>
+        </section>
+
+        <section v-if="activeView === 'chat'" class="chat-layout">
+          <ChatMissionPanel ref="chatMissionPanel" :active-mission-mode="activeMissionMode" :chat-history="chatHistory"
+            :clients="clients" :current-blocker="currentBlocker" :current-engine="currentEngine"
+            :current-stage="currentStage" :engine-theme-class="engineThemeClass" :format-message="formatMessage"
+            :is-voice-listening="isVoiceListening" :is-working="isWorking" :llm-status="llmStatus"
+            :mission-status="missionStatus" :mission-mode-override="missionModeOverride"
+            :mission-summary="missionSummary" :mission-trace="missionTrace" :mode-routing-hint="modeRoutingHint"
+            :output-files="outputFiles" :pending-approval-summary="pendingApprovalSummary" :prompt-input="promptInput"
+            :selected-client-for-chat="selectedClientForChat" :suggested-reply-chips="suggestedReplyChips"
+            :uploaded-context-files="uploadedContextFiles" @file-upload="handleFileUpload" @reply-chip="useReplyChip"
+            @stop-voice="stopVoiceInput" @submit="submitTask" @terminate="terminateTask" @toggle-voice="startVoiceInput"
+            @requeue-job="requeueJob" @retry-job="retryJobNow"
+            @update:mission-mode-override="missionModeOverride = $event" @update:prompt-input="promptInput = $event"
+            @update:selected-client-for-chat="selectedClientForChat = $event" />
+          <v-navigation-drawer v-if="(!isMobileViewport && !isRailCollapsed) || (isMobileViewport && isMobileRailOpen)"
+            :app="!isMobileViewport" :model-value="isMobileViewport ? isMobileRailOpen : true"
+            :permanent="!isMobileViewport" :temporary="isMobileViewport" location="right" :width="272"
+            class="rail app-rail-drawer" @update:model-value="isMobileRailOpen = $event">
+            <div class="panel summary-panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Control Dock</span>
+                  <h3>Mission overview</h3>
                 </div>
-              </article>
-              <div class="summary-metrics">
-                <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
-                  missionSummary.totals.toolCalls }}</strong>
-                  <p>Total calls</p>
+              </div>
+              <div class="summary-scroll">
+                <article class="hero-card summary-hero">
+                  <span class="tiny-label">Mission posture</span>
+                  <h2>
+                    {{ missionStatus === 'active' ? 'Operation in progress' :
+                      missionStatus === 'paused' ? 'Awaiting Boss input' : 'Ready for next mission' }}
+                  </h2>
+                  <p class="muted">Run client missions, review outputs, monitor queue health, and track estimated usage
+                    from one place.</p>
+                  <div class="pill-row">
+                    <span class="pill">{{ missionSummary.totals.missions }} missions</span>
+                    <span class="pill">{{ missionSummary.totals.successRate }}% success</span>
+                    <span class="pill">{{ activeIntegrationCount }} integrations</span>
+                    <span class="pill">{{ dualCurrency(missionSummary.usage?.sessionEstimatedCostUsd || 0) }} est.
+                      cost</span>
+                  </div>
                 </article>
-                <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
-                  missionSummary.queue?.totals?.queued || 0 }}</strong>
-                  <p>Waiting missions</p>
-                </article>
-                <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
-                  missionSummary.totals.llmCalls || 0 }}</strong>
-                  <p>LLM calls</p>
-                </article>
+                <div class="summary-metrics">
+                  <article class="metric-card compact-metric"><span class="tiny-label">Tools</span><strong>{{
+                    missionSummary.totals.toolCalls }}</strong>
+                    <p>Total calls</p>
+                  </article>
+                  <article class="metric-card compact-metric"><span class="tiny-label">Queue</span><strong>{{
+                    missionSummary.queue?.totals?.queued || 0 }}</strong>
+                    <p>Waiting missions</p>
+                  </article>
+                  <article class="metric-card compact-metric"><span class="tiny-label">Usage</span><strong>{{
+                    missionSummary.totals.llmCalls || 0 }}</strong>
+                    <p>LLM calls</p>
+                  </article>
+                </div>
               </div>
             </div>
-          </div>
-          <div v-if="missionSummary.pendingApproval" class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Approval gate</span>
-                <h3>Boss confirmation needed</h3>
+            <div v-if="missionSummary.pendingApproval" class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Approval gate</span>
+                  <h3>Needs your decision</h3>
+                </div>
+              </div>
+              <div class="stack-item">
+                <strong>{{ missionSummary.pendingApproval.toolCall?.name }}</strong>
+                <p class="muted">{{ missionSummary.pendingApproval.reason }}</p>
+                <p class="muted">{{ missionSummary.pendingApproval.preview }}</p>
+                <pre v-if="missionSummary.pendingApproval.details" class="approval-json">{{
+                  JSON.stringify(missionSummary.pendingApproval.details, null, 2) }}</pre>
               </div>
             </div>
-            <div class="stack-item">
-              <strong>{{ missionSummary.pendingApproval.toolCall?.name }}</strong>
-              <p class="muted">{{ missionSummary.pendingApproval.reason }}</p>
-              <p class="muted">{{ missionSummary.pendingApproval.preview }}</p>
-              <pre v-if="missionSummary.pendingApproval.details"
-                class="approval-json">{{ JSON.stringify(missionSummary.pendingApproval.details, null, 2) }}</pre>
-            </div>
-          </div>
-          <div v-if="missionSummary.pendingRepair" class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Self-healing</span>
-                <h3>Repair mode suggested</h3>
+            <div v-if="missionSummary.pendingRepair" class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Repair</span>
+                  <h3>Suggested fix</h3>
+                </div>
+              </div>
+              <div class="stack-item">
+                <strong>{{ missionSummary.pendingRepair.classification?.type }}</strong>
+                <p class="muted">{{ missionSummary.pendingRepair.classification?.summary }}</p>
+                <p class="muted">{{ missionSummary.pendingRepair.playbook?.message }}</p>
               </div>
             </div>
-            <div class="stack-item">
-              <strong>{{ missionSummary.pendingRepair.classification?.type }}</strong>
-              <p class="muted">{{ missionSummary.pendingRepair.classification?.summary }}</p>
-              <p class="muted">{{ missionSummary.pendingRepair.playbook?.message }}</p>
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Queue</span>
-                <h3>Durable mission queue</h3>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Quick actions</span>
+                  <h3>Next moves</h3>
+                </div>
+              </div>
+              <div class="stack-list">
+                <div class="stack-item">
+                  <strong>{{ selectedClientForChat ? activeClientName : 'Boss workspace' }}</strong>
+                  <p class="muted">Use these shortcuts to start structured work faster.</p>
+                  <div class="action-row">
+                    <v-btn class="ghost" rounded="pill" variant="outlined" @click="changeView('marketing'); promptInput = 'Create a marketing audit for the selected context and stop after the findings summary.'">Create Audit</v-btn>
+                    <v-btn class="ghost" rounded="pill" variant="outlined" @click="changeView('finance'); promptInput = 'Generate a quote for the selected context and show me the pricing breakdown before sending.'">Generate Quote</v-btn>
+                  </div>
+                  <div class="action-row">
+                    <v-btn class="ghost" rounded="pill" variant="outlined" @click="changeView('chat'); promptInput = 'Draft an email for the selected context and stop for approval before sending.'">Send Email</v-btn>
+                    <v-btn class="ghost" rounded="pill" variant="outlined" @click="changeView('chat'); promptInput = 'Continue the current task from the latest safe point and tell me the next step.'">Continue Task</v-btn>
+                  </div>
+                </div>
               </div>
             </div>
-            <div v-if="recentQueue.length" class="stack-list">
-              <div v-for="job in recentQueue" :key="job.id" class="stack-item">
-                <div class="run-head"><strong>{{ job.prompt }}</strong><span class="badge" :class="job.status">{{
-                  job.status }}</span></div>
-                <p class="muted">{{ prettyDate(job.createdAt) }} · {{ job.clientId || 'system' }}</p>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Queue</span>
+                  <h3>Mission queue</h3>
+                </div>
               </div>
-            </div>
-            <p v-else class="muted">Queued missions will appear here.</p>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Queue controls</span>
-                <h3>Replay and retry</h3>
+              <div v-if="recentQueue.length" class="stack-list">
+                <div v-for="job in recentQueue" :key="job.id" class="stack-item">
+                  <div class="run-head"><strong>{{ job.prompt }}</strong><span class="badge" :class="job.status">{{
+                    job.status }}</span></div>
+                  <p class="muted">{{ prettyDate(job.createdAt) }} · {{ job.clientId || 'system' }}</p>
+                </div>
               </div>
+              <p v-else class="muted">Queued missions will appear here.</p>
             </div>
-            <div
-              v-if="recentQueue.some(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
-              class="stack-list">
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Queue actions</span>
+                  <h3>Retry controls</h3>
+                </div>
+              </div>
               <div
-                v-for="job in recentQueue.filter(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
-                :key="job.id + '-control'" class="stack-item">
-                <div class="run-head"><strong>{{ job.status }}</strong><span>{{ prettyDate(job.createdAt) }}</span>
+                v-if="recentQueue.some(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
+                class="stack-list">
+                <div
+                  v-for="job in recentQueue.filter(job => job.status === 'dead_letter' || job.status === 'cancelled' || job.status === 'failed' || job.status === 'retry_wait')"
+                  :key="job.id + '-control'" class="stack-item">
+                  <div class="run-head"><strong>{{ job.status }}</strong><span>{{ prettyDate(job.createdAt) }}</span>
+                  </div>
+                  <p class="muted">{{ job.prompt }}</p>
+                  <div class="action-row" v-if="job.status === 'retry_wait'"><v-btn class="ghost" rounded="pill"
+                      variant="outlined" @click="retryJobNow(job.id)">Retry Now</v-btn></div>
+                  <div class="action-row" v-else><v-btn class="ghost" rounded="pill" variant="outlined"
+                      @click="requeueJob(job.id)">Requeue</v-btn></div>
                 </div>
-                <p class="muted">{{ job.prompt }}</p>
-                <div class="action-row" v-if="job.status === 'retry_wait'"><v-btn class="ghost"
-                    rounded="pill" variant="outlined" @click="retryJobNow(job.id)">Retry Now</v-btn></div>
-                <div class="action-row" v-else><v-btn class="ghost" rounded="pill" variant="outlined" @click="requeueJob(job.id)">Requeue</v-btn></div>
+              </div>
+              <p v-else class="muted">No manual queue actions needed right now.</p>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Runtime</span>
+                  <h3>Provider and mode</h3>
+                </div>
+              </div>
+              <div class="stack-item">
+                <strong>{{ llmStatus.provider }}</strong>
+                <p class="muted">{{ llmStatus.model }}</p>
+              </div>
+              <div class="stack-item">
+                <strong>Mission mode</strong>
+                <p class="muted">Active: {{ activeMissionMode.toUpperCase() }}</p>
+                <div class="action-row">
+                  <v-select v-model="missionModeOverride"
+                    :items="[{ title: 'Chat', value: 'chat' }, { title: 'Execute', value: 'execute' }, { title: 'Auto', value: 'auto' }]"
+                    item-title="title" item-value="value" density="comfortable" variant="outlined" hide-details
+                    class="usage-select" />
+                </div>
+              </div>
+              <div class="stack-item">
+                <strong>Live usage</strong>
+                <p class="muted">{{ todayLiveUsage.calls }} model calls in this run · {{ todayLiveUsage.paidCalls }}
+                  paid-estimated</p>
+                <p class="muted">{{ todayLiveUsage.totalTokens }} total tokens | {{ todayLiveUsage.inputTokens }} in |
+                  {{
+                    todayLiveUsage.outputTokens }} out</p>
+                <p class="muted">{{ dualCurrency(todayLiveUsage.estimatedCostUsd || 0) }} current run est. cost</p>
               </div>
             </div>
-            <p v-else class="muted">No manual queue actions needed right now.</p>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">LLM runtime</span>
-                <h3>Provider and model</h3>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Outputs</span>
+                  <h3>Files</h3>
+                </div><v-btn class="ghost" rounded="pill" variant="outlined"
+                  @click="socket.emit('get_outputs')">Refresh</v-btn>
               </div>
+              <div v-if="outputFiles.length" class="stack-list"><a v-for="file in outputFiles" :key="file.url"
+                  :href="file.url" target="_blank" rel="noreferrer" class="stack-item"><span>{{ file.name
+                  }}</span><span>Open</span></a></div>
+              <p v-else class="muted">Generated files will appear here.</p>
             </div>
-            <div class="stack-item">
-              <strong>{{ llmStatus.provider }}</strong>
-              <p class="muted">{{ llmStatus.model }}</p>
-            </div>
-            <div class="stack-item">
-              <strong>Mission mode</strong>
-              <p class="muted">Active: {{ activeMissionMode.toUpperCase() }}</p>
-              <div class="action-row">
-                <v-select v-model="missionModeOverride"
-                  :items="[{ title: 'Chat', value: 'chat' }, { title: 'Execute', value: 'execute' }, { title: 'Auto', value: 'auto' }]"
-                  item-title="title" item-value="value" density="comfortable" variant="outlined" hide-details class="usage-select" />
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Recent runs</span>
+                  <h3>Recent missions</h3>
+                </div>
               </div>
-            </div>
-            <div class="stack-item">
-              <strong>Live usage</strong>
-              <p class="muted">{{ todayLiveUsage.calls }} model calls in this run · {{ todayLiveUsage.paidCalls }}
-                paid-estimated</p>
-              <p class="muted">{{ todayLiveUsage.totalTokens }} total tokens | {{ todayLiveUsage.inputTokens }} in | {{
-                todayLiveUsage.outputTokens }} out</p>
-              <p class="muted">{{ dualCurrency(todayLiveUsage.estimatedCostUsd || 0) }} current run est. cost</p>
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Outputs</span>
-                <h3>Session files</h3>
-              </div><v-btn class="ghost" rounded="pill" variant="outlined" @click="socket.emit('get_outputs')">Refresh</v-btn>
-            </div>
-            <div v-if="outputFiles.length" class="stack-list"><a v-for="file in outputFiles" :key="file.url"
-                :href="file.url" target="_blank" rel="noreferrer" class="stack-item"><span>{{ file.name
-                }}</span><span>Open</span></a></div>
-            <p v-else class="muted">Generated files will appear here.</p>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Recent runs</span>
-                <h3>Execution quality</h3>
+              <div v-if="latestRuns.length" class="stack-list">
+                <div v-for="run in latestRuns" :key="run.id" class="stack-item">
+                  <div class="run-head"><strong>{{ run.requestPreview }}</strong><span class="badge"
+                      :class="run.status">{{
+                        run.status }}</span></div>
+                  <p class="muted">{{ prettyDate(run.startedAt) }} · {{ run.toolCalls || 0 }} tools · {{ run.steps || 0
+                  }}
+                    steps · ${{ Number(run.estimatedCostUsd || 0).toFixed(4) }}</p>
+                  <p class="muted">{{ run.lastLlmProvider || 'Gemini' }} / {{ run.lastLlmModel || 'gemini-2.5-flash' }}
+                  </p>
+                </div>
               </div>
+              <p v-else class="muted">No tracked runs yet.</p>
             </div>
-            <div v-if="latestRuns.length" class="stack-list">
-              <div v-for="run in latestRuns" :key="run.id" class="stack-item">
-                <div class="run-head"><strong>{{ run.requestPreview }}</strong><span class="badge"
-                    :class="run.status">{{ run.status }}</span></div>
-                <p class="muted">{{ prettyDate(run.startedAt) }} · {{ run.toolCalls || 0 }} tools · {{ run.steps || 0 }}
-                  steps · ${{ Number(run.estimatedCostUsd || 0).toFixed(4) }}</p>
-                <p class="muted">{{ run.lastLlmProvider || 'Gemini' }} / {{ run.lastLlmModel || 'gemini-2.5-flash' }}
-                </p>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Audit trail</span>
+                  <h3>Approvals and risk</h3>
+                </div>
               </div>
-            </div>
-            <p v-else class="muted">No tracked runs yet.</p>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Audit trail</span>
-                <h3>High-risk actions</h3>
+              <div v-if="recentAudit.length" class="stack-list">
+                <div v-for="entry in recentAudit" :key="entry.at + entry.type" class="stack-item">
+                  <div class="run-head"><strong>{{ entry.type }}</strong><span>{{ prettyDate(entry.at) }}</span></div>
+                  <p class="muted">{{ entry.payload?.tool || 'system' }}</p>
+                </div>
               </div>
+              <p v-else class="muted">No approval events recorded yet.</p>
             </div>
-            <div v-if="recentAudit.length" class="stack-list">
-              <div v-for="entry in recentAudit" :key="entry.at + entry.type" class="stack-item">
-                <div class="run-head"><strong>{{ entry.type }}</strong><span>{{ prettyDate(entry.at) }}</span></div>
-                <p class="muted">{{ entry.payload?.tool || 'system' }}</p>
+            <div class="panel">
+              <div class="panel-head">
+                <div><span class="tiny-label">Recovery log</span>
+                  <h3>Repair history</h3>
+                </div>
               </div>
-            </div>
-            <p v-else class="muted">No approval events recorded yet.</p>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><span class="tiny-label">Recovery log</span>
-                <h3>Self-healing memory</h3>
+              <div v-if="recentRecovery.length" class="stack-list">
+                <div v-for="entry in recentRecovery" :key="entry.at + entry.tool" class="stack-item">
+                  <div class="run-head"><strong>{{ entry.classification?.type }}</strong><span>{{ prettyDate(entry.at)
+                      }}</span></div>
+                  <p class="muted">{{ entry.tool }}</p>
+                </div>
               </div>
+              <p v-else class="muted">No recovery events captured yet.</p>
             </div>
-            <div v-if="recentRecovery.length" class="stack-list">
-              <div v-for="entry in recentRecovery" :key="entry.at + entry.tool" class="stack-item">
-                <div class="run-head"><strong>{{ entry.classification?.type }}</strong><span>{{ prettyDate(entry.at)
-                    }}</span></div>
-                <p class="muted">{{ entry.tool }}</p>
-              </div>
-            </div>
-            <p v-else class="muted">No recovery events captured yet.</p>
-          </div>
-        </v-navigation-drawer>
-      </section>
+          </v-navigation-drawer>
+        </section>
 
-      <ClientsView
-        v-else-if="activeView === 'clients'"
-        :client-usage-summary="clientUsageSummary"
-        :clients="clients"
-        :download-usage-report="downloadUsageReport"
-        :dual-currency="dualCurrency"
-        :latest-sessions="latestSessions"
-        :load-clients="loadClients"
-        :manage-client-keys="manageClientKeys"
-        :launch-marketing-preset="launchMarketingPreset"
-        :pretty-date="prettyDate"
-        :refresh-usage-panels="refreshUsagePanels"
-        :selected-finance-client="selectedFinanceClient"
-        :set-client-chat-context="setClientChatContext"
-        :usage-period="usagePeriod"
-        @update:selected-finance-client="selectedFinanceClient = $event"
-        @update:usage-period="usagePeriod = $event"
-      />
+        <ClientsView v-else-if="activeView === 'clients'" :client-usage-summary="clientUsageSummary" :clients="clients"
+          :download-usage-report="downloadUsageReport" :dual-currency="dualCurrency" :latest-sessions="latestSessions"
+          :load-clients="loadClients" :manage-client-keys="manageClientKeys"
+          :launch-marketing-preset="launchMarketingPreset" :pretty-date="prettyDate"
+          :refresh-usage-panels="refreshUsagePanels" :selected-finance-client="selectedFinanceClient"
+          :set-client-chat-context="setClientChatContext" :usage-period="usagePeriod" @open-chat="changeView('chat')"
+          @open-finance="changeView('finance')" @open-marketing="changeView('marketing')"
+          @update:selected-finance-client="selectedFinanceClient = $event"
+          @update:usage-period="usagePeriod = $event" />
 
-      <FinanceView
-        v-else-if="activeView === 'finance'"
-        :agency-quote-draft="agencyQuoteDraft"
-        :agency-quote-presets="AGENCY_QUOTE_PRESETS"
-        :budget-summary="budgetSummary"
-        :clients="clients"
-        :create-agency-quote="createAgencyQuote"
-        :create-invoice-from-quote="createInvoiceFromQuote"
-        :create-quote="createQuote"
-        :download-invoice="downloadInvoice"
-        :download-marketing-deliverable="downloadMarketingDeliverable"
-        :download-quote="downloadQuote"
-        :dual-currency="dualCurrency"
-        :format-message="formatMessage"
-        :invoices="invoices"
-        :latest-marketing-output="latestMarketingOutput"
-        :launch-deliverable-to-chat="launchDeliverableToChat"
-        :load-pnl-report="loadPnlReport"
-        :mark-invoice-paid="markInvoicePaid"
-        :open-finance-marketing="openFinanceMarketing"
-        :planned-agency-quote="plannedAgencyQuote"
-        :pnl-period="pnlPeriod"
-        :pnl-report="pnlReport"
-        :pricing-catalog="pricingCatalog"
-        :preview-agency-quote="previewAgencyQuote"
-        :proactive-proposals="proactiveProposals"
-        :proactive-scan-niche="proactiveScanNiche"
-        :quote-draft="quoteDraft"
-        :quotes="quotes"
-        :run-proactive-scan="runProactiveScan"
-        :selected-agency-services="selectedAgencyServices"
-        :selected-finance-client="selectedFinanceClient"
-        :selected-quote-preset="selectedQuotePreset"
-        :send-invoice="sendInvoice"
-        :send-marketing-deliverable="sendMarketingDeliverable"
-        :send-quote="sendQuote"
-        :service-selector-options="SERVICE_SELECTOR_OPTIONS"
-        :toggle-agency-service="toggleAgencyService"
-        :visible-agency-fields="visibleAgencyFields"
-        @update:pnl-period="pnlPeriod = $event"
-        @update:proactive-scan-niche="proactiveScanNiche = $event"
-        @update:selected-finance-client="updateSelectedFinanceClient"
-        @update:selected-quote-preset="selectedQuotePreset = $event"
-      />
-      <MarketingView
-        v-else-if="activeView === 'marketing'"
-        :competitor-input="competitorInput"
-        :download-marketing-deliverable="downloadMarketingDeliverable"
-        :generate-audit-bundle="generateAuditBundle"
-        :generate-marketing-brief="generateMarketingBrief"
-        :generate-marketing-deliverable="generateMarketingDeliverable"
-        :generated-audit-bundle="generatedAuditBundle"
-        :generated-marketing-brief="generatedMarketingBrief"
-        :launch-audit-bundle="launchAuditBundle"
-        :launch-brief-to-chat="launchBriefToChat"
-        :launch-deliverable-to-chat="launchDeliverableToChat"
-        :launch-marketing-brief="launchMarketingBrief"
-        :load-marketing-workflows="loadMarketingWorkflows"
-        :marketing-audit-specialists="marketingAuditSpecialists"
-        :marketing-briefs="marketingBriefs"
-        :marketing-draft="marketingDraft"
-        :marketing-outputs="marketingOutputs"
-        :marketing-utility-results="marketingUtilityResults"
-        :marketing-workflows="marketingWorkflows"
-        :pretty-date="prettyDate"
-        :run-competitor-scan="runCompetitorScan"
-        :run-page-analysis="runPageAnalysis"
-        :run-social-calendar="runSocialCalendar"
-        :selected-marketing-workflow="selectedMarketingWorkflow"
-        :send-marketing-deliverable="sendMarketingDeliverable"
-        :set-generated-audit-bundle="setGeneratedAuditBundle"
-        :set-generated-marketing-brief="setGeneratedMarketingBrief"
-        :social-theme="socialTheme"
-        :social-weeks="socialWeeks"
-        @update:competitor-input="competitorInput = $event"
-        @update:social-theme="socialTheme = $event"
-        @update:social-weeks="socialWeeks = $event"
-      />
+        <FinanceView v-else-if="activeView === 'finance'" :agency-quote-draft="agencyQuoteDraft"
+          :agency-quote-presets="AGENCY_QUOTE_PRESETS" :budget-summary="budgetSummary" :clients="clients"
+          :create-agency-quote="createAgencyQuote" :create-invoice-from-quote="createInvoiceFromQuote"
+          :create-quote="createQuote" :download-invoice="downloadInvoice"
+          :download-marketing-deliverable="downloadMarketingDeliverable" :download-quote="downloadQuote"
+          :dual-currency="dualCurrency" :format-message="formatMessage" :invoices="invoices"
+          :latest-marketing-output="latestMarketingOutput" :launch-deliverable-to-chat="launchDeliverableToChat"
+          :load-pnl-report="loadPnlReport" :mark-invoice-paid="markInvoicePaid"
+          :open-finance-marketing="openFinanceMarketing" :planned-agency-quote="plannedAgencyQuote"
+          :pnl-period="pnlPeriod" :pnl-report="pnlReport" :pricing-catalog="pricingCatalog"
+          :preview-agency-quote="previewAgencyQuote" :proactive-proposals="proactiveProposals"
+          :proactive-scan-niche="proactiveScanNiche" :quote-draft="quoteDraft" :quotes="quotes"
+          :run-proactive-scan="runProactiveScan" :selected-agency-services="selectedAgencyServices"
+          :selected-finance-client="selectedFinanceClient" :selected-quote-preset="selectedQuotePreset"
+          :send-invoice="sendInvoice" :send-marketing-deliverable="sendMarketingDeliverable" :send-quote="sendQuote"
+          :service-selector-options="SERVICE_SELECTOR_OPTIONS" :toggle-agency-service="toggleAgencyService"
+          :visible-agency-fields="visibleAgencyFields" @update:pnl-period="pnlPeriod = $event"
+          @update:proactive-scan-niche="proactiveScanNiche = $event"
+          @update:selected-finance-client="updateSelectedFinanceClient"
+          @update:selected-quote-preset="selectedQuotePreset = $event" />
+        <MarketingView v-else-if="activeView === 'marketing'" :competitor-input="competitorInput"
+          :download-marketing-deliverable="downloadMarketingDeliverable" :generate-audit-bundle="generateAuditBundle"
+          :generate-marketing-brief="generateMarketingBrief"
+          :generate-marketing-deliverable="generateMarketingDeliverable" :generated-audit-bundle="generatedAuditBundle"
+          :generated-marketing-brief="generatedMarketingBrief" :launch-audit-bundle="launchAuditBundle"
+          :launch-brief-to-chat="launchBriefToChat" :launch-deliverable-to-chat="launchDeliverableToChat"
+          :launch-marketing-brief="launchMarketingBrief" :load-marketing-workflows="loadMarketingWorkflows"
+          :marketing-audit-specialists="marketingAuditSpecialists" :marketing-briefs="marketingBriefs"
+          :marketing-draft="marketingDraft" :marketing-outputs="marketingOutputs"
+          :marketing-utility-results="marketingUtilityResults" :marketing-workflows="marketingWorkflows"
+          :pretty-date="prettyDate" :run-competitor-scan="runCompetitorScan" :run-page-analysis="runPageAnalysis"
+          :run-social-calendar="runSocialCalendar" :selected-marketing-workflow="selectedMarketingWorkflow"
+          :send-marketing-deliverable="sendMarketingDeliverable" :set-generated-audit-bundle="setGeneratedAuditBundle"
+          :set-generated-marketing-brief="setGeneratedMarketingBrief" :social-theme="socialTheme"
+          :social-weeks="socialWeeks" @update:competitor-input="competitorInput = $event"
+          @update:social-theme="socialTheme = $event" @update:social-weeks="socialWeeks = $event" />
 
-      <UsageDashboard
-        v-else-if="activeView === 'usage'"
-        :client-usage-summary="clientUsageSummary"
-        :clients="clients"
-        :download-usage-report="downloadUsageReport"
-        :dual-currency="dualCurrency"
-        :global-usage-chart="globalUsageChart"
-        :global-usage-summary="globalUsageSummary"
-        :most-expensive-client="mostExpensiveClient"
-        :most-expensive-model="mostExpensiveModel"
-        :pretty-date="prettyDate"
-        :provider-share-rows="providerShareRows"
-        :recent-provider-switches="recentProviderSwitches"
-        :refresh-usage-panels="refreshUsagePanels"
-        :selected-finance-client="selectedFinanceClient"
-        :usage-leaders="usageLeaders"
-        :usage-period="usagePeriod"
-        @update:selected-finance-client="selectedFinanceClient = $event"
-        @update:usage-period="usagePeriod = $event"
-      />
+        <UsageDashboard v-else-if="activeView === 'usage'" :client-usage-summary="clientUsageSummary" :clients="clients"
+          :download-usage-report="downloadUsageReport" :dual-currency="dualCurrency"
+          :global-usage-chart="globalUsageChart" :global-usage-summary="globalUsageSummary"
+          :most-expensive-client="mostExpensiveClient" :most-expensive-model="mostExpensiveModel"
+          :pretty-date="prettyDate" :provider-share-rows="providerShareRows"
+          :recent-provider-switches="recentProviderSwitches" :refresh-usage-panels="refreshUsagePanels"
+          :selected-finance-client="selectedFinanceClient" :usage-leaders="usageLeaders" :usage-period="usagePeriod"
+          @update:selected-finance-client="selectedFinanceClient = $event"
+          @update:usage-period="usagePeriod = $event" />
 
-      <SetupCenterView
-        v-else-if="activeView === 'setup'"
-        :alerts-enabled="alertsEnabled"
-        :enable-notifications="enableNotifications"
-        :latest-nexus-message="latestNexusMessage"
-        :load-setup-center="loadSetupCenter"
-        :open-key-setup-with-nexus="openKeySetupWithNexus"
-        :setup-doctor="setupDoctor"
-        :setup-playbooks="setupPlaybooks"
-        @open-settings="openSettingsView"
-        @open-tools="openToolsView"
-      />
+        <SetupCenterView v-else-if="activeView === 'setup'" :alerts-enabled="alertsEnabled"
+          :enable-notifications="enableNotifications" :latest-nexus-message="latestNexusMessage"
+          :load-setup-center="loadSetupCenter" :open-key-setup-with-nexus="openKeySetupWithNexus"
+          :setup-doctor="setupDoctor" :setup-playbooks="setupPlaybooks" @open-clients="changeView('clients')"
+          @open-settings="openSettingsView" @open-tools="openToolsView" />
 
-      <ToolsView
-        v-else-if="activeView === 'tools'"
-        :edit-tool="editTool"
-        :load-tools-dashboard="loadToolsDashboard"
-        :test-tool="testTool"
-        :tools-data="toolsData"
-      />
+        <ToolsView v-else-if="activeView === 'tools'" :edit-tool="editTool" :load-tools-dashboard="loadToolsDashboard"
+          :test-tool="testTool" :tools-data="toolsData" />
 
-      <SettingsView
-        v-else
-        :config-edits="configEdits"
-        :config-groups="configGroups"
-        :download-usage-report="downloadUsageReport"
-        :dual-currency="dualCurrency"
-        :global-usage-summary="globalUsageSummary"
-        :refresh-usage-panels="refreshUsagePanels"
-        :reveal-keys="revealKeys"
-        :save-config="saveConfig"
-        :usage-period="usagePeriod"
-        @update:usage-period="usagePeriod = $event"
-      />
-    <AddClientModal
-      :is-open="isAddingClient"
-      :new-client="newClient"
-      :client-key-info="CLIENT_KEY_INFO"
-      :client-key-editing="clientKeyEditing"
-      :open-key-setup-with-nexus="openKeySetupWithNexus"
-      :save-client="saveClient"
-      @close="isAddingClient = false"
-      @update:client-key-editing="clientKeyEditing = $event"
-    />
-    <ClientKeysModal
-      :active-client="activeClient"
-      :client-key-edits="clientKeyEdits"
-      :client-key-info="CLIENT_KEY_INFO"
-      :client-key-labels="clientKeyLabels"
-      :client-keys-list="clientKeysList"
-      :is-open="isManagingClientKeys"
-      :open-key-setup-with-nexus="openKeySetupWithNexus"
-      :save-client-keys="saveClientKeys"
-      @close="isManagingClientKeys = false"
-    />
-    <EditToolModal
-      :active-tool="activeTool"
-      :config-edits="configEdits"
-      :is-open="isEditingTool"
-      :test-tool="testTool"
-      :update-tool-config="updateToolConfig"
-      @close="isEditingTool = false"
-    />
-    <div v-if="configToast.show" class="toast" :class="configToast.type">{{ configToast.message }}</div>
-    </main>
+        <SettingsView v-else :config-edits="configEdits" :config-groups="configGroups"
+          :download-usage-report="downloadUsageReport" :dual-currency="dualCurrency"
+          :global-usage-summary="globalUsageSummary" :refresh-usage-panels="refreshUsagePanels"
+          :reveal-keys="revealKeys" :save-config="saveConfig" :usage-period="usagePeriod"
+          @open-clients="changeView('clients')" @open-tools="changeView('tools')"
+          @update:usage-period="usagePeriod = $event" />
+        <AddClientModal :is-open="isAddingClient" :new-client="newClient" :client-key-info="CLIENT_KEY_INFO"
+          :client-key-editing="clientKeyEditing" :open-key-setup-with-nexus="openKeySetupWithNexus"
+          :save-client="saveClient" @close="isAddingClient = false"
+          @update:client-key-editing="clientKeyEditing = $event" />
+        <ClientKeysModal :active-client="activeClient" :client-key-edits="clientKeyEdits"
+          :client-key-info="CLIENT_KEY_INFO" :client-key-labels="clientKeyLabels" :client-keys-list="clientKeysList"
+          :is-open="isManagingClientKeys" :open-key-setup-with-nexus="openKeySetupWithNexus"
+          :save-client-keys="saveClientKeys" @close="isManagingClientKeys = false" />
+        <EditToolModal :active-tool="activeTool" :config-edits="configEdits" :is-open="isEditingTool"
+          :test-tool="testTool" :update-tool-config="updateToolConfig" @close="isEditingTool = false" />
+        <div v-if="configToast.show" class="toast" :class="configToast.type">{{ configToast.message }}</div>
+      </main>
     </v-main>
   </v-app>
 </template>

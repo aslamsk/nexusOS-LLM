@@ -1,6 +1,9 @@
 const ConfigService = require('./config');
 const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const IDEBridge = require('./bridge');
 
 /**
  * Nexus OS: LLM Subsystem
@@ -19,6 +22,8 @@ class LLMService {
         this.stopRequested = false;
         this.activeControllers = new Set();
         this.pinnedKeys = new Map(); // [RESILIENCE] sessionId -> successfulKeyName
+        this.providerPins = new Map(); // [RESILIENCE] sessionId -> preferred provider for the rest of the run
+        this.readFileState = new Map(); // [CLAUDE-STALENESS-GUARD] absolutePath -> { timestamp, contentHash, lastReadTurn }
         this.planOpenRouterModels = [
             'openai/gpt-oss-20b:free',
             'openai/gpt-oss-120b:free',
@@ -45,6 +50,20 @@ class LLMService {
         return [...this.planOpenRouterModels];
     }
 
+    _buildProviderChain({ geminiProvider, openRouterPrimary, fallbackProviders = [], pinnedProvider = null }) {
+        const orderedProviders = [
+            geminiProvider,
+            openRouterPrimary,
+            ...fallbackProviders
+        ];
+
+        if (!pinnedProvider) return orderedProviders;
+
+        return orderedProviders
+            .filter((provider) => provider.name === pinnedProvider)
+            .concat(orderedProviders.filter((provider) => provider.name !== pinnedProvider));
+    }
+
     /**
      * Get an initialized Gemini client with a specific API key.
      */
@@ -54,8 +73,8 @@ class LLMService {
         return new GoogleGenAI({ apiKey, apiVersion: 'v1' });
     }
 
-    _getOpenAITools() {
-        return this.getToolDefinitions().map((tool) => ({
+    _getOpenAITools(options = {}) {
+        return this.getToolDefinitions('execute', options).map((tool) => ({
             type: 'function',
             function: {
                 name: tool.name,
@@ -139,7 +158,7 @@ class LLMService {
         return formatted;
     }
 
-    async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute', enableTools = true }) {
+    async _generateWithOpenAICompatible({ providerName, baseUrl, apiKey, model, headers = {}, messages, mode = 'execute', enableTools = true, allowedTools = null }) {
         if (!apiKey || !model) return null;
         if (this.stopRequested) {
             return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: providerName, model };
@@ -154,7 +173,7 @@ class LLMService {
                 model,
                 messages: this._formatMessagesForOpenAI(messages),
                 ...(enableTools ? {
-                    tools: this.getToolDefinitions(mode).map((tool) => ({
+                    tools: this.getToolDefinitions(mode, { allowedTools }).map((tool) => ({
                         type: 'function',
                         function: {
                             name: tool.name,
@@ -204,7 +223,7 @@ class LLMService {
     /**
      * Define the tools available to the LLM.
      */
-    getToolDefinitions(mode = 'execute') {
+    getToolDefinitions(mode = 'execute', options = {}) {
         const allTools = [
             {
                 name: "readFile",
@@ -528,6 +547,19 @@ class LLMService {
                 }
             },
             {
+                name: "runSed",
+                description: "Apply a regex replacement to a file (stream editing). Use this for complex multi-line patterns or global replacements.",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        absolutePath: { type: "string", description: "Path to the file." },
+                        pattern: { type: "string", description: "The regex pattern to search for." },
+                        replacement: { type: "string", description: "The replacement content." }
+                    },
+                    required: ["absolutePath", "pattern", "replacement"]
+                }
+            },
+            {
                 name: "sendEmail",
                 description: "Send an email via Gmail.",
                 parameters: {
@@ -811,7 +843,10 @@ class LLMService {
             execute: allTools.map((tool) => tool.name)
         };
 
-        const allowed = new Set(toolNamesByMode[mode] || toolNamesByMode.execute);
+        const explicitAllowedTools = Array.isArray(options.allowedTools) && options.allowedTools.length
+            ? new Set(options.allowedTools)
+            : null;
+        const allowed = explicitAllowedTools || new Set(toolNamesByMode[mode] || toolNamesByMode.execute);
         return allTools.filter((tool) => allowed.has(tool.name));
     }
 
@@ -819,11 +854,12 @@ class LLMService {
      * Map Nexus messages to Gemini-compatible format.
      */
     formatMessagesForGemini(messages) {
-        // IMPORTANT: Gemini v1 expects snake_case keys in request payloads (function_call/function_response).
+        // IMPORTANT: The JS SDK expects camelCase part names even if the wire format is snake_case.
         // Do not send thought/thought_signature back to the API; it is not part of the request schema.
-        return messages.map((msg) => {
+        const formatted = messages.map((msg) => {
             if (msg.role === 'system') {
-                return { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${msg.content}` }] };
+                const systemText = typeof msg.content === 'string' ? msg.content.trim() : String(msg.content ?? '').trim();
+                return systemText ? { role: 'user', parts: [{ text: `SYSTEM INSTRUCTION: ${systemText}` }] } : null;
             }
 
             if (msg.role === 'assistant') {
@@ -836,32 +872,77 @@ class LLMService {
                     }
                 }
 
-                if (msg.content) parts.push({ text: msg.content });
+                const assistantText = typeof msg.content === 'string'
+                    ? msg.content.trim()
+                    : '';
+                if (assistantText) parts.push({ text: assistantText });
                 if (msg.toolCall) {
                     parts.push({
-                        function_call: {
+                        functionCall: {
                             name: msg.toolCall.name,
                             args: msg.toolCall.args || {}
                         }
                     });
                 }
-                return { role: 'model', parts };
+                return parts.length ? { role: 'model', parts } : null;
             }
 
             if (msg.role === 'tool') {
+                const resultContent = typeof msg.content === 'string'
+                    ? msg.content
+                    : JSON.stringify(msg.content ?? '');
                 return {
                     role: 'user',
                     parts: [{
-                        function_response: {
+                        functionResponse: {
                             name: msg.name,
-                            response: { result: msg.content }
+                            response: { result: resultContent }
                         }
                     }]
                 };
             }
 
-            return { role: 'user', parts: [{ text: msg.content }] };
+            const text = typeof msg.content === 'string'
+                ? msg.content.trim()
+                : String(msg.content ?? '').trim();
+            return text ? { role: 'user', parts: [{ text }] } : null;
         });
+
+        return formatted.filter((entry) =>
+            entry &&
+            Array.isArray(entry.parts) &&
+            entry.parts.length > 0 &&
+            entry.parts.some((part) =>
+                (typeof part.text === 'string' && part.text.trim()) ||
+                part.functionCall ||
+                part.functionResponse
+            )
+        );
+    }
+
+    /**
+     * Main Autonomous Turn Loop (QueryEngine)
+     * Mirrors Claude Code's execution lifecycle.
+     */
+    async *executeLoop(prompt, options = {}) {
+        const { sessionId, systemPrompt: customSystem, maxTurns = 10 } = options;
+        
+        // ─── [LSP] IDE Context Injection ───
+        let ideContext = "";
+        if (sessionId) {
+            const bridgeStatus = IDEBridge.getStatus();
+            if (bridgeStatus.activeCount > 0) {
+                // Fetch the most recent state for this session if available
+                const session = IDEBridge.sessions.get(sessionId);
+                if (session && session.latestState) {
+                    const { activeFile, cursorLine, selections } = session.latestState;
+                    ideContext = `\n[IDE_CONTEXT] User is currently viewing: ${activeFile || 'unknown'} at line ${cursorLine || 1}.\n`;
+                }
+            }
+        }
+
+        const systemPrompt = (customSystem || this.systemPrompt) + ideContext;
+        // ... (rest of loop implementation)
     }
 
     /**
@@ -870,8 +951,13 @@ class LLMService {
     async generateResponse(messages, options = {}) {
         try {
             this.resetStop();
+            const sessionId = options.sessionId || null;
+            const onStatus = typeof options.onStatus === 'function' ? options.onStatus : null;
             const mode = String(options.mode || 'execute').toLowerCase();
             const enableTools = options.enableTools !== false && mode !== 'chat';
+            const allowedTools = Array.isArray(options.allowedTools) && options.allowedTools.length
+                ? options.allowedTools
+                : null;
             let formattedContents = this.formatMessagesForGemini(messages);
 
             // CRITICAL BUG FIX: Guard against "contents are required" Google SDK error
@@ -932,14 +1018,15 @@ class LLMService {
                 headers: openRouterHeaders
             };
 
-            // UPGRADE: Gemini is now the primary driver for ALL modes to ensure "WOW" performance and stability
-            const orderedProviders = [
+            const pinnedProvider = sessionId ? this.providerPins.get(sessionId) : null;
+            const providerChain = this._buildProviderChain({
                 geminiProvider,
                 openRouterPrimary,
-                ...fallbackProviders
-            ];
+                fallbackProviders,
+                pinnedProvider
+            });
 
-            for (const provider of orderedProviders) {
+            for (const provider of providerChain) {
                 if (!provider.apiKey && provider.name !== 'Gemini') continue;
 
                 if (provider.name === 'Gemini') {
@@ -948,8 +1035,12 @@ class LLMService {
                         const geminiResponse = await this._generateWithGeminiMultiKey(messages, systemInstruction, mode, enableTools, options);
                         if (geminiResponse && !geminiResponse.text.startsWith('Error calling LLM:')) return geminiResponse;
                         console.warn(`[LLM Gemini Failure] Rotating to backup provider chain...`);
+                        if (sessionId) this.providerPins.set(sessionId, 'OpenRouter');
+                        if (onStatus) onStatus('Gemini failed for this turn. Pinning this session to fallback provider...');
                     } catch (err) {
                         console.error(`[LLM Gemini Fatal Error]`, err.message);
+                        if (sessionId) this.providerPins.set(sessionId, 'OpenRouter');
+                        if (onStatus) onStatus('Gemini quota/error detected. Pinning this session to fallback provider...');
                     }
                     continue;
                 }
@@ -961,6 +1052,7 @@ class LLMService {
                 for (const candidateModel of candidateModels) {
                     try {
                         console.log(`[LLM] Attempting fallback to ${provider.name} using model ${candidateModel}...`);
+                        if (onStatus) onStatus(`Trying fallback provider ${provider.name} with model ${candidateModel}...`);
                         const fallbackResponse = await this._generateWithOpenAICompatible({
                             providerName: provider.name,
                             baseUrl: provider.baseUrl,
@@ -969,9 +1061,13 @@ class LLMService {
                             headers: provider.headers,
                             messages,
                             mode,
-                            enableTools
+                            enableTools,
+                            allowedTools
                         });
-                        if (fallbackResponse) return fallbackResponse;
+                        if (fallbackResponse) {
+                            if (sessionId && provider.name === 'OpenRouter') this.providerPins.set(sessionId, 'OpenRouter');
+                            return fallbackResponse;
+                        }
                     } catch (error) {
                         if (axios.isCancel?.(error) || error.code === 'ERR_CANCELED') {
                             return { text: 'MISSION STOPPED: Boss cancelled the mission.', toolCall: null, provider: provider.name, model: candidateModel };
@@ -996,6 +1092,7 @@ class LLMService {
      */
     async _generateWithGeminiMultiKey(messages, systemInstruction, mode, enableTools, options) {
         const { sessionId = null } = options;
+        const onStatus = typeof options.onStatus === 'function' ? options.onStatus : null;
         const keys = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3'];
         let formattedContents = this.formatMessagesForGemini(messages);
         if (!Array.isArray(formattedContents) || formattedContents.length === 0) {
@@ -1029,15 +1126,14 @@ class LLMService {
 
             while (true) {
                 try {
-                    // [SDK v1] Use snake_case "function_declarations" for the REST-to-SDK mapping
-                    const tools = enableTools ? [{ function_declarations: this.getToolDefinitions(mode) }] : [];
+                    // The JS SDK expects camelCase request properties.
+                    const tools = enableTools ? [{ functionDeclarations: this.getToolDefinitions(mode, { allowedTools: options.allowedTools }) }] : [];
 
-                    // [SDK v1] The @google/genai (Unified SDK) pattern
-                    // Use snake_case "system_instruction" with "parts" array
+                    // The JS SDK expects systemInstruction in camelCase.
                     const result = await ai.models.generateContent({
                         model: currentModel,
                         contents: formattedContents,
-                        system_instruction: systemInstruction || undefined,
+                        systemInstruction: systemInstruction || undefined,
                         generationConfig: { temperature: 0.2 },
                         tools: (tools && tools.length > 0) ? tools : undefined
                     });
@@ -1128,6 +1224,7 @@ class LLMService {
                         innerRetry++;
                         const delayMs = isRateLimit ? Math.pow(2, innerRetry) * 1000 : delay;
                         console.warn(`[LLM] Gemini Error (${errorMsg}). Retrying ${keyName} in ${delayMs}ms... (Attempt ${innerRetry}/${maxInnerRetries})`);
+                        if (onStatus) onStatus(`Gemini quota/backoff on ${keyName}. Retrying in ${Math.round(delayMs / 1000)}s (attempt ${innerRetry}/${maxInnerRetries})...`);
                         await new Promise(r => setTimeout(r, delayMs));
                         continue;
                     }
@@ -1135,6 +1232,7 @@ class LLMService {
                     // If we exhausted retries or hit a non-retryable error, try rotating the key
                     if (currentKeyIdx < keysToTry.length - 1) {
                         console.warn(`[LLM] Key ${keyName} failing consistently. Rotating to next Gemini key...`);
+                        if (onStatus) onStatus(`Gemini key ${keyName} exhausted. Rotating to next key...`);
                         currentKeyIdx++;
                         currentModelIdx = 0;
                         break; // Break inner loop to try next key in outer loop
@@ -1145,6 +1243,133 @@ class LLMService {
             }
         }
         return null;
+    }
+
+    /**
+     * [CLAUDE-CONTEXT-COMPACTION]
+     * Summarize older parts of the conversation to stay within token limits.
+     */
+    async compactContext(messages) {
+        if (messages.length < 10) return messages;
+
+        console.log(`[LLM] Initiating Context Compaction... (Current size: ${messages.length} msgs)`);
+        
+        // Keep system prompt and last 4 turns (8 messages)
+        const systemPrompt = messages[0].role === 'system' ? messages[0] : null;
+        const recentMessages = messages.slice(-8);
+        const toSummarize = messages.slice(systemPrompt ? 1 : 0, -8);
+
+        if (toSummarize.length === 0) return messages;
+
+        const summaryPrompt = `Please summarize the following conversation history into a concise list of "Facts Learned" and "Actions Performed". Keep it under 300 words:\n\n${JSON.stringify(toSummarize)}`;
+        
+        try {
+            const summary = await this.generateResponse([{ role: 'user', content: summaryPrompt }], { mode: 'chat' });
+            const compactMessage = { 
+                role: 'user', 
+                content: `### CONVERSATION SUMMARY (AUTO-COMPACTED):\n${summary.text}\n\n[Continuing mission from here...]` 
+            };
+
+            return systemPrompt ? [systemPrompt, compactMessage, ...recentMessages] : [compactMessage, ...recentMessages];
+        } catch (e) {
+            console.warn(`[LLM] Compaction failed: ${e.message}. Falling back to raw context.`);
+            return messages;
+        }
+    }
+
+    /**
+     * [CLAUDE-QUERY-ENGINE]
+     * Autonomous execution loop that handles thinking, tool calls, and results.
+     */
+    async *executeLoop(messages, options = {}, toolDispatcher = {}) {
+        const { sessionId } = options;
+        let currentMessages = [...messages];
+        
+        // ─── [LSP] IDE Context Injection ───
+        if (sessionId) {
+            const bridgeStatus = IDEBridge.getStatus();
+            if (bridgeStatus.activeCount > 0) {
+                const session = IDEBridge.sessions.get(sessionId);
+                if (session && session.latestState) {
+                    const { activeFile, cursorLine } = session.latestState;
+                    const ideContext = `\n[IDE_CONTEXT] Boss is currently viewing: ${activeFile || 'unknown'} at line ${cursorLine || 1}.\n`;
+                    // Inject into the first prompt if not already present
+                    if (currentMessages.length > 0) {
+                        currentMessages[0].content += ideContext;
+                    }
+                }
+            }
+        }
+
+        let turn = 0;
+        const maxTurns = options.maxTurns || 10;
+
+        while (turn < maxTurns) {
+            turn++;
+            
+            // Auto-compact before every turn if it's getting long
+            if (currentMessages.length > 25) {
+                currentMessages = await this.compactContext(currentMessages);
+            }
+
+            const response = await this.generateResponse(currentMessages, options);
+            yield { type: 'thought', text: response.text, turn };
+
+            if (!response.toolCall) {
+                yield { type: 'done', text: response.text };
+                break;
+            }
+
+            const toolName = response.toolCall.name;
+            const toolArgs = response.toolCall.args;
+            
+            yield { type: 'call', name: toolName, args: toolArgs, turn };
+
+            // Execute tool via dispatcher
+            let result;
+            if (toolDispatcher[toolName]) {
+                try {
+                    result = await toolDispatcher[toolName](toolArgs);
+                } catch (e) {
+                    result = `Error executing tool ${toolName}: ${e.message}`;
+                }
+            } else {
+                result = `Error: Tool '${toolName}' not found in dispatcher.`;
+            }
+
+            yield { type: 'result', name: toolName, result, turn };
+
+            // [CLAUDE-BUDGET-TRACKING] Accumulate costs
+            const turnUsage = response.usage || {};
+            const turnCost = this._estimateCost(response.model, turnUsage);
+            options.cumulativeCost = (options.cumulativeCost || 0) + turnCost;
+
+            yield { type: 'usage', model: response.model, usage: turnUsage, turnCost, totalCost: options.cumulativeCost, turn };
+
+            // Update context for next turn
+            currentMessages.push({ role: 'assistant', content: response.text, toolCall: response.toolCall });
+            currentMessages.push({ role: 'tool', name: toolName, content: String(result) });
+        }
+
+        if (turn >= maxTurns) {
+            yield { type: 'error', message: `Max Turn Limit (${maxTurns}) reached.` };
+        }
+    }
+
+    _estimateCost(model, usage) {
+        const inputTokens = usage.inputTokens || 0;
+        const outputTokens = usage.outputTokens || 0;
+        
+        // Simple heuristic rates per 1M tokens (Claude/Gemini approximate)
+        const rates = {
+            'gemini-1.5-pro': { in: 3.5, out: 10.5 },
+            'gemini-1.5-flash': { in: 0.075, out: 0.30 },
+            'claude-3-5-sonnet': { in: 3.0, out: 15.0 },
+            'claude-3-opus': { in: 15.0, out: 75.0 }
+        };
+
+        const rate = Object.entries(rates).find(([k]) => model.toLowerCase().includes(k))?.[1] || { in: 1.0, out: 5.0 };
+        return (inputTokens / 1_000_000 * rate.in) + (outputTokens / 1_000_000 * rate.out);
     }
 }
 

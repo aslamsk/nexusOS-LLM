@@ -36,28 +36,56 @@ class FileSystemTool {
         };
     }
 
-    static readFile(absolutePath) {
+    static readFile(absolutePath, stateMap = null, turn = 0) {
         try {
+            const stats = fs.statSync(absolutePath);
             const content = fs.readFileSync(absolutePath, 'utf8');
+            
+            // [CLAUDE-STALENESS-GUARD] Record state for future validation
+            if (stateMap) {
+                stateMap.set(absolutePath, {
+                    mtime: stats.mtimeMs,
+                    size: stats.size,
+                    readAtTurn: turn
+                });
+            }
+
             return JSON.stringify({
                 ok: true,
                 action: 'readFile',
                 absolutePath,
                 size: content.length,
-                content: content.slice(0, 5000) // Truncate for orchestrator safety
+                mtime: stats.mtimeMs,
+                content: content.slice(0, 8000) // Increased slightly for better context
             }, null, 2);
         } catch (error) {
             return JSON.stringify({ ok: false, action: 'readFile', absolutePath, error: error.message, classification: 'permission_or_missing' }, null, 2);
         }
     }
 
-    static writeFile(absolutePath, content) {
+    static writeFile(absolutePath, content, stateMap = null) {
         try {
+            // [CLAUDE-STALENESS-GUARD] Validate before destructive write
+            if (stateMap && stateMap.has(absolutePath)) {
+                const state = stateMap.get(absolutePath);
+                const currentStats = fs.existsSync(absolutePath) ? fs.statSync(absolutePath) : null;
+                if (currentStats && currentStats.mtimeMs > state.mtime) {
+                    return `Error: File '${absolutePath}' has been modified externally since it was last read. Please re-read the file before writing to ensure consistency.`;
+                }
+            }
+
             const dir = path.dirname(absolutePath);
             this._ensureDir(dir);
             const previousContent = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : '';
             const snapshotPath = fs.existsSync(absolutePath) ? this._createSnapshot(absolutePath, previousContent) : null;
             fs.writeFileSync(absolutePath, content, 'utf8');
+            
+            // Update state map after successful write
+            if (stateMap) {
+                const newStats = fs.statSync(absolutePath);
+                stateMap.set(absolutePath, { mtime: newStats.mtimeMs, size: newStats.size });
+            }
+
             return JSON.stringify({
                 ok: true,
                 action: 'writeFile',
@@ -85,15 +113,26 @@ class FileSystemTool {
         }
     }
 
-    static replaceFileContent(absolutePath, startLine, endLine, targetContent, replacementContent) {
+    static replaceFileContent(absolutePath, startLine, endLine, targetContent, replacementContent, stateMap = null) {
         try {
+            // [CLAUDE-STALENESS-GUARD]
+            if (stateMap && stateMap.has(absolutePath)) {
+                const state = stateMap.get(absolutePath);
+                const currentStats = fs.statSync(absolutePath);
+                if (currentStats.mtimeMs > state.mtime) {
+                    return `Error: File '${absolutePath}' is stale. Please re-read it before making surgical edits.`;
+                }
+            }
+
             let lines = fs.readFileSync(absolutePath, 'utf8').split('\n');
             const originalContent = lines.join('\n');
             const targetSection = lines.slice(startLine - 1, endLine).join('\n');
             
-            if (targetSection.trim() !== targetContent.trim()) {
-                // Relaxed check: if exact match fails, show what was found to help the agent
-                return `Error: TargetContent does not match the content at lines ${startLine}-${endLine}.\nFound:\n${targetSection}`;
+            // [CLAUDE-QUOTE-NORMALIZATION] Fuzzy match for quotes and whitespace
+            const normalize = (s) => s.replace(/['"“”‘’]/g, "'").replace(/\s+/g, ' ').trim();
+            
+            if (normalize(targetSection) !== normalize(targetContent)) {
+                return `Error: TargetContent does not match. (Normalization: Multi-line/Quote variants detected).\nFound:\n${targetSection}`;
             }
 
             const before = lines.slice(0, startLine - 1);
@@ -101,7 +140,13 @@ class FileSystemTool {
             const newLines = [...before, replacementContent, ...after];
             const updatedContent = newLines.join('\n');
             const snapshotPath = this._createSnapshot(absolutePath, originalContent);
-            fs.writeFileSync(absolutePath, newLines.join('\n'), 'utf8');
+            fs.writeFileSync(absolutePath, updatedContent, 'utf8');
+
+            if (stateMap) {
+                const newStats = fs.statSync(absolutePath);
+                stateMap.set(absolutePath, { mtime: newStats.mtimeMs, size: newStats.size });
+            }
+
             return JSON.stringify({
                 ok: true,
                 action: 'replaceFileContent',
@@ -113,6 +158,45 @@ class FileSystemTool {
             }, null, 2);
         } catch (error) {
             return `Error replacing file content: ${error.message}`;
+        }
+    }
+
+    static runSed(absolutePath, pattern, replacement, stateMap = null) {
+        try {
+             // [CLAUDE-SED-EMULATION]
+            if (stateMap && stateMap.has(absolutePath)) {
+                const state = stateMap.get(absolutePath);
+                const currentStats = fs.statSync(absolutePath);
+                if (currentStats.mtimeMs > state.mtime) {
+                    return `Error: File '${absolutePath}' is stale. Re-read before running stream edits.`;
+                }
+            }
+
+            const content = fs.readFileSync(absolutePath, 'utf8');
+            const regex = new RegExp(pattern, 'g');
+            const updatedContent = content.replace(regex, replacement);
+            
+            if (content === updatedContent) {
+                return "Warning: Pattern did not match any content. No changes made.";
+            }
+
+            const snapshotPath = this._createSnapshot(absolutePath, content);
+            fs.writeFileSync(absolutePath, updatedContent, 'utf8');
+
+            if (stateMap) {
+                const newStats = fs.statSync(absolutePath);
+                stateMap.set(absolutePath, { mtime: newStats.mtimeMs, size: newStats.size });
+            }
+
+            return JSON.stringify({
+                ok: true,
+                action: 'runSed',
+                absolutePath,
+                snapshotPath,
+                matches: (content.match(regex) || []).length
+            }, null, 2);
+        } catch (error) {
+            return `Error running sed: ${error.message}`;
         }
     }
 

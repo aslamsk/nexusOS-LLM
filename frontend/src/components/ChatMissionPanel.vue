@@ -47,6 +47,7 @@ const isApprovalExpanded = ref(false)
 const areMissionDetailsHidden = ref(true)
 const areResultsVisible = ref(false)
 const isTraceVisible = ref(false)
+const isWorkspaceGuideVisible = ref(false)
 
 const promptModel = computed({
   get: () => props.promptInput,
@@ -80,6 +81,29 @@ const missionStatusLabel = computed(() => {
   if (props.missionStatus === 'active') return 'In progress'
   if (props.missionStatus === 'paused') return 'Awaiting Boss'
   return 'Ready'
+})
+
+const contextLabel = computed(() => {
+  if (props.selectedClientForChat) {
+    const match = props.clients.find((client) => client.id === props.selectedClientForChat)
+    return match?.name || 'Selected client'
+  }
+  return 'Boss workspace'
+})
+
+const waitingForLabel = computed(() => {
+  if (props.pendingApprovalSummary) return `Approval for ${props.pendingApprovalSummary.tool}`
+  if (props.currentBlocker?.detail) return props.currentBlocker.detail
+  if (props.missionStatus === 'active') return 'Nexus is actively working on the task'
+  if (props.missionStatus === 'paused') return 'Your reply to continue the same mission'
+  return 'A clear task from you'
+})
+
+const nextActionLabel = computed(() => {
+  if (props.pendingApprovalSummary) return 'Reply yes or no in chat'
+  if (props.currentBlocker) return 'Answer the blocker in one short reply'
+  if (props.selectedClientForChat) return 'Describe the deliverable and where Nexus should stop'
+  return 'Pick a client context or continue in Boss mode'
 })
 
 const activeMissionDomainLabel = computed(() => {
@@ -192,87 +216,73 @@ defineExpose({
 <template>
   <div class="panel panel-chat">
     <div class="chat-top-stack">
-      <div class="panel-head">
+      <div class="panel-head mission-shell-head">
         <div>
-          <span class="tiny-label">Live mission</span>
-          <h3>Boss stream</h3>
+          <span class="tiny-label">Mission workspace</span>
+          <h3>Current task</h3>
         </div>
         <div class="panel-head-actions">
-          <div class="stage-strip compact-stage-strip">
-            <div class="stage-card compact-stage-card">
-              <span class="tiny-label">Stage</span>
-              <strong>{{ currentStage.label }}</strong>
-            </div>
-            <div class="stage-card compact-stage-card stage-detail">
-              <span class="tiny-label">Status</span>
-              <strong>{{ currentStage.detail }}</strong>
-            </div>
-            <div class="stage-card compact-stage-card">
-              <span class="tiny-label">Run State</span>
-              <strong>{{ missionStatus === 'active' ? 'Mission running' : missionStatus === 'paused' ? 'Awaiting Boss' : 'Standing by' }}</strong>
-            </div>
-          </div>
           <div class="context-box">
             <label>Context</label>
-            <v-select
-              v-model="selectedClientModel"
+            <v-select v-model="selectedClientModel"
               :items="[{ title: 'System Default', value: '' }, ...clients.map((client) => ({ title: client.name, value: client.id }))]"
-              item-title="title"
-              item-value="value"
-              density="comfortable"
-              variant="outlined"
-              hide-details
-            />
+              item-title="title" item-value="value" density="comfortable" variant="outlined" hide-details />
           </div>
-          <v-btn class="ghost details-toggle" rounded="pill" variant="outlined" size="small" @click="areMissionDetailsHidden = !areMissionDetailsHidden">
-            {{ areMissionDetailsHidden ? 'Show Details' : 'Hide Details' }}
+          <v-btn class="ghost details-toggle" rounded="pill" variant="outlined" size="small"
+            @click="areMissionDetailsHidden = !areMissionDetailsHidden">
+            {{ areMissionDetailsHidden ? 'Show Runtime' : 'Hide Runtime' }}
           </v-btn>
         </div>
       </div>
 
-      <div class="mini-card mission-status-line">
-        <div class="status-inline">
-          <span class="tiny-label">Mission status</span>
-          <strong>{{ activeMissionMode }}</strong>
-          <span class="status-separator">•</span>
+      <div class="mission-hero-grid">
+        <article class="mini-card mission-focus-card">
+          <span class="tiny-label">Current context</span>
+          <strong>{{ contextLabel }}</strong>
+          <p class="muted">{{ String(activeMissionMode || '').toUpperCase() }} mode - {{ missionType }}</p>
+        </article>
+        <article class="mini-card mission-focus-card">
+          <span class="tiny-label">Waiting for</span>
           <strong>{{ missionStatusLabel }}</strong>
-          <span class="status-separator">•</span>
+          <p class="muted">{{ waitingForLabel }}</p>
+        </article>
+        <article class="mini-card mission-focus-card">
+          <span class="tiny-label">Next best action</span>
           <strong>{{ currentStage.label }}</strong>
-          <span class="status-separator">•</span>
-          <span class="muted">{{ missionType }}</span>
-        </div>
-        <v-btn
-          v-if="resultFiles.length"
-          class="ghost"
-          rounded="pill"
-          variant="outlined"
-          size="small"
-          @click="areResultsVisible = !areResultsVisible"
-        >
-          {{ areResultsVisible ? 'Hide Results' : 'Show Results' }}
-        </v-btn>
-        <v-btn
-          v-if="traceItems.length"
-          class="ghost"
-          rounded="pill"
-          variant="outlined"
-          size="small"
-          @click="isTraceVisible = !isTraceVisible"
-        >
-          {{ isTraceVisible ? 'Hide Trace' : 'Show Trace' }}
-        </v-btn>
+          <p class="muted">{{ nextActionLabel }}</p>
+        </article>
       </div>
 
+      <div class="mini-card mission-status-line" v-show="!areMissionDetailsHidden">
+        <div class="status-inline">
+          <span class="tiny-label">Quick controls</span>
+          <strong>{{ currentStage.detail }}</strong>
+          <span class="status-separator">|</span>
+          <strong>{{ missionStatusLabel }}</strong>
+        </div>
+        <v-btn v-if="resultFiles.length" class="ghost" rounded="pill" variant="outlined" size="small"
+          @click="areResultsVisible = !areResultsVisible">
+          {{ areResultsVisible ? 'Hide Results' : 'Show Results' }}
+        </v-btn>
+        <v-btn v-if="traceItems.length" class="ghost" rounded="pill" variant="outlined" size="small"
+          @click="isTraceVisible = !isTraceVisible">
+          {{ isTraceVisible ? 'Hide Trace' : 'Show Trace' }}
+        </v-btn>
+        <v-btn class="ghost" rounded="pill" variant="outlined" size="small"
+          @click="isWorkspaceGuideVisible = !isWorkspaceGuideVisible">
+          {{ isWorkspaceGuideVisible ? 'Hide Boss Guide' : 'Show Boss Guide' }}
+        </v-btn>
+      </div>
       <div v-show="!areMissionDetailsHidden" class="chat-meta-stack">
         <div class="mini-card engine-card" :class="engineThemeClass">
           <div class="run-head">
-            <strong>Current engine</strong>
-            <span class="badge success">{{ llmStatus.provider }}</span>
+            <strong>Runtime</strong>
+            <span class="badge" :class="llmStatus.badgeClass">{{ llmStatus.badgeLabel }}</span>
           </div>
           <div class="engine-meta-row">
             <p class="muted">{{ currentEngine }}</p>
-            <p class="muted">LLM: {{ llmStatus.provider }} / {{ llmStatus.model }}</p>
-            <p class="muted">Mode routing: {{ modeRoutingHint }}</p>
+            <p class="muted">{{ llmStatus.detail || (llmStatus.provider + ' / ' + llmStatus.model) }}</p>
+            <p class="muted">{{ modeRoutingHint }}</p>
           </div>
         </div>
 
@@ -294,13 +304,16 @@ defineExpose({
           <div class="run-head">
             <strong>Approval Ready</strong>
             <div class="inline-input compact-toggle-row">
-              <span class="badge warning">{{ pendingApprovalSummary.currentMode }} -> {{ pendingApprovalSummary.nextMode }}</span>
-              <v-btn class="ghost" rounded="pill" variant="outlined" size="small" @click="isApprovalExpanded = !isApprovalExpanded">
+              <span class="badge warning">{{ pendingApprovalSummary.currentMode }} -> {{ pendingApprovalSummary.nextMode
+                }}</span>
+              <v-btn class="ghost" rounded="pill" variant="outlined" size="small"
+                @click="isApprovalExpanded = !isApprovalExpanded">
                 {{ isApprovalExpanded ? 'Less' : 'Details' }}
               </v-btn>
             </div>
           </div>
-          <p class="muted compact-summary">Approval needed for <strong>{{ pendingApprovalSummary.tool }}</strong>. Estimated cost: {{ pendingApprovalSummary.estimatedCostBand }}.</p>
+          <p class="muted compact-summary">Approval needed for <strong>{{ pendingApprovalSummary.tool }}</strong>.
+            Estimated cost: {{ pendingApprovalSummary.estimatedCostBand }}.</p>
           <div class="action-row compact-action-row">
             <v-btn class="primary subtle" rounded="pill" @click="emit('reply-chip', 'yes')">Approve</v-btn>
             <v-btn class="ghost" rounded="pill" variant="outlined" @click="emit('reply-chip', 'no')">Reject</v-btn>
@@ -310,7 +323,8 @@ defineExpose({
           </div>
           <div v-if="isApprovalExpanded" class="approval-detail-list">
             <p class="muted">Likely engine: {{ pendingApprovalSummary.likelyEngine }}</p>
-            <p class="muted">Mode switch: {{ pendingApprovalSummary.currentMode }} -> {{ pendingApprovalSummary.nextMode }}</p>
+            <p class="muted">Mode switch: {{ pendingApprovalSummary.currentMode }} -> {{ pendingApprovalSummary.nextMode
+              }}</p>
             <p class="muted">Gemini limits are shared at the project level. Nexus estimates quota locally.</p>
           </div>
         </div>
@@ -323,33 +337,46 @@ defineExpose({
           <p class="muted">{{ currentBlocker.detail }}</p>
         </div>
 
-        <div class="mini-card boss-ops-card">
+        <div v-if="isWorkspaceGuideVisible" class="mini-card boss-ops-card">
           <div class="run-head">
-            <strong>Boss Workspace</strong>
+            <strong>Boss guide</strong>
             <span class="badge success">{{ activeMissionDomainLabel }}</span>
           </div>
           <div class="ops-grid">
             <div class="ops-cell">
               <span class="tiny-label">Current artifact</span>
               <strong>{{ activeArtifact?.kind || 'No active artifact yet' }}</strong>
-              <p class="muted">{{ activeArtifact?.path || activeArtifact?.url || 'Generate, attach, code, quote, or publish something and Nexus will keep it here.' }}</p>
+              <p class="muted">
+                {{ activeArtifact?.path || activeArtifact?.url ||
+                  'Generate, attach, code, quote, or publish something and Nexus will keep it here.' }}
+              </p>
             </div>
             <div class="ops-cell">
               <span class="tiny-label">Queued next step</span>
               <strong>{{ queuedAction?.type || 'No queued step' }}</strong>
-              <p class="muted">{{ queuedAction ? `Status: ${queuedAction.status}` : 'When you ask for multi-step execution, Nexus should complete the current step and then pause for approval before risky next actions.' }}</p>
+              <p class="muted">
+                {{ queuedAction ? `Status: ${queuedAction.status}` :
+                  'When you ask for multi-step execution, Nexus should complete the current step and then pause for approval before risky next actions.'
+                }}
+              </p>
             </div>
             <div class="ops-cell">
               <span class="tiny-label">Latest target</span>
               <strong>{{ latestPublishedTarget?.channel || 'No published target yet' }}</strong>
-              <p class="muted">{{ latestPublishedTarget?.id || 'Published posts, outbound messages, and external targets will appear here for update/delete continuity.' }}</p>
+              <p class="muted">
+                {{ latestPublishedTarget?.id ||
+                  'Published posts, outbound messages, and external targets will appear here for update / delete continuity.'
+                }}
+              </p>
             </div>
             <div class="ops-cell">
               <span class="tiny-label">Recent task memory</span>
               <div v-if="missionTaskStack.length" class="ops-task-list">
-                <span v-for="task in missionTaskStack" :key="task.at + task.label" class="pill">{{ task.domain }}: {{ task.label }}</span>
+                <span v-for="task in missionTaskStack" :key="task.at + task.label" class="pill">{{ task.domain }}: {{
+                  task.label }}</span>
               </div>
-              <p v-else class="muted">Task switches should stay coherent across marketing, design, dev, quote, and browser work.</p>
+              <p v-else class="muted">Task switches should stay coherent across marketing, design, dev, quote, and
+                browser work.</p>
             </div>
           </div>
           <div class="ops-hint-row">
@@ -382,24 +409,12 @@ defineExpose({
                 </div>
                 <p class="muted">{{ job.prompt }}</p>
                 <div class="action-row">
-                  <v-btn
-                    v-if="job.status === 'retry_wait'"
-                    class="ghost"
-                    rounded="pill"
-                    variant="outlined"
-                    size="small"
-                    @click="emit('retry-job', job.id)"
-                  >
+                  <v-btn v-if="job.status === 'retry_wait'" class="ghost" rounded="pill" variant="outlined" size="small"
+                    @click="emit('retry-job', job.id)">
                     Retry Now
                   </v-btn>
-                  <v-btn
-                    v-else
-                    class="ghost"
-                    rounded="pill"
-                    variant="outlined"
-                    size="small"
-                    @click="emit('requeue-job', job.id)"
-                  >
+                  <v-btn v-else class="ghost" rounded="pill" variant="outlined" size="small"
+                    @click="emit('requeue-job', job.id)">
                     Requeue
                   </v-btn>
                 </div>
@@ -409,14 +424,8 @@ defineExpose({
         </div>
 
         <div v-if="suggestedReplyChips.length" class="chip-row">
-          <v-btn
-            v-for="chip in suggestedReplyChips"
-            :key="chip.label + chip.value"
-            class="chip-button"
-            rounded="pill"
-            variant="outlined"
-            @click="emit('reply-chip', chip.value)"
-          >
+          <v-btn v-for="chip in suggestedReplyChips" :key="chip.label + chip.value" class="chip-button" rounded="pill"
+            variant="outlined" @click="emit('reply-chip', chip.value)">
             {{ chip.label }}
           </v-btn>
         </div>
@@ -442,8 +451,10 @@ defineExpose({
       </div>
       <div class="result-grid">
         <div v-for="file in resultFiles" :key="file.url || file.name" class="result-card">
-          <img v-if="/\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(file.url || '')" :src="file.url" :alt="file.name" class="result-preview">
-          <video v-else-if="/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(file.url || '')" :src="file.url" class="result-preview" muted playsinline></video>
+          <img v-if="/\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(file.url || '')" :src="file.url" :alt="file.name"
+            class="result-preview">
+          <video v-else-if="/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(file.url || '')" :src="file.url" class="result-preview"
+            muted playsinline></video>
           <div v-else class="result-preview result-preview-placeholder">
             <strong>{{ file.name }}</strong>
           </div>
@@ -464,34 +475,34 @@ defineExpose({
         <v-btn class="ghost" rounded="pill" variant="outlined" @click="triggerFilePicker">Attach File</v-btn>
         <div class="inline-input compact-mode-row composer-mode-row">
           <strong>Mode</strong>
-          <v-select
-            v-model="missionModeModel"
+          <v-select v-model="missionModeModel"
             :items="[{ title: 'Chat', value: 'chat' }, { title: 'Execute', value: 'execute' }, { title: 'Auto', value: 'auto' }]"
-            item-title="title"
-            item-value="value"
-            density="comfortable"
-            variant="outlined"
-            hide-details
-            class="usage-select"
-          />
+            item-title="title" item-value="value" density="comfortable" variant="outlined" hide-details
+            class="usage-select" />
         </div>
-              <div class="action-row composer-footer-row">
-        <span class="muted composer-help">Paste, drag and drop, or attach files.</span>
-        <v-btn v-if="isWorking || missionStatus === 'paused'" class="danger" rounded="pill" @click="emit('terminate')">Stop</v-btn>
-        <v-btn v-else class="primary" rounded="pill" @click="emit('submit')">
-          {{ String(activeMissionMode || '').toLowerCase() === 'chat' ? 'Send' : 'Launch' }}
-        </v-btn>
-      </div>
-        <v-btn :class="isVoiceListening ? 'danger' : 'ghost'" rounded="pill" :variant="isVoiceListening ? 'flat' : 'outlined'" @click="emit(isVoiceListening ? 'stop-voice' : 'toggle-voice')">
+        <div class="action-row composer-footer-row">
+          <span class="muted composer-help">Paste, drag and drop, or attach files.</span>
+          <v-btn v-if="isWorking || missionStatus === 'paused'" class="danger" rounded="pill"
+            @click="emit('terminate')">Stop</v-btn>
+          <v-btn v-else class="primary" rounded="pill" @click="emit('submit')">
+            {{ String(activeMissionMode || '').toLowerCase() === 'chat' ? 'Send' : 'Launch' }}
+          </v-btn>
+        </div>
+        <v-btn :class="isVoiceListening ? 'danger' : 'ghost'" rounded="pill"
+          :variant="isVoiceListening ? 'flat' : 'outlined'"
+          @click="emit(isVoiceListening ? 'stop-voice' : 'toggle-voice')">
           {{ isVoiceListening ? 'Listening...' : 'Voice' }}
         </v-btn>
-        <input :id="fileInputId" ref="internalFileInput" type="file" class="hidden-input" @change="emit('file-upload', $event)" />
+        <input :id="fileInputId" ref="internalFileInput" type="file" class="hidden-input"
+          @change="emit('file-upload', $event)" />
       </div>
 
       <div v-if="uploadedContextFiles.length" class="composer-uploads">
         <div v-for="file in uploadedContextFiles" :key="file.url || file.path" class="composer-upload-card">
-          <img v-if="String(file.mimeType || '').startsWith('image/')" :src="file.url" :alt="file.name" class="composer-upload-thumb">
-          <video v-else-if="String(file.mimeType || '').startsWith('video/')" :src="file.url" class="composer-upload-thumb" muted playsinline></video>
+          <img v-if="String(file.mimeType || '').startsWith('image/')" :src="file.url" :alt="file.name"
+            class="composer-upload-thumb">
+          <video v-else-if="String(file.mimeType || '').startsWith('video/')" :src="file.url"
+            class="composer-upload-thumb" muted playsinline></video>
           <div class="composer-upload-copy">
             <strong>{{ file.name }}</strong>
             <span class="muted">{{ file.mimeType || 'Attached file' }}</span>
@@ -499,21 +510,39 @@ defineExpose({
           <a class="message-action-btn" :href="file.url" target="_blank" rel="noreferrer">Preview</a>
         </div>
       </div>
-      <v-textarea
-        v-model="promptModel"
-        placeholder="Give the task like a boss: what to create, what to use, when to stop for approval, and what should happen next."
-        variant="outlined"
-        auto-grow
-        rows="4"
-        hide-details
-        @keydown.enter.exact.prevent="emit('submit')"
-      ></v-textarea>
+      <v-textarea v-model="promptModel"
+        placeholder="Tell Nexus clearly: 1) what to do, 2) for which client, 3) expected output, 4) where to stop for approval."
+        variant="outlined" auto-grow rows="4" hide-details @keydown.enter.exact.prevent="emit('submit')"></v-textarea>
 
     </div>
   </div>
 </template>
 
 <style scoped>
+.mission-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mission-focus-card {
+  gap: 6px;
+}
+
+.mission-focus-card strong {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.mission-shell-head {
+  align-items: end;
+}
+
+@media (max-width: 1100px) {
+  .mission-hero-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .trace-list {
   display: flex;
   flex-direction: column;
@@ -569,5 +598,3 @@ defineExpose({
   color: rgba(255, 255, 255, 0.7);
 }
 </style>
-
-

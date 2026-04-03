@@ -61,12 +61,18 @@ class NexusOrchestrator {
         this.skillGen = new SkillGenerator(taskDir ? path.join(taskDir, 'skills') : null);
 
         this.tools = {
-            readFile: (args) => FileSystemTool.readFile(args.absolutePath),
-            writeFile: (args) => FileSystemTool.writeFile(args.absolutePath, args.content),
+            readFile: (args) => FileSystemTool.readFile(args.absolutePath, this.llmService.readFileState, this.stepCount),
+            writeFile: (args) => FileSystemTool.writeFile(args.absolutePath, args.content, this.llmService.readFileState),
             listDir: (args) => FileSystemTool.listDir(args.absolutePath),
-            replaceFileContent: (args) => FileSystemTool.replaceFileContent(args.absolutePath, args.startLine, args.endLine, args.targetContent, args.replacementContent),
+            replaceFileContent: (args) => FileSystemTool.replaceFileContent(args.absolutePath, args.startLine, args.endLine, args.targetContent, args.replacementContent, this.llmService.readFileState),
             multiReplaceFileContent: (args) => FileSystemTool.multiReplaceFileContent(args.absolutePath, args.chunks),
-            runCommand: (args) => TerminalTool.runCommand(args.command, args.cwd),
+            runSed: (args) => FileSystemTool.runSed(args.absolutePath, args.pattern, args.replacement, this.llmService.readFileState),
+            runCommand: (args) => TerminalTool.runCommand(args.command, args.cwd, args.runInBackground),
+            checkBackgroundTask: (args) => TerminalTool.checkBackgroundTask(args.taskId),
+            createWorktree: (args) => require('./tools/worktree').createWorktree(args.taskId, args.branch),
+            removeWorktree: (args) => require('./tools/worktree').removeWorktree(args.taskId),
+            listWorktrees: () => require('./tools/worktree').listWorktrees(),
+            finalizeWorktree: (args) => require('./tools/worktree').finalizeWorktree(args.taskId, args.commitMessage, args.baseBranch),
             browserAction: (args) => this.browserInstance.executeAction(args),
             generateImage: (args) => ImageGenTool.generateImage(args.prompt, args.savePath, { aspectRatio: args.aspectRatio, refine: args.refine }),
             createSkill: (args) => this.skillGen.createSkill(args.name, args.code, args.description),
@@ -222,6 +228,16 @@ class NexusOrchestrator {
         // This ensures the AI starts with a clean slate (System Prompt + New Request).
         this.context = [{ role: 'system', content: this.systemPrompt }];
         this.currentTaskContract = this._buildTaskContract(augmentedRequest);
+        if (this.currentTaskContract?.routingProfile) {
+            const routing = this.currentTaskContract.routingProfile;
+            const preferredTools = Array.isArray(routing.preferredTools) && routing.preferredTools.length
+                ? routing.preferredTools.join(', ')
+                : 'general reasoning';
+            this.onUpdate({
+                type: 'thought',
+                message: `Task routing locked: domain=${routing.domain || 'general'} | preferred tools=${preferredTools}`
+            });
+        }
         
         // MISSION STABILITY: Reset transient state for every fresh mission to prevent pollution.
         // If the user isn't explicitly continuing a previous draft, we purge the old baggage.
@@ -237,10 +253,12 @@ class NexusOrchestrator {
             }
         }
 
+        const isBrowserMission = this._isBrowserMissionRequest(augmentedRequest);
+
         // Recall Long-Term Memories
-        const memories = await MemoryService.recallRecent(5);
-        const recoveryPatterns = await MemoryService.findRecoveryPatterns(augmentedRequest, 3);
-        const detectedMarketingWorkflow = MarketingService.detectWorkflowFromText(augmentedRequest);
+        const memories = isBrowserMission ? [] : await MemoryService.recallRecent(5);
+        const recoveryPatterns = isBrowserMission ? [] : await MemoryService.findRecoveryPatterns(augmentedRequest, 3);
+        const detectedMarketingWorkflow = isBrowserMission ? null : MarketingService.detectWorkflowFromText(augmentedRequest);
         const detectedGoal = GoalInterpreter.interpretGoal(augmentedRequest);
         const detectedCommercialQuote = this._detectCommercialQuoteRequest(augmentedRequest);
         this.currentMissionMode = MissionMode.detectMissionMode(augmentedRequest, this.manualMissionMode);
@@ -306,7 +324,6 @@ ${JSON.stringify(quoteDefaults, null, 2)}
             skillSearchRequest.split(/\s+/).length >= 18;
         const suggestedSkills = shouldAutoLoadSkill ? SkillReaderTool.findBestSkill(userRequest) : [];
         let expertRolePrompt = "";
-        const isBrowserMission = /\b(open|browser|url|http|click|search|quiz|form|submit|fill|navigate|read questions?)\b/.test(String(userRequest).toLowerCase());
 
         if (!isBrowserMission && suggestedSkills.length > 0) {
             const bestSkill = suggestedSkills[0];
@@ -779,8 +796,19 @@ ${playbook}\n\n`;
     _isMissionFollowUpRequest(text = '') {
         const value = String(text || '').trim().toLowerCase();
         if (!value) return false;
-        const hasMemory = Boolean(this.currentMissionArtifact?.id || this.lastPublishedTargets?.length || this.pendingActionChain?.length || this.missionTaskStack?.length);
+        const hasMemory = Boolean(
+            this.currentMissionArtifact?.id ||
+            this.lastPublishedTargets?.length ||
+            this.pendingActionChain?.length ||
+            this.missionTaskStack?.length ||
+            this.currentWorkflowState ||
+            this.currentRun?.toolsUsed?.browserAction
+        );
         if (!hasMemory) return false;
+
+        if (['continue', 'proceed', 'resume', 'go on', 'next', 'carry on'].includes(value) && this._shouldForceBrowserContinuation()) {
+            return true;
+        }
 
         const directFollowUp = /\b(this|that|same|current|latest|previous|above|it)\b/.test(value);
         const mutateIntent = /\b(update|edit|modify|revise|change|delete|remove|send|share|publish|post|promote|continue|resume|reuse|adapt|repurpose|use)\b/.test(value);
@@ -1094,6 +1122,9 @@ ${playbook}\n\n`;
         const latestTarget = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null;
 
         if (!deliverable || deliverable === 'direct answer or requested output') {
+            if (this._shouldForceBrowserContinuation()) {
+                return Boolean(this.currentRun?.toolsUsed?.browserAction);
+            }
             return true;
         }
 
@@ -1332,11 +1363,122 @@ ${playbook}\n\n`;
             sideQuestGuard.push('Do not perform outbound, public, or paid actions unless explicitly requested.');
         }
 
+        const routingProfile = this._deriveTaskRoutingProfile(lower);
+
         return {
             objective: value || 'Complete the current user request.',
             expectedDeliverable: deliverableHints.length ? deliverableHints.join(', ') : 'direct answer or requested output',
             successTest: 'The final output must match the user request and be supported by real tool output when tools are used.',
-            sideQuestGuard
+            sideQuestGuard,
+            routingProfile
+        };
+    }
+
+    _deriveTaskRoutingProfile(lower = '') {
+        const isBrowserTask = /\b(open|browser|website|site|page|url|portal|login|navigate|click|fill|form|submit|quiz|question)\b/.test(lower);
+        const isCodeTask = /\b(code|bug|fix|debug|file|function|repo|project|server|frontend|backend|test)\b/.test(lower);
+        const isCommercialTask = /\b(quote|quotation|proposal|invoice|pricing|estimate)\b/.test(lower);
+        const isMarketingTask = /\b(marketing|audit|seo|campaign|ad|social|competitor|landing page|organic|facebook|instagram|meta)\b/.test(lower);
+        const isImageTask = /\b(image|banner|poster|creative|thumbnail|logo|flyer|brochure)\b/.test(lower);
+        const isVideoTask = /\b(video|reel|shorts|animation|promo video|promo reel)\b/.test(lower);
+        const isOutboundTask = /\b(email|whatsapp|send|share|reply|message)\b/.test(lower);
+        const wantsResearch = /\b(search|research|browse|find online|look up|google)\b/.test(lower);
+
+        if (isBrowserTask) {
+            return {
+                domain: 'browser',
+                preferredTools: ['browserAction', 'searchWeb', 'askUserForInput'],
+                allowedTools: ['browserAction', 'searchWeb', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['generateImage', 'generateVideo', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        if (isCodeTask) {
+            return {
+                domain: 'code',
+                preferredTools: ['readFile', 'listDir', 'codeMap', 'codeSearch', 'codeFindFn', 'replaceFileContent', 'multiReplaceFileContent', 'runCommand'],
+                allowedTools: ['readFile', 'writeFile', 'listDir', 'replaceFileContent', 'multiReplaceFileContent', 'runSed', 'runCommand', 'checkBackgroundTask', 'codeMap', 'codeSearch', 'codeFindFn', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['metaAds', 'googleAds', 'linkedinAds', 'xAds', 'sendEmail', 'sendWhatsApp', 'browserAction']
+            };
+        }
+
+        if (isCommercialTask) {
+            return {
+                domain: 'commercial',
+                preferredTools: ['buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'askUserForInput'],
+                allowedTools: ['buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'generateImage', 'generateVideo']
+            };
+        }
+
+        if (isOutboundTask) {
+            return {
+                domain: 'outbound',
+                preferredTools: ['sendEmail', 'sendWhatsApp', 'askUserForInput'],
+                allowedTools: ['sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia', 'readEmail', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds']
+            };
+        }
+
+        const isMetaOrganicTask = /\b(organic|facebook|instagram|meta)\b/.test(lower) && /\b(post|publish|promote|ad|creative|image|banner|photo)\b/.test(lower);
+
+        if (isMarketingTask && isMetaOrganicTask) {
+            return {
+                domain: 'marketing',
+                preferredTools: ['generateImage', 'metaAds', 'askUserForInput'],
+                allowedTools: ['generateImage', 'metaAds', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        if (isImageTask && !isVideoTask) {
+            return {
+                domain: 'image',
+                preferredTools: ['generateImage', 'removeBg', 'askUserForInput'],
+                allowedTools: ['generateImage', 'removeBg', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'generateVideo', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        if (isVideoTask && !isImageTask) {
+            return {
+                domain: 'video',
+                preferredTools: ['generateVideo', 'askUserForInput'],
+                allowedTools: ['generateVideo', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'generateImage', 'removeBg', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        if (isImageTask && isVideoTask) {
+            return {
+                domain: 'media',
+                preferredTools: ['generateImage', 'generateVideo', 'removeBg', 'askUserForInput'],
+                allowedTools: ['generateImage', 'generateVideo', 'removeBg', 'askUserForInput', 'saveMemory', 'searchMemory'],
+                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        if (isMarketingTask) {
+            const allowedTools = ['analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'askUserForInput', 'saveMemory', 'searchMemory'];
+            if (isMetaOrganicTask) {
+                allowedTools.push('generateImage', 'metaAds');
+            }
+            if (wantsResearch) allowedTools.push('searchWeb');
+            return {
+                domain: 'marketing',
+                preferredTools: isMetaOrganicTask
+                    ? ['generateImage', 'metaAds', 'askUserForInput']
+                    : ['analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', wantsResearch ? 'searchWeb' : 'askUserForInput'].filter(Boolean),
+                allowedTools,
+                blockedTools: ['browserAction', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
+            };
+        }
+
+        return {
+            domain: 'general',
+            preferredTools: ['askUserForInput', 'searchWeb'],
+            allowedTools: null,
+            blockedTools: []
         };
     }
 
@@ -1346,7 +1488,10 @@ ${playbook}\n\n`;
         const guardLines = contract.sideQuestGuard?.length
             ? contract.sideQuestGuard.map((item) => `- ${item}`).join('\n')
             : '- Avoid irrelevant side quests.';
-        return `### TASK CONTRACT\nRequested outcome: ${contract.objective}\nExpected deliverable: ${contract.expectedDeliverable}\nSuccess test: ${contract.successTest}\nSide-quest guardrails:\n${guardLines}\nIf your next step does not directly advance this contract, do not do it.\n\n`;
+        const routing = contract.routingProfile || {};
+        const preferred = Array.isArray(routing.preferredTools) && routing.preferredTools.length ? routing.preferredTools.join(', ') : 'Use the most relevant tools only.';
+        const blocked = Array.isArray(routing.blockedTools) && routing.blockedTools.length ? routing.blockedTools.join(', ') : 'None';
+        return `### TASK CONTRACT\nRequested outcome: ${contract.objective}\nExpected deliverable: ${contract.expectedDeliverable}\nSuccess test: ${contract.successTest}\nPrimary domain: ${routing.domain || 'general'}\nPreferred tools: ${preferred}\nAvoid these tools unless the Boss clearly changes the task: ${blocked}\nSide-quest guardrails:\n${guardLines}\nIf your next step does not directly advance this contract, do not do it.\n\n`;
     }
 
     _isToolRelevantToTask(toolCall = {}) {
@@ -1354,6 +1499,12 @@ ${playbook}\n\n`;
         const argsText = JSON.stringify(toolCall?.args || {}).toLowerCase();
         const request = String(this.currentTaskContract?.objective || this._getLatestUserText() || '').toLowerCase();
         if (!request) return true;
+        const routingProfile = this.currentTaskContract?.routingProfile || {};
+        const allowedTools = Array.isArray(routingProfile.allowedTools) ? routingProfile.allowedTools.map((item) => String(item || '').toLowerCase()) : null;
+        const blockedTools = Array.isArray(routingProfile.blockedTools) ? routingProfile.blockedTools.map((item) => String(item || '').toLowerCase()) : [];
+
+        if (blockedTools.includes(name)) return false;
+        if (allowedTools && allowedTools.length && !allowedTools.includes(name)) return false;
 
         const mentions = (...patterns) => patterns.some((pattern) => pattern.test(request));
         const isCodeTask = mentions(/\bcode|bug|fix|debug|file|function|repo|project\b/);
@@ -1497,6 +1648,95 @@ ${playbook}\n\n`;
         return null;
     }
 
+    _isBrowserMissionRequest(text = '') {
+        const value = String(text || '').toLowerCase();
+        return /\b(open|browser|url|http|click|navigate|fill|form|submit|quiz|question|option|login|portal|website)\b/.test(value);
+    }
+
+    _shouldForceBrowserContinuation(originalRequest = '') {
+        const latestUser = this._getLatestUserText ? this._getLatestUserText() : '';
+        const contractObjective = String(this.currentTaskContract?.objective || '').toLowerCase();
+        const request = String(originalRequest || contractObjective || latestUser || '').toLowerCase();
+        return this._isBrowserMissionRequest(request) || Boolean(this.currentRun?.toolsUsed?.browserAction);
+    }
+
+    _getLlmOptionsForCurrentMission(overrides = {}) {
+        const routingProfile = this.currentTaskContract?.routingProfile || null;
+        const options = {
+            mode: this.currentMissionMode,
+            sessionId: this.currentSessionId,
+            onStatus: (message) => {
+                if (message) this.onUpdate({ type: 'thought', message: `LLM Status: ${message}` });
+            },
+            ...overrides
+        };
+
+        if (this._shouldForceBrowserContinuation()) {
+            options.allowedTools = [
+                'browserAction',
+                'askUserForInput',
+                'searchWeb',
+                'saveMemory',
+                'searchMemory'
+            ];
+        } else if (Array.isArray(routingProfile?.allowedTools) && routingProfile.allowedTools.length) {
+            options.allowedTools = routingProfile.allowedTools;
+        }
+
+        return options;
+    }
+
+    async _bootstrapBrowserMissionIfNeeded(originalRequest = '') {
+        if (!this._shouldForceBrowserContinuation(originalRequest)) return false;
+        if (this.currentRun?.toolsUsed?.browserAction) return false;
+
+        const targetUrl = this._extractFirstUrl(originalRequest || this._getLatestUserText());
+        if (!targetUrl) return false;
+
+        this.onUpdate({ type: 'thought', message: `Browser kickoff: opening ${targetUrl} directly so Nexus can start from the real page state instead of a narrated plan.` });
+
+        const toolCall = { name: 'browserAction', args: { action: 'open', url: targetUrl } };
+        let result = await this.dispatchTool(toolCall);
+        this._captureToolOutcome(toolCall, result);
+        this.onUpdate({ type: 'action', name: toolCall.name, args: toolCall.args });
+        this.onUpdate({ type: 'result', message: this._formatToolResult(result) });
+        this.context.push({ role: 'assistant', content: '', toolCall });
+
+        const pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+        result = `${this._formatToolResult(result)}\n\n[PROACTIVE PAGE SCAN]:\n${pageContent}`;
+        this.context.push({ role: 'tool', name: toolCall.name, content: result });
+        this.onUpdate({ type: 'thought', message: `🔍 Auto-Sync: Page opened. Performing background 'getMarkdown' for immediate context...` });
+        this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
+        return true;
+    }
+
+    _isBrowserHesitationResponse(text = '') {
+        const value = String(text || '').toLowerCase();
+        return (
+            value.includes('do not have the inherent knowledge') ||
+            value.includes('i do not have the inherent knowledge') ||
+            value.includes('need your instructions on how to determine') ||
+            value.includes('cannot determine the correct answers') ||
+            value.includes('please provide the correct answers') ||
+            value.includes('i will need your instructions')
+        );
+    }
+
+    _isWeakBrowserTextTurn(response = {}, originalRequest = '') {
+        if (!this._shouldForceBrowserContinuation(originalRequest)) return false;
+        if (response?.toolCall) return false;
+        const text = String(response?.text || '').trim().toLowerCase();
+        if (!text) return true;
+        return (
+            text.includes('let me start by') ||
+            text.includes('here\'s my plan') ||
+            text.includes('i will open') ||
+            text.includes('i can help you') ||
+            text.includes('to get started') ||
+            text.includes('ready for your instructions')
+        );
+    }
+
     async _describeExecutionEngine(toolCall) {
         const { name, args = {} } = toolCall || {};
         if (!name) return null;
@@ -1533,6 +1773,7 @@ ${playbook}\n\n`;
         let isTaskCompleted = false;
         let consecutiveEmptyResponses = 0; // [CIRCUIT BREAKER] Prevent infinite empty-response loops
         const maxConsecutiveEmpty = 3;
+        await this._bootstrapBrowserMissionIfNeeded(originalRequest);
         for (; this.stepCount < this.maxSteps; this.stepCount++) {
             if (this.isStopped) break;
             this.onUpdate({ type: 'step', message: `--- Step ${this.stepCount + 1} ---` });
@@ -1582,10 +1823,7 @@ ${playbook}\n\n`;
             let response;
             try {
                 const llmContext = this._trimContextForLlm(this.context);
-                response = await this.llmService.generateResponse(llmContext, { 
-                    mode: this.currentMissionMode,
-                    sessionId: this.currentSessionId 
-                });
+                response = await this.llmService.generateResponse(llmContext, this._getLlmOptionsForCurrentMission());
             } catch (err) {
                 const errMsg = err.message || '';
                 const isEmptyOutputErr = errMsg.includes('model output must contain') || errMsg.includes('output text or tool calls') || errMsg.includes('both be empty');
@@ -1602,10 +1840,7 @@ ${playbook}\n\n`;
                         console.error(`[RESILIENCE] Signature Mismatch detected. Purging pinned key and retrying turn...`);
                         this.llmService.pinnedKeys?.delete(this.currentSessionId);
                         const llmContext = this._trimContextForLlm(this.context);
-                        response = await this.llmService.generateResponse(llmContext, { 
-                            mode: this.currentMissionMode,
-                            sessionId: this.currentSessionId 
-                        });
+                        response = await this.llmService.generateResponse(llmContext, this._getLlmOptionsForCurrentMission());
                     }
                 } else {
                     throw err;
@@ -1714,6 +1949,14 @@ ${playbook}\n\n`;
                 }
             }
 
+            if (!response.toolCall) {
+                const salvagedToolCall = this._extractToolCallFromNarration(response.text);
+                if (salvagedToolCall) {
+                    this.onUpdate({ type: 'thought', message: 'Recovered a real tool call from narrated tool text. Executing it now.' });
+                    response.toolCall = salvagedToolCall;
+                }
+            }
+
             if (response.toolCall) {
                 if (this.isStopped) break;
                 this.onUpdate({
@@ -1782,7 +2025,7 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 if (this.isStopped) break;
                 
                 // [RESILIENCE] Auto-Sync Intelligence: If we just opened a page, automatically scan it to eliminate "flying blind"
-                if (response.toolCall.name === 'browserAction' && response.toolCall.args.action === 'open' && !String(result).toLowerCase().includes('error')) {
+                if (response.toolCall.name === 'browserAction' && ['open', 'click', 'clickText', 'keyPress'].includes(response.toolCall.args.action) && !String(result).toLowerCase().includes('error')) {
                     this.onUpdate({ type: 'thought', message: `🔍 Auto-Sync: Page opened. Performing background 'getMarkdown' for immediate context...` });
                     const pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
                     result = `${result}\n\n[PROACTIVE PAGE SCAN]:\n${pageContent}`;
@@ -1833,9 +2076,12 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 if (textLower.includes('unexpected_tool_call')) {
                     const latestUser = this._getLatestUserText();
                     const likelyBanner = this._isCreativeAssetRequest(latestUser);
-                    const correction = likelyBanner
-                        ? "ERROR: You attempted an invalid tool call. For this request, you MUST call generateImage with a concrete banner prompt (Meta Ads style). Do NOT call metaAds yet. Respond ONLY with a valid tool call."
-                        : "ERROR: You attempted an invalid tool call. Respond ONLY with a valid tool call from the provided tool schema.";
+                    const targetUrl = this._extractFirstUrl(latestUser);
+                    const correction = this._shouldForceBrowserContinuation(latestUser)
+                        ? `ERROR: You attempted an invalid tool call during a browser mission. You MUST use browser tools only. Start with browserAction using action "open"${targetUrl ? ` and url "${targetUrl}"` : ''}. After opening, use getMarkdown or extractActiveElements to inspect the page, then continue step by step until the browser task is complete. Do not call generateImage or unrelated tools. Respond ONLY with a valid tool call from the provided tool schema.`
+                        : likelyBanner
+                            ? "ERROR: You attempted an invalid tool call. For this request, you MUST call generateImage with a concrete banner prompt (Meta Ads style). Do NOT call metaAds yet. Respond ONLY with a valid tool call."
+                            : "ERROR: You attempted an invalid tool call. Respond ONLY with a valid tool call from the provided tool schema.";
                     this.onUpdate({ type: 'thought', message: `\u26a0\ufe0f **Detection:** Invalid tool call from LLM (UNEXPECTED_TOOL_CALL). Retrying with correction...` });
                     this.context.push({ role: 'user', content: correction });
                     continue;
@@ -1853,9 +2099,9 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 // This must run BEFORE the explicit completion check to catch "hallucinated success".
                 const containsMarkdownMedia = /!\[[^\]]*\]\(([^)]+)\)/i.test(response.text || '');
                 const containsPlaceholderMedia = /\[(image|video|preview|file|audio|attachment):/i.test(textLower);
-                const containsToolCodeBlock = /<\s*tool_code\s*>/i.test(response.text || '') || /"tool_code"\s*:/i.test(response.text || '');
-                const containsPythonToolNarration = /\bnexus_os\.(generateimage|generatevideo|metaads|browseraction)\b/i.test(response.text || '');
-                const isNarratingToolSuccess = 
+                const containsToolCodeBlock = /<\s*tool_code\s*>/i.test(response.text || '') || /"tool_code"\s*:/i.test(response.text || '') || /```(?:python|json|javascript)?[\s\S]*?\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp)\s*\(/i.test(response.text || '');
+                const containsPythonToolNarration = /\bnexus_os\.(generateimage|generatevideo|metaads|browseraction)\b/i.test(response.text || '') || /\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp)\s*\(/i.test(response.text || '');
+                const isNarratingToolSuccess =
                     /\b(i will use|i'll use|calling tool|now using|generating now|here is the image|post is ready|successfully (published|sent|created|generated))\b/i.test(textLower) ||
                     containsPlaceholderMedia ||
                     containsMarkdownMedia ||
@@ -1865,9 +2111,20 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 // Don't treat internal breach notices as "narrated action".
                 const isInternalBreachNotice = textLower.trimStart().startsWith('mission breach:');
                 if (!isInternalBreachNotice && (this.currentMissionMode === 'execute' || this.currentMissionMode === 'chat') && isNarratingToolSuccess && !response.toolCall) {
-                    const correction = "ERROR: You narrated an action or provided a text placeholder (e.g. [Image:] or ![Preview](...)) but failed to provide a structured tool call. DO NOT narrate tool execution in text. You MUST use the available tools (e.g., generateImage, metaAds, browserAction) via the function schema to perform actions. Repeat the task now using a REAL tool call.";
+                    const latestUser = this._getLatestUserText();
+                    const correction = this._isMetaOrganicImageRequest(latestUser)
+                        ? "ERROR: For this Meta organic image request, do not narrate. First call generateImage to create the single-image creative. After the creative exists, prepare the organic Meta publish payload and wait for approval before any publish action. Respond ONLY with a valid tool call."
+                        : "ERROR: You narrated an action or provided a text placeholder (e.g. [Image:] or ![Preview](...)) but failed to provide a structured tool call. DO NOT narrate tool execution in text. You MUST use the available tools (e.g., generateImage, metaAds, browserAction) via the function schema to perform actions. Repeat the task now using a REAL tool call.";
                     this.onUpdate({ type: 'thought', message: `⚠️ **Detection:** Narrated action without tool call. Injecting correction...` });
                     this.context.push({ role: 'user', content: correction });
+                    continue;
+                }
+
+                const shouldForceBrowserContinuation = this._shouldForceBrowserContinuation(originalRequest);
+
+                if (shouldForceBrowserContinuation && this._isBrowserHesitationResponse(response.text || '')) {
+                    this.onUpdate({ type: 'thought', message: 'Browser mission hesitation detected. Nexus is forcing page-state continuation instead of stopping early.' });
+                    this.context.push({ role: 'user', content: 'SYSTEM CORRECTION: This is a browser mission. Do not stop because you lack inherent knowledge. Re-scan the page, read the visible UI, infer the next step, and continue autonomously. Only ask the Boss if OTP, captcha, payment approval, or truly private missing information is required.' });
                     continue;
                 }
 
@@ -1900,6 +2157,10 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 }
 
                 if (isAskingQuestion) {
+                    if (shouldForceBrowserContinuation && !/otp|captcha|mfa|verification code|payment|approve|approval|password/i.test(textLower)) {
+                        this.context.push({ role: 'user', content: 'SYSTEM CORRECTION: Do not pause this browser mission for a generic clarification. Continue with the page state, scan the page again if needed, and ask only if human-only input is truly mandatory.' });
+                        continue;
+                    }
                     const extractedQuestion = this._extractClarificationQuestion(response.text);
                     const clarificationDecision = this._shouldAskClarification(extractedQuestion || response.text);
                     if (extractedQuestion && clarificationDecision.allow) {
@@ -1920,6 +2181,14 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                         });
                         continue;
                     }
+                }
+
+                if (this._isWeakBrowserTextTurn(response, originalRequest)) {
+                    this.context.push({
+                        role: 'user',
+                        content: 'SYSTEM CORRECTION: This browser mission is already in execute mode. Do not restate a plan or wait conversationally. Inspect the current browser page state and issue the next real browserAction tool call now.'
+                    });
+                    continue;
                 }
 
                 if (textLower.length > 0) {
@@ -2059,6 +2328,45 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
         return toolCall;
     }
 
+    _extractToolCallFromNarration(text = '') {
+        const value = String(text || '');
+        if (!value) return null;
+
+        const openMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"]open['"]\s*,\s*url\s*=\s*['"]([^'"]+)['"]\s*\)/i);
+        if (openMatch) {
+            return { name: 'browserAction', args: { action: 'open', url: openMatch[1] } };
+        }
+
+        const clickMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"]click['"]\s*,\s*selector\s*=\s*['"]([^'"]+)['"]\s*\)/i);
+        if (clickMatch) {
+            return { name: 'browserAction', args: { action: 'click', selector: clickMatch[1] } };
+        }
+
+        const clickTextMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"]clickText['"]\s*,\s*text\s*=\s*['"]([^'"]+)['"]\s*\)/i);
+        if (clickTextMatch) {
+            return { name: 'browserAction', args: { action: 'clickText', text: clickTextMatch[1] } };
+        }
+
+        const waitForSelectorMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"]waitForSelector['"]\s*,\s*selector\s*=\s*['"]([^'"]+)['"]\s*\)/i);
+        if (waitForSelectorMatch) {
+            return { name: 'browserAction', args: { action: 'waitForSelector', selector: waitForSelectorMatch[1] } };
+        }
+
+        const extractTextMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"](extractActiveElements|getMarkdown|waitForNetworkIdle)['"](?:\s*,\s*timeout\s*=\s*(\d+))?\s*\)/i);
+        if (extractTextMatch) {
+            const args = { action: extractTextMatch[1] };
+            if (extractTextMatch[2]) args.timeout = Number(extractTextMatch[2]);
+            return { name: 'browserAction', args };
+        }
+
+        const clearAndTypeMatch = value.match(/browserAction\s*\(\s*action\s*=\s*['"]clearAndType['"]\s*,\s*selector\s*=\s*['"]([^'"]+)['"]\s*,\s*text\s*=\s*['"]([^'"]*)['"]\s*\)/i);
+        if (clearAndTypeMatch) {
+            return { name: 'browserAction', args: { action: 'clearAndType', selector: clearAndTypeMatch[1], text: clearAndTypeMatch[2] } };
+        }
+
+        return null;
+    }
+
     _isPlaceholderValue(value) {
         const v = String(value ?? '').trim().toLowerCase();
         if (!v) return false;
@@ -2076,11 +2384,22 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
         return /\b(banner|poster|flyer|thumbnail|creative|ad\s*creative)\b/.test(t) || /\b(generate|create)\b.*\b(image|banner|creative)\b/.test(t);
     }
 
+    _isMetaOrganicImageRequest(text = '') {
+        const t = String(text || '').toLowerCase();
+        return /\b(meta|facebook|instagram|organic)\b/.test(t) && /\b(image|banner|poster|creative|photo|ad)\b/.test(t);
+    }
+
     _getLatestUserText() {
         for (let i = this.context.length - 1; i >= 0; i--) {
             if (this.context[i]?.role === 'user') return String(this.context[i]?.content || '');
         }
         return '';
+    }
+
+    _extractFirstUrl(text = '') {
+        const value = String(text || '');
+        const match = value.match(/https?:\/\/[^\s<>"')]+/i);
+        return match ? match[0] : null;
     }
 
     _hasImageArtifact() {
@@ -2852,17 +3171,20 @@ ${toolSource}`
         const keys = this._detectMissingKeys(text);
         if (!keys.length) return false;
 
+        const scopeLabel = this.currentClientId ? 'current client' : 'Boss workspace';
+
         this.pendingRequirement = {
             requestedAt: new Date().toISOString(),
             toolCall,
-            keys
+            keys,
+            scope: this.currentClientId ? 'client' : 'boss'
         };
         const keyMessage = keys.length === 1
-            ? `Reply with the value for ${keys[0]} and Nexus will save it and continue.`
-            : `Reply using KEY=value lines for these settings: ${keys.join(', ')}. Nexus will save them and continue.`;
+            ? `Reply with the value for ${keys[0]} and Nexus will save it to the ${scopeLabel}, then continue.`
+            : `Reply using KEY=value or KEY: value lines for these settings: ${keys.join(', ')}. Nexus will save them to the ${scopeLabel}, then continue.`;
         this.onUpdate({
             type: 'input_requested',
-            message: `Mission is blocked by missing configuration for ${toolCall.name}: ${keys.join(', ')}.\n\n${keyMessage}`
+            message: `Mission is blocked by missing configuration for ${toolCall.name}: ${keys.join(', ')}.\n\nSave target: ${scopeLabel}.\n${keyMessage}`
         });
         return true;
     }
@@ -2873,13 +3195,18 @@ ${toolSource}`
         const docId = this.currentClientId || 'default';
         await db.collection(collection).doc(docId).set(values, { merge: true });
         require('./core/config').refresh();
+        return {
+            collection,
+            docId,
+            scopeLabel: this.currentClientId ? 'current client' : 'Boss workspace'
+        };
     }
 
     async _handleRequirementResponse(userInput) {
         const pending = this.pendingRequirement;
         const trimmed = String(userInput || '').trim();
         if (!trimmed) {
-            this.onUpdate({ type: 'input_requested', message: `Still waiting for ${pending.keys.join(', ')}.` });
+            this.onUpdate({ type: 'input_requested', message: `Still waiting for ${pending.keys.join(', ')}. I will save them to the ${pending.scope === 'client' ? 'current client' : 'Boss workspace'}.` });
             return;
         }
 
@@ -2918,10 +3245,10 @@ ${toolSource}`
         } else {
             const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
             for (const line of lines) {
-                const idx = line.indexOf('=');
-                if (idx > 0) {
-                    const key = line.slice(0, idx).trim();
-                    const value = line.slice(idx + 1).trim();
+                const separatorIndex = line.includes('=') ? line.indexOf('=') : line.indexOf(':');
+                if (separatorIndex > 0) {
+                    const key = line.slice(0, separatorIndex).trim();
+                    const value = line.slice(separatorIndex + 1).trim();
                     if (key && value) values[key] = value;
                 }
             }
@@ -2929,15 +3256,15 @@ ${toolSource}`
 
         const missingStill = pending.keys.filter((key) => !values[key]);
         if (missingStill.length) {
-            this.onUpdate({ type: 'input_requested', message: `I still need: ${missingStill.join(', ')}. Please reply with ${missingStill.length === 1 ? 'the value' : 'KEY=value lines'}.` });
+            this.onUpdate({ type: 'input_requested', message: `I still need: ${missingStill.join(', ')}. Please reply with ${missingStill.length === 1 ? 'the value' : 'KEY=value or KEY: value lines'}.` });
             return;
         }
 
-        await this._saveRequirementValues(values);
+        const saveMeta = await this._saveRequirementValues(values);
         this._recordAudit('requirement_saved', { keys: pending.keys, tool: pending.toolCall.name });
         this.context.push({ role: 'user', content: `Boss supplied required configuration for ${pending.keys.join(', ')}. Continue the current mission.` });
         this.pendingRequirement = null;
-        this.onUpdate({ type: 'thought', message: `Saved ${Object.keys(values).join(', ')} and resuming the mission.` });
+        this.onUpdate({ type: 'thought', message: `Saved ${Object.keys(values).join(', ')} to the ${saveMeta.scopeLabel} and resuming the mission.` });
         await this.resume('Required configuration has been saved. Continue the current mission without restarting it.');
     }
 
