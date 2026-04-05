@@ -23,7 +23,6 @@ function detectMissionMode(text, override = null) {
     const isBrowserAutomationIntent = hasUrl || (hasBrowserSurface && hasInteractiveIntent);
 
     if (isBrowserAutomationIntent) {
-        console.log(`[MissionMode] Browser automation detected. Using EXECUTE mode.`);
         return 'execute';
     }
 
@@ -31,7 +30,6 @@ function detectMissionMode(text, override = null) {
         const normalized = String(override).toLowerCase();
         // Never allow a "chat" override to suppress real execution when the Boss asked for work.
         if (normalized === 'chat' && (needsExecution || isBrowserAutomationIntent)) {
-            console.log(`[MissionMode] Ignoring CHAT override because execution is required.`);
             return 'execute';
         }
         if (normalized === 'plan' || normalized === 'discuss') return 'plan';
@@ -39,12 +37,10 @@ function detectMissionMode(text, override = null) {
     }
 
     if (isCasualChat && !needsExecution) {
-        console.log(`[MissionMode] Casual chat detected. Using CHAT mode.`);
         return 'chat';
     }
 
     if (needsClarifyingPlan) {
-        console.log(`[MissionMode] Ambiguous analysis/strategy request detected. Using PLAN mode.`);
         return 'plan';
     }
 

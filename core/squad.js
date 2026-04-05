@@ -16,12 +16,16 @@ class SquadSystem {
     constructor() {
         this.agents = {
             researcher: { role: "Researcher", tools: ["searchWeb", "browserAction"] },
-            writer: { role: "Writer", tools: ["writeFile", "readFile", "openRouterChat"] },
-            coder: { role: "Coder", tools: ["readFile", "writeFile", "replaceFileContent", "runCommand", "codeMap", "codeSearch", "worktree_tool"], is_privileged: true },
+            writer: { role: "Writer", tools: ["writeFile", "readFile", "askUserForInput"] },
+            coder: { role: "Coder", tools: ["readFile", "writeFile", "replaceFileContent", "multiReplaceFileContent", "runCommand", "codeMap", "codeSearch", "codeFindFn", "askUserForInput"], is_privileged: true },
             designer: { role: "Designer", tools: ["generateImage", "removeBg"] }
         };
         this.llmService = new LLMService();
         this.activeSwarm = new Map();
+    }
+
+    getAgentProfile(agentType) {
+        return this.agents[agentType] || null;
     }
 
     /**
@@ -41,7 +45,7 @@ class SquadSystem {
             else console.warn(`[Squad] Isolation failed, falling back to main worktree: ${isolationResult.error}`);
         }
 
-        const agent = this.agents[agentType];
+        const agent = this.getAgentProfile(agentType);
         if (!agent) return `Error: Agent type "${agentType}" not found.`;
 
         // [CLAUDE-FORKING-LOGIC] Clone parent context for the swarm
@@ -57,7 +61,10 @@ class SquadSystem {
 
         try {
             // Specialist agents run with their specific subset of tools
-            const response = await this.llmService.generateResponse(swarmMessages);
+            const response = await this.llmService.generateResponse(swarmMessages, {
+                mode: 'execute',
+                allowedTools: agent.tools
+            });
             return {
                 agent: agent.role,
                 taskId,

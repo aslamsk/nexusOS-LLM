@@ -112,23 +112,117 @@ class BrowserTool {
             return { url: null, title: null, readyState: 'no-page' };
         }
         try {
-            return await this.page.evaluate(() => ({
-                url: window.location.href,
-                title: document.title,
-                readyState: document.readyState,
-                bodyTextPreview: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300)
-            }));
+            return await this.page.evaluate(() => {
+                const bodyTextPreview = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+                const lower = bodyTextPreview.toLowerCase();
+                let blocker = null;
+                if (/captcha|recaptcha|i'?m not a robot/.test(lower)) blocker = 'captcha_detected';
+                else if (/otp|one[- ]time password|verification code|enter the code/.test(lower)) blocker = 'otp_required';
+                else if (/checkpoint|confirm your identity|suspicious login|review login/.test(lower)) blocker = 'checkpoint_detected';
+                else if (/two-factor|2-factor|2fa|authentication app/.test(lower)) blocker = 'mfa_required';
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    readyState: document.readyState,
+                    bodyTextPreview,
+                    blocker
+                };
+            });
         } catch (error) {
             return { url: null, title: null, readyState: `error: ${error.message}` };
         }
     }
 
-    async _clickElement(selector, timeout = 10000) {
-        await this.page.waitForSelector(selector, { visible: true, timeout });
-        const element = await this.page.$(selector);
-        if (!element) {
-            throw new Error(`Element not found for selector: ${selector}`);
+    _buildPageFingerprint(state = {}) {
+        return JSON.stringify({
+            url: state?.url || '',
+            title: state?.title || '',
+            preview: String(state?.bodyTextPreview || '').slice(0, 220)
+        });
+    }
+
+    _withTransition(beforeState, afterState, payload = {}) {
+        const beforeFingerprint = this._buildPageFingerprint(beforeState);
+        const afterFingerprint = this._buildPageFingerprint(afterState);
+        return {
+            ...payload,
+            transitionChanged: beforeFingerprint !== afterFingerprint,
+            pageBefore: beforeState,
+            page: afterState
+        };
+    }
+
+    _getAllFrames() {
+        if (!this.page || this.page.isClosed()) return [];
+        try {
+            return this.page.frames();
+        } catch (_) {
+            return [];
         }
+    }
+
+    async _findElementInShadow(frame, selector) {
+        try {
+            const handle = await frame.evaluateHandle((rawSelector) => {
+                const selectorText = String(rawSelector || '');
+                if (!selectorText || selectorText.startsWith('::-p-text(')) return null;
+
+                const queryDeep = (root) => {
+                    if (!root || typeof root.querySelector !== 'function') return null;
+                    const direct = root.querySelector(selectorText);
+                    if (direct) return direct;
+
+                    const nodes = root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [];
+                    for (const node of nodes) {
+                        if (node.shadowRoot) {
+                            const nested = queryDeep(node.shadowRoot);
+                            if (nested) return nested;
+                        }
+                    }
+                    return null;
+                };
+
+                return queryDeep(document);
+            }, selector);
+
+            const element = handle?.asElement ? handle.asElement() : null;
+            if (!element) {
+                try { await handle.dispose(); } catch (_) {}
+                return null;
+            }
+            return element;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    async _findElementAcrossFrames(selector, timeout = 10000) {
+        const frames = this._getAllFrames();
+        const deadline = Date.now() + timeout;
+        const normalizedSelector = this._normalizeSelector(selector);
+
+        while (Date.now() < deadline) {
+            for (const frame of frames) {
+                try {
+                    let handle = await frame.$(normalizedSelector);
+                    if (!handle) {
+                        handle = await this._findElementInShadow(frame, normalizedSelector);
+                    }
+                    if (handle) {
+                        const box = await handle.boundingBox();
+                        if (box || frame === this.page.mainFrame()) {
+                            return { frame, handle, selector: normalizedSelector };
+                        }
+                    }
+                } catch (_) {}
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        throw new Error(`Element not found for selector: ${selector}`);
+    }
+
+    async _clickElement(selector, timeout = 10000) {
+        const { frame, handle: element } = await this._findElementAcrossFrames(selector, timeout);
 
         await element.evaluate((el) => {
             el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
@@ -136,7 +230,8 @@ class BrowserTool {
 
         const box = await element.boundingBox();
         if (box) {
-            await this.page.mouse.click(box.x + (box.width / 2), box.y + (box.height / 2));
+            const targetPage = frame?.page ? await frame.page() : this.page;
+            await targetPage.mouse.click(box.x + (box.width / 2), box.y + (box.height / 2));
             await new Promise(r => setTimeout(r, 250));
         }
 
@@ -154,9 +249,9 @@ class BrowserTool {
     }
 
     async _setFieldValue(selector, text, timeout = 5000) {
-        await this.page.waitForSelector(selector, { visible: true, timeout });
-        await this.page.focus(selector);
-        await this.page.$eval(selector, (el, value) => {
+        const { frame, handle, selector: resolvedSelector } = await this._findElementAcrossFrames(selector, timeout);
+        await handle.focus();
+        await frame.$eval(resolvedSelector, (el, value) => {
             if ('value' in el) {
                 el.value = '';
                 el.focus();
@@ -164,12 +259,173 @@ class BrowserTool {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, text);
-        await this.page.type(selector, text, { delay: 25 });
-        await this.page.$eval(selector, (el) => {
+        await frame.type(resolvedSelector, text, { delay: 25 });
+        await frame.$eval(resolvedSelector, (el) => {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
             el.dispatchEvent(new Event('blur', { bubbles: true }));
         });
+    }
+
+    async _fillFieldByLabel(labelText, text, timeout = 8000) {
+        const deadline = Date.now() + timeout;
+        let result = null;
+        let resultFrame = null;
+
+        while (Date.now() < deadline && !result?.ok) {
+            for (const frame of this._getAllFrames()) {
+                try {
+                    const candidate = await frame.evaluate(async ({ labelText, value }) => {
+                        const normalize = (input) => String(input || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                        const wanted = normalize(labelText);
+                        const labels = Array.from(document.querySelectorAll('label'));
+                        let target = null;
+
+                        for (const label of labels) {
+                            const labelValue = normalize(label.innerText || label.textContent || '');
+                            if (!labelValue || !labelValue.includes(wanted)) continue;
+
+                            const forId = label.getAttribute('for');
+                            if (forId) {
+                                target = document.getElementById(forId);
+                            }
+                            if (!target) {
+                                target = label.querySelector('input, textarea, select');
+                            }
+                            if (!target) {
+                                const sibling = label.parentElement;
+                                if (sibling) target = sibling.querySelector('input, textarea, select');
+                            }
+                            if (target) break;
+                        }
+
+                        if (!target) {
+                            const candidates = Array.from(document.querySelectorAll('input, textarea, select'));
+                            target = candidates.find((el) => {
+                                const placeholder = normalize(el.getAttribute('placeholder'));
+                                const ariaLabel = normalize(el.getAttribute('aria-label'));
+                                const name = normalize(el.getAttribute('name'));
+                                return [placeholder, ariaLabel, name].some((entry) => entry && entry.includes(wanted));
+                            }) || null;
+                        }
+
+                        if (!target) return { ok: false, reason: 'label_not_found' };
+
+                        target.focus();
+                        if ('value' in target) target.value = '';
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                        target.dispatchEvent(new Event('change', { bubbles: true }));
+                        if ('value' in target) target.value = value;
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                        target.dispatchEvent(new Event('change', { bubbles: true }));
+                        target.dispatchEvent(new Event('blur', { bubbles: true }));
+
+                        if (!target.id) {
+                            target.id = `nexus-label-target-${Date.now()}`;
+                        }
+                        return { ok: true, selector: `#${target.id}` };
+                    }, { labelText, value: text });
+
+                    if (candidate?.ok) {
+                        result = candidate;
+                        resultFrame = frame;
+                        break;
+                    }
+                } catch (_) {}
+            }
+            if (!result?.ok) {
+                await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+        }
+
+        if (!result?.ok) {
+            throw new Error(`Unable to find field for label: ${labelText}`);
+        }
+
+        await resultFrame.waitForSelector(result.selector, { visible: true, timeout });
+        await resultFrame.focus(result.selector);
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('KeyA');
+        await this.page.keyboard.up('Control');
+        await this.page.keyboard.press('Backspace');
+        await resultFrame.type(result.selector, text, { delay: 25 });
+        await resultFrame.$eval(result.selector, (el) => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+        });
+
+        return result.selector;
+    }
+
+    async _dismissInterruptions() {
+        if (!this.page || this.page.isClosed()) {
+            return { ok: false, dismissed: 0, reason: 'no-page' };
+        }
+        try {
+            const result = await this.page.evaluate(() => {
+                const clicked = [];
+                const lowerText = (el) => ((el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase());
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+                };
+
+                const clickIfMatch = (elements, patterns) => {
+                    for (const el of elements) {
+                        if (!isVisible(el)) continue;
+                        const text = lowerText(el);
+                        if (!text) continue;
+                        if (patterns.some((pattern) => pattern.test(text))) {
+                            try {
+                                el.click();
+                                clicked.push(text.slice(0, 80));
+                            } catch (_) {}
+                        }
+                    }
+                };
+
+                const interactive = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
+                clickIfMatch(interactive, [
+                    /^(accept|accept all|allow all|i agree|agree|ok|okay)$/i,
+                    /^(close|dismiss|not now|no thanks|skip|cancel)$/i,
+                    /cookie/i,
+                    /continue without/i,
+                    /got it/i
+                ]);
+
+                const closeElements = Array.from(document.querySelectorAll('[aria-label], [title], .close, .modal-close, .popup-close, .cookie-close'));
+                for (const el of closeElements) {
+                    if (!isVisible(el)) continue;
+                    const label = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`.trim().toLowerCase();
+                    if (/close|dismiss|not now/.test(label)) {
+                        try {
+                            el.click();
+                            clicked.push(label.slice(0, 80));
+                        } catch (_) {}
+                    }
+                }
+
+                return { dismissed: clicked.length, clicked };
+            });
+
+            if ((result?.dismissed || 0) > 0) {
+                await new Promise((resolve) => setTimeout(resolve, 600));
+            }
+            return { ok: true, ...result, page: await this._describePageState() };
+        } catch (error) {
+            return { ok: false, dismissed: 0, error: error.message, page: await this._describePageState() };
+        }
+    }
+
+    async _waitForPageSettled(timeout = 2500) {
+        if (!this.page || this.page.isClosed()) return;
+        try {
+            await this.page.waitForNetworkIdle({ idleTime: 500, timeout });
+        } catch (_) {}
+        await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
     _normalizeSelector(selector) {
@@ -211,6 +467,8 @@ class BrowserTool {
             switch (action) {
                 case 'open':
                     if (!args.url) return 'Error: action=open requires url';
+                    {
+                        const beforeState = await this._describePageState();
                     // Use networkidle2 for SPA support, with a longer timeout
                     const navOptions = { waitUntil: 'networkidle2', timeout: 60000 };
                     try {
@@ -224,15 +482,31 @@ class BrowserTool {
                             return `Error: Navigation failed to ${args.url} after multiple attempts. ${loadError.message}`;
                         }
                     }
-                    return `Successfully opened ${args.url}. Page title: ${await this.page.title()}`;
+                    await this._dismissInterruptions();
+                    await this._waitForPageSettled(2500);
+                    const afterState = await this._describePageState();
+                    return JSON.stringify(this._withTransition(beforeState, afterState, {
+                        ok: true,
+                        action,
+                        url: args.url,
+                        title: afterState?.title || await this.page.title()
+                    }), null, 2);
+                    }
 
                 case 'click':
                     if (!args.selector) return 'Error: action=click requires selector';
                     {
+                        const beforeState = await this._describePageState();
                         const selector = this._normalizeSelector(args.selector);
                         await this._clickElement(selector, args.timeout || 10000);
+                        await this._waitForPageSettled();
+                        const afterState = await this._describePageState();
+                        return JSON.stringify(this._withTransition(beforeState, afterState, {
+                            ok: true,
+                            action,
+                            selector: args.selector
+                        }), null, 2);
                     }
-                    return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'type':
                     if (!args.selector || !args.text) return 'Error: action=type requires selector and text';
@@ -247,23 +521,53 @@ class BrowserTool {
                         const selector = this._normalizeSelector(args.selector);
                         await this._setFieldValue(selector, args.text, args.timeout || 5000);
                     }
+                    await this._waitForPageSettled(1200);
                     return JSON.stringify({ ok: true, action, selector: args.selector, typed: true, cleared: true, page: await this._describePageState() }, null, 2);
+
+                case 'fillByLabel':
+                    if (!args.label || !args.text) return 'Error: action=fillByLabel requires label and text';
+                    {
+                        const selector = await this._fillFieldByLabel(args.label, args.text, args.timeout || 8000);
+                        await this._waitForPageSettled(1200);
+                        return JSON.stringify({ ok: true, action, label: args.label, selector, typed: true, page: await this._describePageState() }, null, 2);
+                    }
 
                 case 'focus':
                     if (!args.selector) return 'Error: action=focus requires selector';
-                    await this.page.waitForSelector(args.selector, { timeout: 5000 });
-                    await this.page.focus(args.selector);
+                    {
+                        const { handle } = await this._findElementAcrossFrames(args.selector, args.timeout || 5000);
+                        await handle.focus();
+                    }
                     return JSON.stringify({ ok: true, action, selector: args.selector, page: await this._describePageState() }, null, 2);
 
                 case 'keyPress':
                     if (!args.key) return 'Error: action=keyPress requires key (e.g., "Enter")';
+                    {
+                        const beforeState = await this._describePageState();
                     await this.page.keyboard.press(args.key);
-                    return `Successfully pressed key: ${args.key}`;
+                    await this._waitForPageSettled();
+                    const afterState = await this._describePageState();
+                    return JSON.stringify(this._withTransition(beforeState, afterState, {
+                        ok: true,
+                        action,
+                        key: args.key
+                    }), null, 2);
+                    }
                 
                 case 'clickPixel':
                     if (args.x === undefined || args.y === undefined) return 'Error: action=clickPixel requires x and y';
+                    {
+                    const beforeState = await this._describePageState();
                     await this.page.mouse.click(args.x, args.y);
-                    return JSON.stringify({ ok: true, action, x: args.x, y: args.y, page: await this._describePageState() }, null, 2);
+                    await this._waitForPageSettled();
+                    const afterState = await this._describePageState();
+                    return JSON.stringify(this._withTransition(beforeState, afterState, {
+                        ok: true,
+                        action,
+                        x: args.x,
+                        y: args.y
+                    }), null, 2);
+                    }
 
                 case 'hover':
                     if (args.selector) {
@@ -303,8 +607,7 @@ class BrowserTool {
                 case 'waitForSelector':
                     if (!args.selector) return 'Error: action=waitForSelector requires selector';
                     try {
-                        const selector = this._normalizeSelector(args.selector);
-                        await this.page.waitForSelector(selector, { timeout: args.timeout || 10000 });
+                        await this._findElementAcrossFrames(args.selector, args.timeout || 10000);
                         return JSON.stringify({ ok: true, action, selector: args.selector, found: true, page: await this._describePageState() }, null, 2);
                     } catch (err) {
                         return JSON.stringify({ ok: false, action, selector: args.selector, found: false, classification: 'timeout', page: await this._describePageState(), error: err.message }, null, 2);
@@ -313,11 +616,18 @@ class BrowserTool {
                 case 'clickText':
                     if (!args.text) return 'Error: action=clickText requires text';
                     try {
+                        const beforeState = await this._describePageState();
                         // Use Puppeteer's built-in text selector which finds the deepest matching element
                         const safeText = String(args.text).replace(/[\\()]/g, '\\$&');
                         const selector = `::-p-text(${safeText})`;
                         await this._clickElement(selector, args.timeout || 10000);
-                        return JSON.stringify({ ok: true, action, text: args.text, page: await this._describePageState() }, null, 2);
+                        await this._waitForPageSettled();
+                        const afterState = await this._describePageState();
+                        return JSON.stringify(this._withTransition(beforeState, afterState, {
+                            ok: true,
+                            action,
+                            text: args.text
+                        }), null, 2);
                     } catch (err) {
                         return JSON.stringify({ ok: false, action, text: args.text, error: err.message, classification: 'interaction_failure', page: await this._describePageState() }, null, 2);
                     }
@@ -326,11 +636,17 @@ class BrowserTool {
                     if (!args.selector) return 'Error: action=extract requires selector';
                     let textContent = '';
                     {
-                        const selector = this._normalizeSelector(args.selector);
-                        await this.page.waitForSelector(selector, { timeout: 5000 });
-                        textContent = await this.page.$eval(selector, el => el.innerText || el.textContent || '');
+                        const { frame, selector } = await this._findElementAcrossFrames(args.selector, args.timeout || 5000);
+                        textContent = await frame.$eval(selector, el => el.innerText || el.textContent || '');
                     }
                     return JSON.stringify({ ok: true, action, selector: args.selector, text: textContent, page: await this._describePageState() }, null, 2);
+
+                case 'dismissInterruptions':
+                    return JSON.stringify({
+                        ok: true,
+                        action,
+                        ...(await this._dismissInterruptions())
+                    }, null, 2);
 
                 case 'getMarkdown':
                     // Returns a structured Markdown representation of the page for LLM clarity

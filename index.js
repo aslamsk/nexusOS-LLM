@@ -34,6 +34,28 @@ const AgencyQuotePlanner = require('./core/agencyQuotePlanner');
 const CommercialDocs = require('./core/commercialDocs');
 const { db } = require('./core/firebase');
 const ConfigService = require('./core/config');
+const DomainPolicy = require('./core/domainPolicy');
+const { isCapabilityQuestion, buildCapabilityResponse } = require('./core/capabilityResponses');
+const { buildTaskContract, buildTaskContractPrompt } = require('./core/taskContract');
+const BrowserMissionPolicy = require('./core/browserMissionPolicy');
+const MissionStatus = require('./core/missionStatus');
+const MissionGuards = require('./core/missionGuards');
+const MissionContinuity = require('./core/missionContinuity');
+const MissionMemory = require('./core/missionMemory');
+const ToolDispatchPolicy = require('./core/toolDispatchPolicy');
+const ToolArgumentHydrator = require('./core/toolArgumentHydrator');
+const ExternalActionPolicy = require('./core/externalActionPolicy');
+const GovernanceRuntime = require('./core/governanceRuntime');
+const SelfHealingRuntime = require('./core/selfHealingRuntime');
+const ToolExecutionRuntime = require('./core/toolExecutionRuntime');
+const QueryEngine = require('./core/queryEngine');
+const QueryTurnRuntime = require('./core/queryTurnRuntime');
+const TurnHandlers = require('./core/turnHandlers');
+const LoopFinalizer = require('./core/loopFinalizer');
+const MissionStateRuntime = require('./core/missionStateRuntime');
+const CreativePromptRuntime = require('./core/creativePromptRuntime');
+const RuntimeFailureRuntime = require('./core/runtimeFailureRuntime');
+const RequirementRuntime = require('./core/requirementRuntime');
 
 /**
  * Nexus OS Orchestrator
@@ -121,38 +143,18 @@ class NexusOrchestrator {
         this.isWaitingForInput = false;
         this.currentRun = null;
         this.recentRuns = [];
-        this.pendingApproval = null;
-        this.auditTrail = [];
-        this.pendingRepair = null;
-        this.recoveryHistory = [];
-        this.currentMarketingWorkflow = null;
-        this.pendingRequirement = null;
-        this.pendingClarification = null;
         this.currentSessionId = null;
         this.currentMissionMode = 'execute';
         this.manualMissionMode = null;
-        this.currentWorkflowState = null;
-        this.currentMissionArtifact = null;
-        this.missionArtifactHistory = [];
-        this.pendingActionChain = [];
-        this.lastPublishedTargets = [];
-        this.activeMissionDomain = 'general';
-        this.missionTaskStack = [];
         this.isStopped = false;
-        this.currentTaskContract = null;
+        Object.assign(this, MissionStateRuntime.buildDefaultMissionState());
     }
 
     /**
      * Stop the current execution loop immediately.
      */
     stop() {
-        this.isStopped = true;
-        this.isRunning = false;
-        this.isWaitingForInput = false;
-        this.pendingApproval = null;
-        this.pendingRepair = null;
-        this.pendingRequirement = null;
-        this.pendingClarification = null;
+        Object.assign(this, MissionStateRuntime.buildStopState());
         
         // Signal tools to stop
         if (this.llmService && typeof this.llmService.stop === 'function') {
@@ -169,6 +171,9 @@ class NexusOrchestrator {
      */
     reset() {
         this.stop();
+        Object.assign(this, MissionStateRuntime.buildResetState(this.systemPrompt));
+        this.onUpdate({ type: 'thought', message: "âœ¨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives." });
+        return;
         this.context = [{ role: 'system', content: this.systemPrompt }];
         this.currentClientId = null;
         this.currentMarketingWorkflow = null;
@@ -183,6 +188,7 @@ class NexusOrchestrator {
         this.currentTaskContract = null;
         this.pendingClarification = null;
         this.isStopped = false; // Prepare for next use
+        this.lastMissionStatusSignature = null;
         this.onUpdate({ type: 'thought', message: "✨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives." });
     }
 
@@ -216,9 +222,49 @@ class NexusOrchestrator {
         this.isRunning = true;
         this.isStopped = false;
         this.isWaitingForInput = false;
+        const preparedBootstrap = await QueryEngine.prepareMissionBootstrap(this, userRequest);
+        if (preparedBootstrap.handled) return;
+        const preparedRequest = preparedBootstrap.augmentedRequest;
+
+        if (await this._handleDirectMediaKickoff(preparedRequest)) {
+            this._finishRun('completed');
+            this.isRunning = false;
+            return;
+        }
+        if (await this._handleDirectOrganicMetaKickoff(preparedRequest)) {
+            if (!this.isWaitingForInput) {
+                this._finishRun('completed');
+            }
+            this.isRunning = false;
+            return;
+        }
+
+        try {
+            await this._runLoop(userRequest);
+
+            if (this.currentRun && !this.currentRun.finishedAt) {
+                this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
+            }
+        } catch (error) {
+            const handled = await this._handleUnhandledRuntimeError(error);
+            if (!handled) throw error;
+        } finally {
+            this.isRunning = false;
+        }
+        return;
+
         const isMissionFollowUp = this._isMissionFollowUpRequest(userRequest);
         const augmentedRequest = isMissionFollowUp ? this._augmentFollowUpRequest(userRequest) : userRequest;
         this._beginRun(augmentedRequest);
+
+        if (this._isCapabilityQuestion(augmentedRequest)) {
+            const reply = this._buildCapabilityResponse(augmentedRequest);
+            this.onUpdate({ type: 'complete', message: reply });
+            this.context = [{ role: 'system', content: this.systemPrompt }, { role: 'assistant', content: reply }];
+            this._finishRun('completed');
+            this.isRunning = false;
+            return;
+        }
 
         if (this._applyWorkflowIntent(augmentedRequest)) {
             this._beginRun(augmentedRequest);
@@ -228,6 +274,7 @@ class NexusOrchestrator {
         // This ensures the AI starts with a clean slate (System Prompt + New Request).
         this.context = [{ role: 'system', content: this.systemPrompt }];
         this.currentTaskContract = this._buildTaskContract(augmentedRequest);
+        this.activeMissionDomain = this.currentTaskContract?.routingProfile?.domain || 'general';
         if (this.currentTaskContract?.routingProfile) {
             const routing = this.currentTaskContract.routingProfile;
             const preferredTools = Array.isArray(routing.preferredTools) && routing.preferredTools.length
@@ -254,14 +301,23 @@ class NexusOrchestrator {
         }
 
         const isBrowserMission = this._isBrowserMissionRequest(augmentedRequest);
+        const primaryDomain = String(this.currentTaskContract?.routingProfile?.domain || 'general').toLowerCase();
+        const shouldRecallLongTermMemory = this._shouldRecallLongTermMemory(primaryDomain);
 
-        // Recall Long-Term Memories
-        const memories = isBrowserMission ? [] : await MemoryService.recallRecent(5);
-        const recoveryPatterns = isBrowserMission ? [] : await MemoryService.findRecoveryPatterns(augmentedRequest, 3);
-        const detectedMarketingWorkflow = isBrowserMission ? null : MarketingService.detectWorkflowFromText(augmentedRequest);
+        // Recall Long-Term Memories only when they are likely to improve reasoning.
+        const memories = shouldRecallLongTermMemory ? await MemoryService.recallRecent(5) : [];
+        const recoveryPatterns = shouldRecallLongTermMemory ? await MemoryService.findRecoveryPatterns(augmentedRequest, 3) : [];
+        const detectedMarketingWorkflow = (!isBrowserMission && this._shouldInjectMarketingWorkflow(primaryDomain))
+            ? MarketingService.detectWorkflowFromText(augmentedRequest)
+            : null;
         const detectedGoal = GoalInterpreter.interpretGoal(augmentedRequest);
         const detectedCommercialQuote = this._detectCommercialQuoteRequest(augmentedRequest);
         this.currentMissionMode = MissionMode.detectMissionMode(augmentedRequest, this.manualMissionMode);
+        this._emitMissionStatus('routing', 'Mission mode and domain locked for this request.', {
+            mode: this.currentMissionMode,
+            domain: this.activeMissionDomain,
+            request: augmentedRequest
+        });
         this.currentMarketingWorkflow = detectedMarketingWorkflow ? detectedMarketingWorkflow.id : null;
         let memoryPrompt = "";
         memoryPrompt += MissionMode.buildModePrompt(this.currentMissionMode);
@@ -319,9 +375,7 @@ ${JSON.stringify(quoteDefaults, null, 2)}
         // ELITE SOVEREIGNTY: Specialist Role Assumption
         // [RESILIENCE] Only auto-align specialists for non-browser missions to prevent "Proofreader" hijacking of automation.
         const skillSearchRequest = String(userRequest || '');
-        const shouldAutoLoadSkill =
-            /\b(audit|architecture|refactor|deep|advanced|complex|specialist|expert|strategy|seo|security)\b/i.test(skillSearchRequest) ||
-            skillSearchRequest.split(/\s+/).length >= 18;
+        const shouldAutoLoadSkill = this._shouldAutoLoadSpecialistSkill(skillSearchRequest, primaryDomain);
         const suggestedSkills = shouldAutoLoadSkill ? SkillReaderTool.findBestSkill(userRequest) : [];
         let expertRolePrompt = "";
 
@@ -345,6 +399,19 @@ ${playbook}\n\n`;
 
         // Push the fully enriched request into context so the LLM sees it
         this.context.push({ role: 'user', content: executionPrompt });
+
+        if (await this._handleDirectMediaKickoff(augmentedRequest)) {
+            this._finishRun('completed');
+            this.isRunning = false;
+            return;
+        }
+        if (await this._handleDirectOrganicMetaKickoff(augmentedRequest)) {
+            if (!this.isWaitingForInput) {
+                this._finishRun('completed');
+            }
+            this.isRunning = false;
+            return;
+        }
 
         try {
             // [RESILIENCE] Unified Mission Loop: Resume via the robust execution loop only.
@@ -794,273 +861,105 @@ ${playbook}\n\n`;
     }
 
     _isMissionFollowUpRequest(text = '') {
-        const value = String(text || '').trim().toLowerCase();
-        if (!value) return false;
-        const hasMemory = Boolean(
-            this.currentMissionArtifact?.id ||
-            this.lastPublishedTargets?.length ||
-            this.pendingActionChain?.length ||
-            this.missionTaskStack?.length ||
-            this.currentWorkflowState ||
-            this.currentRun?.toolsUsed?.browserAction
-        );
-        if (!hasMemory) return false;
-
-        if (['continue', 'proceed', 'resume', 'go on', 'next', 'carry on'].includes(value) && this._shouldForceBrowserContinuation()) {
-            return true;
-        }
-
-        const directFollowUp = /\b(this|that|same|current|latest|previous|above|it)\b/.test(value);
-        const mutateIntent = /\b(update|edit|modify|revise|change|delete|remove|send|share|publish|post|promote|continue|resume|reuse|adapt|repurpose|use)\b/.test(value);
-        const crossDomainIntent = /\bfacebook|instagram|meta|linkedin|x|twitter|google|whatsapp|email|quote|quotation|video|image|creative|caption|content|code|bug|feature\b/.test(value);
-        return (directFollowUp && mutateIntent) || (mutateIntent && crossDomainIntent);
+        return MissionContinuity.isMissionFollowUpRequest({
+            text,
+            currentMissionArtifact: this.currentMissionArtifact,
+            lastPublishedTargets: this.lastPublishedTargets,
+            pendingActionChain: this.pendingActionChain,
+            missionTaskStack: this.missionTaskStack,
+            currentWorkflowState: this.currentWorkflowState,
+            currentRun: this.currentRun,
+            shouldForceBrowserContinuation: this._shouldForceBrowserContinuation()
+        });
     }
 
     _augmentFollowUpRequest(text = '') {
-        const value = String(text || '').trim();
-        if (!value) return value;
-        const parts = [];
-        const artifact = this.currentMissionArtifact;
-        const latestTarget = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null;
-        const queued = Array.isArray(this.pendingActionChain) ? this.pendingActionChain[0] : null;
-
-        parts.push('[FOLLOW-UP MISSION CONTEXT]');
-        if (artifact) {
-            parts.push('Current artifact kind: ' + (artifact.kind || 'file'));
-            if (artifact.path) parts.push('Current artifact path: ' + artifact.path);
-            if (artifact.url) parts.push('Current artifact url: ' + artifact.url);
-            if (artifact.files?.pdf) parts.push('Current artifact pdf: ' + artifact.files.pdf);
-        }
-        if (latestTarget) {
-            const latestTargetUrl = latestTarget?.id && /^https?:/i.test(String(latestTarget.id)) ? latestTarget.id : (latestTarget?.details?.url || latestTarget?.details?.postUrl || null);
-            parts.push('Latest published target channel: ' + (latestTarget.channel || 'unknown'));
-            parts.push('Latest published target id: ' + (latestTarget.id || 'unknown'));
-            parts.push('Latest published target action: ' + (latestTarget.action || 'unknown'));
-            if (latestTargetUrl) parts.push('Latest published target url: ' + latestTargetUrl);
-        }
-        if (queued) {
-            parts.push('Queued next action: ' + queued.type + ' on ' + (queued.channel || 'general'));
-        }
-        parts.push('Interpret references like this, that, it, same, current, and latest against this mission context first.');
-        parts.push('If the Boss asks to delete or remove a published item, resolve against the latest published target first.');
-        parts.push('If the Boss asks to send or share a quote, reuse the latest quote bundle files first.');
-        parts.push('If the Boss asks to publish, promote, or adapt content, reuse the latest artifact first.');
-        parts.push('Boss request: ' + value);
-        return parts.join('\n');
+        return MissionContinuity.augmentFollowUpRequest({
+            text,
+            currentMissionArtifact: this.currentMissionArtifact,
+            lastPublishedTargets: this.lastPublishedTargets,
+            pendingActionChain: this.pendingActionChain
+        });
     }
 
     _buildMissionMemoryContext() {
-        const sections = [];
-        sections.push(`[MISSION DOMAIN]\nCurrent active domain: ${this.activeMissionDomain || 'general'}\nWhen the Boss jumps to another task, preserve the latest artifact/target memory and adapt instead of pretending the previous task never happened.\n`);
-        if (this.currentMissionArtifact?.path || this.currentMissionArtifact?.url) {
-            sections.push(`[MISSION ARTIFACT]\nCurrent artifact kind: ${this.currentMissionArtifact.kind || 'file'}\nCurrent artifact path: ${this.currentMissionArtifact.path || 'n/a'}\nCurrent artifact url: ${this.currentMissionArtifact.url || 'n/a'}\nSource tool: ${this.currentMissionArtifact.sourceTool || 'unknown'}\nIf the Boss says "use this", "promote this", "update this", "modify this", or "delete this", assume they mean this artifact first.\n`);
-        }
-        if (this.lastPublishedTargets?.length) {
-            const latest = this.lastPublishedTargets[0];
-            sections.push(`[PUBLISHED TARGET]\nLatest published channel: ${latest.channel || 'unknown'}\nLatest published id: ${latest.id || 'unknown'}\nTarget type: ${latest.type || 'published_output'}\nIf the Boss asks to update/delete/remove the published content, resolve it against this target first.\n`);
-        }
-        if (this.missionTaskStack?.length) {
-            const stackSummary = this.missionTaskStack.slice(0, 6)
-                .map((item, index) => `${index + 1}. ${item.domain} :: ${item.label}`)
-                .join('\n');
-            sections.push(`[RECENT TASK MEMORY]\n${stackSummary}\n`);
-        }
-        if (this.pendingActionChain?.length) {
-            const queueSummary = this.pendingActionChain
-                .map((item, index) => `${index + 1}. ${item.type} [${item.status}]`)
-                .join('\n');
-            sections.push(`[QUEUED NEXT ACTIONS]\n${queueSummary}\nAfter completing the current step, ask for approval before executing the next queued risky step.\n`);
-        }
-        return sections.length ? `${sections.join('\n')}` : '';
+        return MissionMemory.buildMissionMemoryContext({
+            activeMissionDomain: this.activeMissionDomain || 'general',
+            currentMissionArtifact: this.currentMissionArtifact,
+            lastPublishedTargets: this.lastPublishedTargets,
+            missionTaskStack: this.missionTaskStack,
+            pendingActionChain: this.pendingActionChain
+        });
     }
 
     _classifyMissionDomain(toolCall = {}) {
-        const name = String(toolCall?.name || '').toLowerCase();
-        const action = String(toolCall?.args?.action || '').toLowerCase();
-        if (name.includes('meta') || name.includes('googleads') || name.includes('linkedin') || name.includes('xads') || action.includes('campaign') || action.includes('publish')) return 'marketing';
-        if (name === 'generateimage' || name === 'generatevideo' || name === 'removebg') return 'media';
-        if (name === 'readfile' || name === 'writefile' || name === 'replacefilecontent' || name === 'multireplacefilecontent' || name === 'runcommand' || name === 'codemap' || name === 'codesearch' || name === 'codefindfn') return 'development';
-        if (name === 'createagencyquoteartifacts' || name === 'buildagencyquoteplan') return 'commercial';
-        if (name === 'sendemail' || name === 'reademail' || name === 'sendwhatsapp' || name === 'sendwhatsappmedia') return 'communications';
-        if (name === 'browseraction' || name === 'searchweb') return 'research';
-        return 'general';
+        return MissionMemory.classifyMissionDomain(toolCall);
     }
 
     _pushMissionTask(domain, label) {
-        this.missionTaskStack = Array.isArray(this.missionTaskStack) ? this.missionTaskStack : [];
-        this.missionTaskStack.unshift({
-            domain: domain || 'general',
-            label: String(label || 'Task').slice(0, 180),
-            at: new Date().toISOString()
+        const result = MissionMemory.pushMissionTask(this.missionTaskStack, this.activeMissionDomain, domain, label);
+        this.missionTaskStack = result.missionTaskStack;
+        this.activeMissionDomain = result.activeMissionDomain;
+    }
+
+    _emitMissionStatus(phase, detail = '', extra = {}) {
+        const status = MissionStatus.buildMissionStatusRecord(phase, detail, extra, {
+            mode: this.currentMissionMode || 'execute',
+            domain: this.activeMissionDomain || this.currentTaskContract?.routingProfile?.domain || 'general'
         });
-        this.missionTaskStack = this.missionTaskStack.slice(0, 12);
-        this.activeMissionDomain = domain || this.activeMissionDomain || 'general';
+        if (this.lastMissionStatusSignature === status.signature) return;
+        this.lastMissionStatusSignature = status.signature;
+
+        if (this.currentRun) {
+            this.currentRun.lastPhase = status.phase;
+            this.currentRun.lastStatusDetail = status.detail || null;
+            this.currentRun.waitingFor = status.waitingFor || null;
+            this.currentRun.mode = status.mode;
+            this.currentRun.domain = status.domain;
+        }
+        this.onUpdate({ type: 'thought', message: status.message });
     }
 
     _resolveLatestTargetId(channel = '') {
-        const normalized = String(channel || '').trim().toLowerCase();
-        const targets = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets : [];
-        const match = normalized ? targets.find((item) => String(item.channel || '').toLowerCase() === normalized) : targets[0];
-        return match?.id || null;
+        return MissionContinuity.resolveLatestTargetId(this.lastPublishedTargets, channel);
     }
 
     _registerMissionTarget(details = {}) {
-        const target = {
-            id: details.id || `target_${Date.now()}`,
-            channel: details.channel || details.domain || 'general',
-            type: details.type || 'external_target',
-            action: details.action || '',
-            status: details.status || 'completed',
-            details: details.details || null,
-            artifactId: details.artifactId || this.currentMissionArtifact?.id || null,
-            createdAt: new Date().toISOString()
-        };
-        this.lastPublishedTargets = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets : [];
-        this.lastPublishedTargets.unshift(target);
-        this.lastPublishedTargets = this.lastPublishedTargets.slice(0, 8);
-        return target;
+        const result = MissionContinuity.registerMissionTarget(this.lastPublishedTargets, details, this.currentMissionArtifact);
+        this.lastPublishedTargets = result.targets;
+        return result.target;
     }
     _createOutputUrlFromPath(filePath) {
-        const absolutePath = String(filePath || '').trim();
-        if (!absolutePath || !this.taskDir) return null;
-        const normalizedTaskDir = path.resolve(this.taskDir);
-        const normalizedPath = path.resolve(absolutePath);
-        if (!normalizedPath.startsWith(normalizedTaskDir)) return null;
-        const folderName = path.basename(this.taskDir);
-        const relativePath = path.relative(this.taskDir, normalizedPath).split(path.sep).map(encodeURIComponent).join('/');
-        return `/outputs/${folderName}/${relativePath}`;
+        return MissionContinuity.createOutputUrlFromPath(filePath, this.taskDir);
     }
 
     _registerMissionArtifact(details = {}) {
-        const artifact = {
-            id: `artifact_${Date.now()}`,
-            kind: details.kind || 'file',
-            path: details.path || null,
-            url: details.url || this._createOutputUrlFromPath(details.path),
-            files: details.files || null,
-            prompt: details.prompt || '',
-            sourceTool: details.sourceTool || '',
-            aspectRatio: details.aspectRatio || null,
-            createdAt: new Date().toISOString()
-        };
-        this.currentMissionArtifact = artifact;
-        this.missionArtifactHistory = Array.isArray(this.missionArtifactHistory) ? this.missionArtifactHistory : [];
-        this.missionArtifactHistory.unshift(artifact);
-        this.missionArtifactHistory = this.missionArtifactHistory.slice(0, 12);
-        if (artifact.path) this.lastUploadedFile = artifact.path;
-        return artifact;
+        const result = MissionContinuity.registerMissionArtifact({
+            currentMissionArtifact: this.currentMissionArtifact,
+            missionArtifactHistory: this.missionArtifactHistory,
+            lastUploadedFile: this.lastUploadedFile,
+            taskDir: this.taskDir,
+            details
+        });
+        this.currentMissionArtifact = result.artifact;
+        this.missionArtifactHistory = result.history;
+        this.lastUploadedFile = result.lastUploadedFile;
+        return result.artifact;
     }
 
     _captureToolOutcome(toolCall, result) {
-        const name = String(toolCall?.name || '');
-        const action = String(toolCall?.args?.action || '');
-        const text = this._formatToolResult(result);
-        const domain = this._classifyMissionDomain(toolCall);
-        this._pushMissionTask(domain, `${name}${action ? `:${action}` : ''}`);
-
-        if (name === 'generateImage' && /^Success:/i.test(text)) {
-            const savedPath = toolCall?.args?.savePath || text.match(/saved to\s+(.+)$/i)?.[1]?.trim();
-            if (savedPath) {
-                this._registerMissionArtifact({
-                    kind: 'image',
-                    path: savedPath,
-                    prompt: toolCall?.args?.prompt || '',
-                    sourceTool: 'generateImage',
-                    aspectRatio: toolCall?.args?.aspectRatio || null
-                });
-            }
-            if (this.pendingActionChain?.length && this.pendingActionChain[0]?.status === 'pending_confirmation') {
-                const nextAction = this.pendingActionChain[0];
-                nextAction.status = 'awaiting_boss';
-                this.isWaitingForInput = true;
-                this.onUpdate({
-                    type: 'input_requested',
-                    message: `Step 1 completed. The generated image is ready. Reply YES to continue to the next queued step (${nextAction.type}), or describe changes to revise the image first.`
-                });
-            }
-            return;
-        }
-
-        if (name === 'generateVideo' && /^SUCCESS:/i.test(text)) {
-            const outputPath = toolCall?.args?.outputPath || text.match(/at\s+(.+)$/i)?.[1]?.trim();
-            if (outputPath) {
-                this._registerMissionArtifact({ kind: 'video', path: outputPath, prompt: toolCall?.args?.prompt || '', sourceTool: 'generateVideo' });
-            }
-            return;
-        }
-
-        if ((name === 'writeFile' || name === 'replaceFileContent' || name === 'multiReplaceFileContent') && toolCall?.args?.absolutePath) {
-            this._registerMissionArtifact({ kind: 'code', path: toolCall.args.absolutePath, prompt: toolCall?.args?.replacementContent || '', sourceTool: name });
-            return;
-        }
-
-        if (name === 'createAgencyQuoteArtifacts' && result?.files) {
-            this._registerMissionArtifact({
-                kind: 'quote_bundle',
-                url: result.files.pdf || result.files.markdown || null,
-                path: null,
-                prompt: toolCall?.args?.scope || '',
-                sourceTool: name,
-                files: result.files
-            });
-            return;
-        }
-
-        if ((name === 'sendEmail' || name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') && !String(text).toLowerCase().startsWith('error')) {
-            this._registerMissionTarget({ channel: name === 'sendEmail' ? 'email' : 'whatsapp', domain, type: 'message_delivery', action: name, details: { preview: text.slice(0, 400), attachments: toolCall?.args?.attachments || [] } });
-            return;
-        }
-
-        if ((name === 'linkedinAds' && action === 'deletePost' && result && !result.error) || (name === 'linkedinDeletePost' && result && !result.error)) {
-            this._registerMissionTarget({
-                id: result?.id || toolCall?.args?.postId || this._resolveLatestTargetId('linkedin'),
-                channel: 'linkedin',
-                domain,
-                type: 'deleted_output',
-                action: action || name,
-                status: 'deleted',
-                details: result || null
-            });
-            return;
-        }
-
-        if ((name === 'xAds' && action === 'deletePost' && result && !result.error) || (name === 'xDeletePost' && result && !result.error)) {
-            this._registerMissionTarget({
-                id: toolCall?.args?.postUrl || result?.url || this._resolveLatestTargetId('x'),
-                channel: 'x',
-                domain,
-                type: 'deleted_output',
-                action: action || name,
-                status: 'deleted',
-                details: result || null
-            });
-            return;
-        }
-
-        if ((name === 'metaAds' && action.startsWith('publishOrganic') && result && !result.error) || (name === 'linkedinAds' && action === 'publishPost' && result && !result.error) || (name === 'xAds' && result && !result.error)) {
-            const publishedCopy = String(toolCall?.args?.text || toolCall?.args?.message || '').trim();
-            if (publishedCopy) {
-                this._registerMissionArtifact({
-                    kind: 'content',
-                    path: null,
-                    url: null,
-                    prompt: publishedCopy,
-                    sourceTool: `${name}${action ? `:${action}` : ''}`,
-                    files: toolCall?.args?.imagePath ? { imagePath: toolCall.args.imagePath } : null
-                });
-            }
-            this._registerMissionTarget({
-                id: result?.id || result?.post_id || result?.url || result?.surfaces?.facebook?.post_id || result?.surfaces?.facebook?.id || null,
-                channel: name === 'metaAds' ? 'meta' : name === 'linkedinAds' ? 'linkedin' : 'x',
-                domain,
-                type: 'published_output',
-                action: action || name,
-                details: result?.surfaces || result || null
-            });
-            if (this.pendingActionChain?.length && this.pendingActionChain[0]?.type === 'promote_generated_asset') {
-                this.pendingActionChain.shift();
-            }
-        }
+        MissionMemory.captureToolOutcome({
+            toolCall,
+            result,
+            formatToolResult: (value) => this._formatToolResult(value),
+            registerMissionArtifact: (details) => this._registerMissionArtifact(details),
+            registerMissionTarget: (details) => this._registerMissionTarget(details),
+            resolveLatestTargetId: (channel) => this._resolveLatestTargetId(channel),
+            pendingActionChain: this.pendingActionChain,
+            setWaitingForInput: (value) => { this.isWaitingForInput = value; },
+            onUpdate: (payload) => this.onUpdate(payload),
+            pushMissionTaskState: (domain, label) => this._pushMissionTask(domain, label)
+        });
     }
 
     async _handleQueuedActionContinuation(userInput) {
@@ -1116,95 +1015,35 @@ ${playbook}\n\n`;
     }
 
     _hasTaskDeliverableEvidence() {
-        const contract = this.currentTaskContract || {};
-        const deliverable = String(contract.expectedDeliverable || '').toLowerCase();
-        const artifact = this.currentMissionArtifact || null;
-        const latestTarget = Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null;
-
-        if (!deliverable || deliverable === 'direct answer or requested output') {
-            if (this._shouldForceBrowserContinuation()) {
-                return Boolean(this.currentRun?.toolsUsed?.browserAction);
-            }
-            return true;
-        }
-
-        if (deliverable.includes('quote')) {
-            return Boolean(artifact?.kind === 'quote_bundle' || artifact?.files?.pdf || artifact?.files?.markdown);
-        }
-        if (deliverable.includes('invoice')) {
-            return Boolean(artifact?.files?.pdf || /invoice/i.test(String(artifact?.kind || '')) || /invoice/i.test(String(artifact?.path || '')));
-        }
-        if (deliverable.includes('image asset')) {
-            return Boolean(artifact?.kind === 'image' || /\.(png|jpg|jpeg|webp)$/i.test(String(artifact?.path || '')));
-        }
-        if (deliverable.includes('video asset')) {
-            return Boolean(artifact?.kind === 'video' || /\.mp4$/i.test(String(artifact?.path || '')));
-        }
-        if (deliverable.includes('email')) {
-            return Boolean(latestTarget?.channel === 'email');
-        }
-        if (deliverable.includes('whatsapp message')) {
-            return Boolean(latestTarget?.channel === 'whatsapp');
-        }
-        if (deliverable.includes('analysis report')) {
-            return Boolean(artifact?.path || artifact?.url || this.currentRun?.toolCalls > 0);
-        }
-        if (deliverable.includes('verified fix')) {
-            return Boolean(artifact?.kind === 'code' || this.currentRun?.toolsUsed?.replaceFileContent || this.currentRun?.toolsUsed?.multiReplaceFileContent || this.currentRun?.toolsUsed?.writeFile);
-        }
-        if (deliverable.includes('code change')) {
-            return Boolean(artifact?.kind === 'code');
-        }
-
-        return true;
+        return MissionGuards.hasTaskDeliverableEvidence({
+            contract: this.currentTaskContract || {},
+            artifact: this.currentMissionArtifact || null,
+            latestTarget: Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null,
+            currentRun: this.currentRun || {},
+            shouldForceBrowserContinuation: this._shouldForceBrowserContinuation()
+        });
     }
 
     _canDeclareTaskComplete(responseText = '') {
-        const text = String(responseText || '').toLowerCase();
-        const mentionsCompletion =
-            /\b(task complete|mission complete|completed|done|finished|all set|that's all)\b/i.test(text) &&
-            !/\bnot (done|finished|complete)\b/i.test(text);
-
-        if (!mentionsCompletion) return false;
-        if (!this._hasTaskDeliverableEvidence()) return false;
-        return true;
+        return MissionGuards.canDeclareTaskComplete(responseText, {
+            contract: this.currentTaskContract || {},
+            artifact: this.currentMissionArtifact || null,
+            latestTarget: Array.isArray(this.lastPublishedTargets) ? this.lastPublishedTargets[0] : null,
+            currentRun: this.currentRun || {},
+            shouldForceBrowserContinuation: this._shouldForceBrowserContinuation()
+        });
     }
 
     _normalizeClarificationQuestion(question = '') {
-        return String(question || '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
+        return MissionGuards.normalizeClarificationQuestion(question);
     }
 
     _extractClarificationQuestion(responseText = '') {
-        const text = String(responseText || '').trim();
-        if (!text) return null;
-        const candidates = text
-            .split(/\n+/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .filter((line) =>
-                /\?$/.test(line) ||
-                /please provide|i need your|should i proceed|waiting for your|your confirmation|tell me/i.test(line)
-            );
-
-        if (!candidates.length) return null;
-
-        const best = candidates.find((line) => /\?$/.test(line)) || candidates[0];
-        if (best.length > 220) return null;
-        return best;
+        return MissionGuards.extractClarificationQuestion(responseText);
     }
 
     _shouldAskClarification(question = '') {
-        const normalized = this._normalizeClarificationQuestion(question);
-        if (!normalized) return { allow: false, reason: 'empty' };
-
-        if (this.pendingClarification?.normalized === normalized) {
-            return { allow: false, reason: 'duplicate' };
-        }
-
-        return { allow: true, reason: 'new' };
+        return MissionGuards.shouldAskClarification(question, this.pendingClarification);
     }
 
     _getActiveMediaPath(args = {}) {
@@ -1256,6 +1095,116 @@ ${playbook}\n\n`;
         const hasScopedWork = /\b(meta ads?|google ads?|linkedin ads?|banner pack|creative set|management retainer|deliverables?)\b/.test(value);
         
         return hasCommercialIntent && hasScopedWork;
+    }
+
+    _shouldDirectMediaKickoff(text = '') {
+        const value = String(text || '').toLowerCase();
+        const domain = String(this.currentTaskContract?.routingProfile?.domain || this.activeMissionDomain || '').toLowerCase();
+        if (!['image', 'video', 'media'].includes(domain)) return false;
+        if (!/\b(create|generate|make|design|produce)\b/.test(value)) return false;
+        return /\b(image|banner|poster|creative|thumbnail|logo|video|reel|promo)\b/.test(value);
+    }
+
+    async _handleDirectMediaKickoff(userRequest) {
+        if (!this._shouldDirectMediaKickoff(userRequest)) return false;
+        const domain = String(this.currentTaskContract?.routingProfile?.domain || this.activeMissionDomain || '').toLowerCase();
+        const toolName = domain === 'video' ? 'generateVideo' : 'generateImage';
+        const enrichedPrompt = CreativePromptRuntime.enrichCreativePrompt(
+            toolName === 'generateVideo' ? 'video' : 'image',
+            String(userRequest || '').trim()
+        );
+        const args = toolName === 'generateVideo'
+            ? { prompt: enrichedPrompt }
+            : { prompt: enrichedPrompt, aspectRatio: '1:1' };
+
+        const toolCall = { name: toolName, args };
+        this.onUpdate({
+            type: 'thought',
+            message: `Direct media kickoff engaged. Nexus is starting with ${toolName} immediately for the requested asset.`
+        });
+        this.context.push({ role: 'assistant', content: '', toolCall });
+        this.onUpdate({ type: 'action', name: toolCall.name, args: toolCall.args });
+        const result = await this.dispatchTool(toolCall);
+        this._captureToolOutcome(toolCall, result);
+        this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
+        this.context.push({ role: 'tool', name: toolCall.name, content: result });
+        return true;
+    }
+
+    async _handleDirectOrganicMetaKickoff(userRequest) {
+        const requestText = String(userRequest || '').trim();
+        if (!requestText) return false;
+        if (this._isResearchBeforePromotionRequest(requestText)) return false;
+        const domain = String(this.currentTaskContract?.routingProfile?.domain || this.activeMissionDomain || '').toLowerCase();
+        const organicIntentHint = /\b(promote?|promot|publish|post)\b/i.test(requestText) && /\b(meta|metaads|facebook|instagram|organic)\b/i.test(requestText);
+        const looksOrganicMeta = (domain.includes('marketing')) && (this._isOrganicPublishIntent(requestText) || organicIntentHint);
+        if (!looksOrganicMeta) return false;
+
+        const manualDraft = this._extractManualProductPromotionDraft(requestText);
+        if (manualDraft) {
+            this.currentOrganicMetaDraft = manualDraft;
+        }
+
+        const pageId = await ConfigService.get('META_PAGE_ID');
+        const rawToolCall = {
+            name: 'metaAds',
+            args: {
+                action: 'publishOrganicPost',
+                pageId: pageId || null
+            }
+        };
+        const toolCall = this._hydrateToolCall(rawToolCall);
+        const missingPublishFields = this._validateMetaOrganicArgs(toolCall.args);
+
+        this.onUpdate({
+            type: 'thought',
+            message: 'Direct organic Meta kickoff engaged. Nexus is preparing the organic post payload for this request.'
+        });
+
+        if (missingPublishFields) {
+            this.pendingClarification = {
+                question: missingPublishFields,
+                normalized: this._normalizeClarificationQuestion(missingPublishFields),
+                requestedAt: new Date().toISOString()
+            };
+            this.onUpdate({ type: 'input_requested', message: missingPublishFields });
+            this.isWaitingForInput = true;
+            return true;
+        }
+
+        const preview = [
+            'Organic Meta post payload prepared.',
+            `Message: ${toolCall.args.message || 'n/a'}`,
+            `Link: ${toolCall.args.link || 'n/a'}`,
+            `Channels: ${(toolCall.args.channels || []).join(', ') || 'facebook'}`,
+            `Image: ${toolCall.args.imagePath || this.currentOrganicMetaDraft?.imageUrl || 'none'}`
+        ].join('\n');
+
+        this.pendingApproval = {
+            requestedAt: new Date().toISOString(),
+            toolCall: {
+                name: 'metaAds',
+                args: {
+                    ...toolCall.args,
+                    boss_approved: false
+                }
+            },
+            reason: 'This action will publish the prepared organic Meta post.',
+            preview,
+            details: {
+                type: 'meta_organic_post',
+                pageId: toolCall.args.pageId,
+                messagePreview: String(toolCall.args.message || '').slice(0, 400),
+                link: toolCall.args.link || null,
+                requestedMode: this.currentMissionMode
+            }
+        };
+        this.onUpdate({
+            type: 'approval_requested',
+            message: `Prepared organic Meta post is ready. Reply YES to publish it now or NO to cancel.\n\n${preview}`
+        });
+        this.isWaitingForInput = true;
+        return true;
     }
 
     _buildExecutionProtocol(userRequest) {
@@ -1339,191 +1288,36 @@ ${playbook}\n\n`;
     }
 
     _buildTaskContract(userRequest = '') {
-        const value = String(userRequest || '').trim();
-        const lower = value.toLowerCase();
-        const deliverableHints = [];
-        if (/\bquote|quotation|estimate|proposal\b/.test(lower)) deliverableHints.push('quote');
-        if (/\binvoice\b/.test(lower)) deliverableHints.push('invoice');
-        if (/\bemail\b/.test(lower)) deliverableHints.push('email');
-        if (/\bwhatsapp\b/.test(lower)) deliverableHints.push('whatsapp message');
-        if (/\bimage|banner|poster|creative|thumbnail|logo\b/.test(lower)) deliverableHints.push('image asset');
-        if (/\bvideo|reel\b/.test(lower)) deliverableHints.push('video asset');
-        if (/\baudit|analyze|analysis|review|check\b/.test(lower)) deliverableHints.push('analysis report');
-        if (/\bfix|debug\b/.test(lower)) deliverableHints.push('verified fix');
-        if (/\bcode|file|function\b/.test(lower)) deliverableHints.push('code change');
-
-        const sideQuestGuard = [];
-        if (!/\bsearch|research|browse|find online|google\b/.test(lower)) {
-            sideQuestGuard.push('Do not browse or research unless the Boss asked for it.');
-        }
-        if (!/\bskill|sop|playbook|expert|architecture|complex|advanced\b/.test(lower)) {
-            sideQuestGuard.push('Do not load specialist skills unless the task is clearly complex and relevant.');
-        }
-        if (!/\bpublish|post|send|share|email|whatsapp|meta|linkedin|x|twitter|google ads?\b/.test(lower)) {
-            sideQuestGuard.push('Do not perform outbound, public, or paid actions unless explicitly requested.');
-        }
-
-        const routingProfile = this._deriveTaskRoutingProfile(lower);
-
-        return {
-            objective: value || 'Complete the current user request.',
-            expectedDeliverable: deliverableHints.length ? deliverableHints.join(', ') : 'direct answer or requested output',
-            successTest: 'The final output must match the user request and be supported by real tool output when tools are used.',
-            sideQuestGuard,
-            routingProfile
-        };
+        return buildTaskContract(userRequest, (lower) => this._deriveTaskRoutingProfile(lower));
     }
 
     _deriveTaskRoutingProfile(lower = '') {
-        const isBrowserTask = /\b(open|browser|website|site|page|url|portal|login|navigate|click|fill|form|submit|quiz|question)\b/.test(lower);
-        const isCodeTask = /\b(code|bug|fix|debug|file|function|repo|project|server|frontend|backend|test)\b/.test(lower);
-        const isCommercialTask = /\b(quote|quotation|proposal|invoice|pricing|estimate)\b/.test(lower);
-        const isMarketingTask = /\b(marketing|audit|seo|campaign|ad|social|competitor|landing page|organic|facebook|instagram|meta)\b/.test(lower);
-        const isImageTask = /\b(image|banner|poster|creative|thumbnail|logo|flyer|brochure)\b/.test(lower);
-        const isVideoTask = /\b(video|reel|shorts|animation|promo video|promo reel)\b/.test(lower);
-        const isOutboundTask = /\b(email|whatsapp|send|share|reply|message)\b/.test(lower);
-        const wantsResearch = /\b(search|research|browse|find online|look up|google)\b/.test(lower);
-
-        if (isBrowserTask) {
-            return {
-                domain: 'browser',
-                preferredTools: ['browserAction', 'searchWeb', 'askUserForInput'],
-                allowedTools: ['browserAction', 'searchWeb', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['generateImage', 'generateVideo', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        if (isCodeTask) {
-            return {
-                domain: 'code',
-                preferredTools: ['readFile', 'listDir', 'codeMap', 'codeSearch', 'codeFindFn', 'replaceFileContent', 'multiReplaceFileContent', 'runCommand'],
-                allowedTools: ['readFile', 'writeFile', 'listDir', 'replaceFileContent', 'multiReplaceFileContent', 'runSed', 'runCommand', 'checkBackgroundTask', 'codeMap', 'codeSearch', 'codeFindFn', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['metaAds', 'googleAds', 'linkedinAds', 'xAds', 'sendEmail', 'sendWhatsApp', 'browserAction']
-            };
-        }
-
-        if (isCommercialTask) {
-            return {
-                domain: 'commercial',
-                preferredTools: ['buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'askUserForInput'],
-                allowedTools: ['buildAgencyQuotePlan', 'createAgencyQuoteArtifacts', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'generateImage', 'generateVideo']
-            };
-        }
-
-        if (isOutboundTask) {
-            return {
-                domain: 'outbound',
-                preferredTools: ['sendEmail', 'sendWhatsApp', 'askUserForInput'],
-                allowedTools: ['sendEmail', 'sendWhatsApp', 'sendWhatsAppMedia', 'readEmail', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds']
-            };
-        }
-
-        const isMetaOrganicTask = /\b(organic|facebook|instagram|meta)\b/.test(lower) && /\b(post|publish|promote|ad|creative|image|banner|photo)\b/.test(lower);
-
-        if (isMarketingTask && isMetaOrganicTask) {
-            return {
-                domain: 'marketing',
-                preferredTools: ['generateImage', 'metaAds', 'askUserForInput'],
-                allowedTools: ['generateImage', 'metaAds', 'analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        if (isImageTask && !isVideoTask) {
-            return {
-                domain: 'image',
-                preferredTools: ['generateImage', 'removeBg', 'askUserForInput'],
-                allowedTools: ['generateImage', 'removeBg', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'generateVideo', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        if (isVideoTask && !isImageTask) {
-            return {
-                domain: 'video',
-                preferredTools: ['generateVideo', 'askUserForInput'],
-                allowedTools: ['generateVideo', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'generateImage', 'removeBg', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        if (isImageTask && isVideoTask) {
-            return {
-                domain: 'media',
-                preferredTools: ['generateImage', 'generateVideo', 'removeBg', 'askUserForInput'],
-                allowedTools: ['generateImage', 'generateVideo', 'removeBg', 'askUserForInput', 'saveMemory', 'searchMemory'],
-                blockedTools: ['browserAction', 'metaAds', 'googleAds', 'linkedinAds', 'xAds', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        if (isMarketingTask) {
-            const allowedTools = ['analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', 'askUserForInput', 'saveMemory', 'searchMemory'];
-            if (isMetaOrganicTask) {
-                allowedTools.push('generateImage', 'metaAds');
-            }
-            if (wantsResearch) allowedTools.push('searchWeb');
-            return {
-                domain: 'marketing',
-                preferredTools: isMetaOrganicTask
-                    ? ['generateImage', 'metaAds', 'askUserForInput']
-                    : ['analyzeMarketingPage', 'scanCompetitors', 'generateSocialCalendar', wantsResearch ? 'searchWeb' : 'askUserForInput'].filter(Boolean),
-                allowedTools,
-                blockedTools: ['browserAction', 'buildAgencyQuotePlan', 'createAgencyQuoteArtifacts']
-            };
-        }
-
-        return {
-            domain: 'general',
-            preferredTools: ['askUserForInput', 'searchWeb'],
-            allowedTools: null,
-            blockedTools: []
-        };
+        return DomainPolicy.deriveTaskRoutingProfile(lower);
     }
 
     _buildTaskContractPrompt() {
-        const contract = this.currentTaskContract;
-        if (!contract) return '';
-        const guardLines = contract.sideQuestGuard?.length
-            ? contract.sideQuestGuard.map((item) => `- ${item}`).join('\n')
-            : '- Avoid irrelevant side quests.';
-        const routing = contract.routingProfile || {};
-        const preferred = Array.isArray(routing.preferredTools) && routing.preferredTools.length ? routing.preferredTools.join(', ') : 'Use the most relevant tools only.';
-        const blocked = Array.isArray(routing.blockedTools) && routing.blockedTools.length ? routing.blockedTools.join(', ') : 'None';
-        return `### TASK CONTRACT\nRequested outcome: ${contract.objective}\nExpected deliverable: ${contract.expectedDeliverable}\nSuccess test: ${contract.successTest}\nPrimary domain: ${routing.domain || 'general'}\nPreferred tools: ${preferred}\nAvoid these tools unless the Boss clearly changes the task: ${blocked}\nSide-quest guardrails:\n${guardLines}\nIf your next step does not directly advance this contract, do not do it.\n\n`;
+        return buildTaskContractPrompt(this.currentTaskContract);
+    }
+
+    _shouldRecallLongTermMemory(domain = '') {
+        return DomainPolicy.shouldRecallLongTermMemory(domain);
+    }
+
+    _shouldInjectMarketingWorkflow(domain = '') {
+        return DomainPolicy.shouldInjectMarketingWorkflow(domain);
+    }
+
+    _shouldAutoLoadSpecialistSkill(request = '', domain = '') {
+        return DomainPolicy.shouldAutoLoadSpecialistSkill(request, domain);
     }
 
     _isToolRelevantToTask(toolCall = {}) {
-        const name = String(toolCall?.name || '').toLowerCase();
-        const argsText = JSON.stringify(toolCall?.args || {}).toLowerCase();
         const request = String(this.currentTaskContract?.objective || this._getLatestUserText() || '').toLowerCase();
-        if (!request) return true;
-        const routingProfile = this.currentTaskContract?.routingProfile || {};
-        const allowedTools = Array.isArray(routingProfile.allowedTools) ? routingProfile.allowedTools.map((item) => String(item || '').toLowerCase()) : null;
-        const blockedTools = Array.isArray(routingProfile.blockedTools) ? routingProfile.blockedTools.map((item) => String(item || '').toLowerCase()) : [];
-
-        if (blockedTools.includes(name)) return false;
-        if (allowedTools && allowedTools.length && !allowedTools.includes(name)) return false;
-
-        const mentions = (...patterns) => patterns.some((pattern) => pattern.test(request));
-        const isCodeTask = mentions(/\bcode|bug|fix|debug|file|function|repo|project\b/);
-        const isMarketingTask = mentions(/\bmarketing|audit|seo|landing page|campaign|ad|social|competitor\b/);
-        const isCommercialTask = mentions(/\bquote|quotation|proposal|invoice|pricing|estimate\b/);
-        const isMediaTask = mentions(/\bimage|banner|poster|creative|thumbnail|logo|video|reel\b/);
-        const isOutboundTask = mentions(/\bemail|whatsapp|send|share\b/);
-        const asksForResearch = mentions(/\bsearch|research|browse|find|look up|google\b/);
-
-        if (['sendemail', 'sendwhatsapp', 'sendwhatsappmedia'].includes(name) && !isOutboundTask) return false;
-        if (['buildagencyquoteplan', 'createagencyquoteartifacts'].includes(name) && !isCommercialTask) return false;
-        if (['generateimage', 'generatevideo', 'removebg'].includes(name) && !isMediaTask) return false;
-        if (['readfile', 'writefile', 'replacefilecontent', 'multireplacefilecontent', 'runcommand', 'codemap', 'codesearch', 'codefindfn'].includes(name) && !isCodeTask) return false;
-        if (['analyzemarketingpage', 'scancompetitors', 'generatesocialcalendar', 'metaads', 'googleads', 'linkedinads', 'xads'].includes(name) && !(isMarketingTask || isOutboundTask || isCommercialTask)) return false;
-        if (name === 'searchweb' && !asksForResearch && !(isMarketingTask && /competitor|benchmark|trend/.test(request))) return false;
-        if ((name === 'readagenticskill' || name === 'findagenticskill') && !mentions(/\bcomplex|architecture|deep|advanced|audit|specialist|expert\b/)) return false;
-        if (name === 'browseraction' && !mentions(/\bbrowser|website|site|page|url|portal|login|open|navigate|click|form\b/) && !/https?:/.test(argsText)) return false;
-
-        return true;
+        return DomainPolicy.isToolRelevantToTask({
+            toolCall,
+            request,
+            routingProfile: this.currentTaskContract?.routingProfile || {}
+        });
     }
 
     async _createAgencyQuoteArtifacts(args = {}) {
@@ -1626,6 +1420,14 @@ ${playbook}\n\n`;
         return true;
     }
 
+    _isCapabilityQuestion(text = '') {
+        return isCapabilityQuestion(text);
+    }
+
+    _buildCapabilityResponse(userRequest = '') {
+        return buildCapabilityResponse(userRequest);
+    }
+
     async _toPublicMediaUrl(mediaPath) {
         if (!mediaPath) return null;
         if (/^https?:\/\//i.test(mediaPath)) return mediaPath;
@@ -1649,15 +1451,16 @@ ${playbook}\n\n`;
     }
 
     _isBrowserMissionRequest(text = '') {
-        const value = String(text || '').toLowerCase();
-        return /\b(open|browser|url|http|click|navigate|fill|form|submit|quiz|question|option|login|portal|website)\b/.test(value);
+        return BrowserMissionPolicy.isBrowserMissionRequest(text);
     }
 
     _shouldForceBrowserContinuation(originalRequest = '') {
-        const latestUser = this._getLatestUserText ? this._getLatestUserText() : '';
-        const contractObjective = String(this.currentTaskContract?.objective || '').toLowerCase();
-        const request = String(originalRequest || contractObjective || latestUser || '').toLowerCase();
-        return this._isBrowserMissionRequest(request) || Boolean(this.currentRun?.toolsUsed?.browserAction);
+        return BrowserMissionPolicy.shouldForceBrowserContinuation({
+            originalRequest,
+            contractObjective: this.currentTaskContract?.objective || '',
+            latestUser: this._getLatestUserText ? this._getLatestUserText() : '',
+            browserToolUsed: Boolean(this.currentRun?.toolsUsed?.browserAction)
+        });
     }
 
     _getLlmOptionsForCurrentMission(overrides = {}) {
@@ -1666,7 +1469,14 @@ ${playbook}\n\n`;
             mode: this.currentMissionMode,
             sessionId: this.currentSessionId,
             onStatus: (message) => {
-                if (message) this.onUpdate({ type: 'thought', message: `LLM Status: ${message}` });
+                if (message) {
+                    this.onUpdate({ type: 'thought', message: `LLM Status: ${message}` });
+                    this._emitMissionStatus('llm_wait', message, {
+                        mode: this.currentMissionMode,
+                        domain: this.activeMissionDomain,
+                        waitingFor: 'llm_response'
+                    });
+                }
             },
             ...overrides
         };
@@ -1702,7 +1512,12 @@ ${playbook}\n\n`;
         this.onUpdate({ type: 'result', message: this._formatToolResult(result) });
         this.context.push({ role: 'assistant', content: '', toolCall });
 
-        const pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+                    let pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+                    if (String(pageContent).toLowerCase().includes('error')) {
+                        await this.tools.browserAction({ action: 'waitForNetworkIdle', timeout: 3000 });
+                        const fallbackScan = await this.tools.browserAction({ action: 'extractActiveElements' });
+                        pageContent = `[getMarkdown failed, using fallback active-element scan]` + "`n" + fallbackScan;
+                    }
         result = `${this._formatToolResult(result)}\n\n[PROACTIVE PAGE SCAN]:\n${pageContent}`;
         this.context.push({ role: 'tool', name: toolCall.name, content: result });
         this.onUpdate({ type: 'thought', message: `🔍 Auto-Sync: Page opened. Performing background 'getMarkdown' for immediate context...` });
@@ -1711,30 +1526,41 @@ ${playbook}\n\n`;
     }
 
     _isBrowserHesitationResponse(text = '') {
-        const value = String(text || '').toLowerCase();
-        return (
-            value.includes('do not have the inherent knowledge') ||
-            value.includes('i do not have the inherent knowledge') ||
-            value.includes('need your instructions on how to determine') ||
-            value.includes('cannot determine the correct answers') ||
-            value.includes('please provide the correct answers') ||
-            value.includes('i will need your instructions')
-        );
+        return BrowserMissionPolicy.isBrowserHesitationResponse(text);
+    }
+
+    _containsNarratedToolSuccess(text = '') {
+        const value = String(text || '');
+        const lower = value.toLowerCase();
+        const containsMarkdownMedia = /!\[[^\]]*\]\(([^)]+)\)/i.test(value);
+        const containsPlaceholderMedia = /\[(image|video|preview|file|audio|attachment):?/i.test(lower);
+        const containsGeneratedFileMention = /\b[\w-]+\.(png|jpg|jpeg|webp|mp4|mov|pdf|csv|md)\b/i.test(value);
+        const containsSavedArtifactNarration = /\b(saved to|attached|here is the (image|video|file|quote)|file is ready|quote is ready)\b/i.test(lower);
+        const containsToolCodeBlock = /<\s*tool_code\s*>/i.test(value) || /"tool_code"\s*:/i.test(value) || /```(?:python|json|javascript)?[\s\S]*?\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp|buildAgencyQuotePlan|createAgencyQuoteArtifacts|readFile|replaceFileContent|runCommand)\s*\(/i.test(value);
+        const containsPythonToolNarration = /\bnexus_os\.(generateimage|generatevideo|metaads|browseraction|sendemail|sendwhatsapp)\b/i.test(value) || /\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp|buildAgencyQuotePlan|createAgencyQuoteArtifacts)\s*\(/i.test(value);
+        const containsSuccessNarration = /\b(i will use|i'll use|calling tool|now using|generating now|successfully (published|sent|created|generated|saved)|task complete|mission complete)\b/i.test(lower);
+        return containsSuccessNarration || containsPlaceholderMedia || containsMarkdownMedia || containsToolCodeBlock || containsPythonToolNarration || containsGeneratedFileMention || containsSavedArtifactNarration;
+    }
+
+    _buildNarratedActionCorrection(userRequest = '') {
+        const latestUser = String(userRequest || this._getLatestUserText() || '').trim();
+        const domain = String(this.currentTaskContract?.routingProfile?.domain || this.activeMissionDomain || 'general').toLowerCase();
+        const targetUrl = this._extractFirstUrl(latestUser);
+        return BrowserMissionPolicy.buildNarratedActionCorrection({
+            userRequest: latestUser,
+            domain,
+            shouldForceBrowser: this._shouldForceBrowserContinuation(latestUser),
+            targetUrl,
+            isMetaOrganicImageRequest: this._isMetaOrganicImageRequest(latestUser)
+        });
     }
 
     _isWeakBrowserTextTurn(response = {}, originalRequest = '') {
-        if (!this._shouldForceBrowserContinuation(originalRequest)) return false;
-        if (response?.toolCall) return false;
-        const text = String(response?.text || '').trim().toLowerCase();
-        if (!text) return true;
-        return (
-            text.includes('let me start by') ||
-            text.includes('here\'s my plan') ||
-            text.includes('i will open') ||
-            text.includes('i can help you') ||
-            text.includes('to get started') ||
-            text.includes('ready for your instructions')
-        );
+        return BrowserMissionPolicy.isWeakBrowserTextTurn({
+            response,
+            originalRequest,
+            shouldForceBrowser: this._shouldForceBrowserContinuation(originalRequest)
+        });
     }
 
     async _describeExecutionEngine(toolCall) {
@@ -1770,6 +1596,10 @@ ${playbook}\n\n`;
     }
 
     async _runLoop(originalRequest) {
+        return QueryEngine.runExecuteLoop(this, originalRequest);
+    }
+
+    async _runLoopCore(originalRequest) {
         let isTaskCompleted = false;
         let consecutiveEmptyResponses = 0; // [CIRCUIT BREAKER] Prevent infinite empty-response loops
         const maxConsecutiveEmpty = 3;
@@ -1787,31 +1617,8 @@ ${playbook}\n\n`;
             await new Promise(r => setTimeout(r, delay));
             if (this.isStopped) break;
 
-            // Inject stateful tracking context and Dynamic Tool Rules
-            let stateContext = "";
-            if (this.lastUploadedFile) {
-                stateContext += `[CURRENT_SYSTEM_STATE] Active File Context: "${this.lastUploadedFile}". If a user says "improve this", "run this", "change this", or "promote this", ALWAYS assume they mean this file.\n\n`;
-            }
-            stateContext += this._buildMissionMemoryContext();
-            stateContext += this._buildTaskContractPrompt();
-
-            // Dynamically grab all configured capability rules mapped to the tools matrix
-            const ConfigService = require('./core/config');
-            const allConfigs = await ConfigService.getAll();
-            const activeRules = Object.entries(allConfigs)
-                .filter(([k, v]) => k.startsWith('TOOL_') && k.endsWith('_RULES') && v)
-                .map(([k, v]) => `- ${k.replace('TOOL_', '').replace('_RULES', '')}: ${v}`);
-
-            if (activeRules.length > 0) {
-                stateContext += `[CAPABILITY DIRECTIVES & USER RULES]\nYou MUST strictly adhere to the following customized behavioral rules when utilizing capabilities:\n${activeRules.join('\n')}\n`;
-            }
-
-            if (stateContext) {
-                const systemIdx = this.context.findIndex(m => m.role === 'system');
-                if (systemIdx !== -1) {
-                    this.context[systemIdx].content = this.systemPrompt + "\n\n" + stateContext;
-                }
-            }
+            const stateContext = await QueryTurnRuntime.buildStateContext(this);
+            QueryTurnRuntime.applyStateContext(this, stateContext);
 
             // Ask LLM what to do next
             if (this.currentRun) this.currentRun.llmCalls += 1;
@@ -1915,6 +1722,9 @@ ${playbook}\n\n`;
             }
 
             if (response.text) {
+                const textHandling = await TurnHandlers.handleAssistantText(this, response, originalRequest);
+                if (textHandling.paused) return;
+                response.text = '';
                 const organicDraft = this._extractOrganicMetaDraft(response.text);
                 if (organicDraft) {
                     this.currentOrganicMetaDraft = organicDraft;
@@ -1958,6 +1768,10 @@ ${playbook}\n\n`;
             }
 
             if (response.toolCall) {
+                const toolTurn = await TurnHandlers.executeToolTurn(this, response);
+                if (toolTurn.stopped || toolTurn.paused) return;
+                if (toolTurn.needsContinue) continue;
+                continue;
                 if (this.isStopped) break;
                 this.onUpdate({
                     type: 'action',
@@ -2026,8 +1840,14 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 
                 // [RESILIENCE] Auto-Sync Intelligence: If we just opened a page, automatically scan it to eliminate "flying blind"
                 if (response.toolCall.name === 'browserAction' && ['open', 'click', 'clickText', 'keyPress'].includes(response.toolCall.args.action) && !String(result).toLowerCase().includes('error')) {
+                    await this.tools.browserAction({ action: 'dismissInterruptions' });
                     this.onUpdate({ type: 'thought', message: `🔍 Auto-Sync: Page opened. Performing background 'getMarkdown' for immediate context...` });
-                    const pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+                    let pageContent = await this.tools.browserAction({ action: 'getMarkdown' });
+                    if (String(pageContent).toLowerCase().includes('error')) {
+                        await this.tools.browserAction({ action: 'waitForNetworkIdle', timeout: 3000 });
+                        const fallbackScan = await this.tools.browserAction({ action: 'extractActiveElements' });
+                        pageContent = `[getMarkdown failed, using fallback active-element scan]` + '\n' + fallbackScan;
+                    }
                     result = `${result}\n\n[PROACTIVE PAGE SCAN]:\n${pageContent}`;
                 }
 
@@ -2037,17 +1857,37 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 // AUTO-RECOVERY: If a browser interaction fails, automatically scan for elements
                 if (response.toolCall.name === 'browserAction' && 
                     ['click', 'clickPixel', 'type', 'keyPress', 'clickText', 'hover'].includes(response.toolCall.args.action) &&
-                    (resultString.toLowerCase().includes('error') || resultString.toLowerCase().includes('failed') || resultString.toLowerCase().includes('not found'))) {
+                    (resultString.toLowerCase().includes('error') || resultString.toLowerCase().includes('failed') || resultString.toLowerCase().includes('not found') || resultString.includes('"transitionChanged": false'))) {
                     
                     this.onUpdate({ type: 'thought', message: `⚠️ Action failed. Initiating autonomous 'Auto-Scan' for recovery...` });
+                    await this.tools.browserAction({ action: 'dismissInterruptions' });
                     const recoveryScan = await this.tools.browserAction({ action: 'extractActiveElements' });
-                    result = `Original Action Failed: ${resultString}\n\n[AUTO-RECOVERY SCAN DATA]:\n${recoveryScan}\n\nTip: Use the nexus-autoid-X or scan the Markdown to find the correct element for your next attempt.`;
+                    const recoveryLead = resultString.includes('"transitionChanged": false')
+                        ? `Original Action Did Not Cause a Visible Page Transition: ${resultString}`
+                        : `Original Action Failed: ${resultString}`;
+                    result = `${recoveryLead}\n\n[AUTO-RECOVERY SCAN DATA]:\n${recoveryScan}\n\nTip: Use the nexus-autoid-X or scan the Markdown to find the correct element for your next attempt.`;
                     resultString = this._formatToolResult(result);
                 }
 
                 // PROACTIVE FEEDBACK: If tool result is an error, broadcast it as a thought immediately
                 if (resultString.toLowerCase().includes('error') || resultString.toLowerCase().includes('missing')) {
                     this.onUpdate({ type: 'thought', message: `🔍 Workflow Insight: ${resultString}` });
+                }
+                if (/captcha_detected|otp_required|checkpoint_detected|mfa_required/i.test(resultString)) {
+                    const blockerReason = this._extractBrowserBlockerReason(resultString) || 'A browser blocker requires human help.';
+                    this.onUpdate({
+                        type: 'thought',
+                        message: `Browser blocker detected on the current page. ${blockerReason}`
+                    });
+                    this.pendingClarification = {
+                        question: blockerReason,
+                        normalized: this._normalizeClarificationQuestion(blockerReason),
+                        requestedAt: new Date().toISOString()
+                    };
+                    this.onUpdate({ type: 'input_requested', message: blockerReason });
+                    this.isWaitingForInput = true;
+                    this._finishRun('paused');
+                    return;
                 }
 
                 const truncatedResult = resultString.length > 5000 ? resultString.substring(0, 5000) + '...' : resultString;
@@ -2069,6 +1909,11 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                     return;
                 }
             } else {
+                const textOnlyTurn = await TurnHandlers.handleTextOnlyTurn(this, response, originalRequest);
+                if (textOnlyTurn.completed || textOnlyTurn.paused) return;
+                if (textOnlyTurn.needsContinue) continue;
+                continue;
+
                 // The LLM returned text only (no tool call). Check if it's asking a question or if it's just "thinking out loud".
                 const textLower = (response.text || "").toLowerCase();
 
@@ -2097,34 +1942,30 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
                 
                 // [RESILIENCE] Detect "Narrative Action" where model describes tools instead of calling them
                 // This must run BEFORE the explicit completion check to catch "hallucinated success".
-                const containsMarkdownMedia = /!\[[^\]]*\]\(([^)]+)\)/i.test(response.text || '');
-                const containsPlaceholderMedia = /\[(image|video|preview|file|audio|attachment):/i.test(textLower);
-                const containsToolCodeBlock = /<\s*tool_code\s*>/i.test(response.text || '') || /"tool_code"\s*:/i.test(response.text || '') || /```(?:python|json|javascript)?[\s\S]*?\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp)\s*\(/i.test(response.text || '');
-                const containsPythonToolNarration = /\bnexus_os\.(generateimage|generatevideo|metaads|browseraction)\b/i.test(response.text || '') || /\b(browserAction|generateImage|generateVideo|metaAds|sendEmail|sendWhatsApp)\s*\(/i.test(response.text || '');
-                const isNarratingToolSuccess =
-                    /\b(i will use|i'll use|calling tool|now using|generating now|here is the image|post is ready|successfully (published|sent|created|generated))\b/i.test(textLower) ||
-                    containsPlaceholderMedia ||
-                    containsMarkdownMedia ||
-                    containsToolCodeBlock ||
-                    containsPythonToolNarration;
+                const isNarratingToolSuccess = this._containsNarratedToolSuccess(response.text || '');
                 
                 // Don't treat internal breach notices as "narrated action".
                 const isInternalBreachNotice = textLower.trimStart().startsWith('mission breach:');
                 if (!isInternalBreachNotice && (this.currentMissionMode === 'execute' || this.currentMissionMode === 'chat') && isNarratingToolSuccess && !response.toolCall) {
                     const latestUser = this._getLatestUserText();
-                    const correction = this._isMetaOrganicImageRequest(latestUser)
-                        ? "ERROR: For this Meta organic image request, do not narrate. First call generateImage to create the single-image creative. After the creative exists, prepare the organic Meta publish payload and wait for approval before any publish action. Respond ONLY with a valid tool call."
-                        : "ERROR: You narrated an action or provided a text placeholder (e.g. [Image:] or ![Preview](...)) but failed to provide a structured tool call. DO NOT narrate tool execution in text. You MUST use the available tools (e.g., generateImage, metaAds, browserAction) via the function schema to perform actions. Repeat the task now using a REAL tool call.";
+                    const correction = this._buildNarratedActionCorrection(latestUser);
                     this.onUpdate({ type: 'thought', message: `⚠️ **Detection:** Narrated action without tool call. Injecting correction...` });
                     this.context.push({ role: 'user', content: correction });
                     continue;
                 }
 
                 const shouldForceBrowserContinuation = this._shouldForceBrowserContinuation(originalRequest);
+                const deterministicCorrection = this._buildDeterministicToolCorrection(originalRequest);
 
                 if (shouldForceBrowserContinuation && this._isBrowserHesitationResponse(response.text || '')) {
                     this.onUpdate({ type: 'thought', message: 'Browser mission hesitation detected. Nexus is forcing page-state continuation instead of stopping early.' });
                     this.context.push({ role: 'user', content: 'SYSTEM CORRECTION: This is a browser mission. Do not stop because you lack inherent knowledge. Re-scan the page, read the visible UI, infer the next step, and continue autonomously. Only ask the Boss if OTP, captcha, payment approval, or truly private missing information is required.' });
+                    continue;
+                }
+
+                if (!response.toolCall && deterministicCorrection && !this.currentMissionArtifact) {
+                    this.onUpdate({ type: 'thought', message: 'Deterministic execution request stalled in text-only mode. Nexus is forcing the required tool path.' });
+                    this.context.push({ role: 'user', content: deterministicCorrection });
                     continue;
                 }
 
@@ -2199,6 +2040,12 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
             }
         }
 
+        await LoopFinalizer.finalizeExecuteLoop(this, {
+            isTaskCompleted,
+            originalRequest
+        });
+        return;
+
         if (!isTaskCompleted) {
             this.onUpdate({ type: 'complete', message: 'Process finished.' });
             this._finishRun(this.isWaitingForInput ? 'paused' : 'completed');
@@ -2225,107 +2072,27 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
     }
 
     _normalizeToolCall(toolCall = {}) {
-        const browserActionAliases = new Set([
-            'open',
-            'click',
-            'clickPixel',
-            'clickText',
-            'type',
-            'clearAndType',
-            'focus',
-            'keyPress',
-            'hover',
-            'scroll',
-            'extract',
-            'extractActiveElements',
-            'getMarkdown',
-            'screenshot',
-            'waitForNetworkIdle',
-            'waitForSelector'
-        ]);
+        return ToolDispatchPolicy.normalizeToolCall(toolCall, {
+            isBlankValue: (value) => this._isBlankValue(value)
+        });
+    }
 
-        if (browserActionAliases.has(toolCall.name)) {
-            return {
-                name: 'browserAction',
-                args: {
-                    ...(toolCall.args || {}),
-                    action: toolCall.name
-                }
-            };
-        }
+    _hydrateToolCall(toolCall = {}) {
+        return ToolArgumentHydrator.hydrateToolCall(toolCall, {
+            taskDir: this.taskDir,
+            rootDir: __dirname,
+            latestUser: this._getLatestUserText(),
+            taskObjective: this.currentTaskContract?.objective || '',
+            currentMissionArtifact: this.currentMissionArtifact || null,
+            currentOrganicMetaDraft: this.currentOrganicMetaDraft || null,
+            lastUploadedFile: this.lastUploadedFile || null,
+            extractCommercialQuoteDefaults: (text) => this._extractCommercialQuoteDefaults(text),
+            enrichCreativePrompt: (type, text) => CreativePromptRuntime.enrichCreativePrompt(type, text)
+        });
+    }
 
-        if (toolCall.name === 'browserAction') {
-            return {
-                ...toolCall,
-                args: { ...(toolCall.args || {}) }
-            };
-        }
-
-        if (toolCall.name === 'metaAds') {
-            const normalizedArgs = { ...(toolCall.args || {}) };
-            // SECURITY: The model must never be able to "self-approve" a dangerous action.
-            // Only _handleApprovalResponse() can set boss_approved=true with skipGovernance enabled.
-            if ('boss_approved' in normalizedArgs) delete normalizedArgs.boss_approved;
-            if (typeof normalizedArgs.body === 'string' && normalizedArgs.body.trim()) {
-                try {
-                    const parsedBody = JSON.parse(normalizedArgs.body);
-                    if (parsedBody && typeof parsedBody === 'object') {
-                        normalizedArgs.message = normalizedArgs.message || parsedBody.message || '';
-                        normalizedArgs.link = normalizedArgs.link || parsedBody?.call_to_action?.link || parsedBody.link || '';
-                        normalizedArgs.imagePath = normalizedArgs.imagePath || parsedBody.media_url || parsedBody.imagePath || '';
-                        normalizedArgs.cta = normalizedArgs.cta || parsedBody?.call_to_action?.type || '';
-                        normalizedArgs.title = normalizedArgs.title || parsedBody.title || '';
-                        normalizedArgs.pageId = this._isBlankValue(normalizedArgs.pageId) ? (parsedBody.pageId || '') : normalizedArgs.pageId;
-                    }
-                } catch (_) {}
-            }
-            return {
-                ...toolCall,
-                args: normalizedArgs
-            };
-        }
-
-        if (toolCall.name === 'googleAdsCreateBudget') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createBudget' } };
-        }
-
-        if (toolCall.name === 'googleAdsCreateCampaign') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createCampaign' } };
-        }
-
-        if (toolCall.name === 'googleAdsCreateAdGroup') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createAdGroup' } };
-        }
-
-        if (toolCall.name === 'googleAdsAddKeywords') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'addKeywords' } };
-        }
-
-        if (toolCall.name === 'googleAdsCreateResponsiveSearchAd') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'createResponsiveSearchAd' } };
-        }
-
-        if (toolCall.name === 'googleAdsListCampaigns') {
-            return { name: 'googleAds', args: { ...(toolCall.args || {}), action: 'listCampaigns' } };
-        }
-
-        if (toolCall.name === 'linkedinPublishPost') {
-            return { name: 'linkedinAds', args: { ...(toolCall.args || {}), action: 'publishPost' } };
-        }
-
-        if (toolCall.name === 'linkedinDeletePost') {
-            return { name: 'linkedinAds', args: { ...(toolCall.args || {}), action: 'deletePost' } };
-        }
-
-        if (toolCall.name === 'twitterAds' || toolCall.name === 'x' || toolCall.name === 'tweet') {
-            return { name: 'xAds', args: { ...(toolCall.args || {}) } };
-        }
-
-        if (toolCall.name === 'xDeletePost') {
-            return { name: 'xAds', args: { ...(toolCall.args || {}), action: 'deletePost' } };
-        }
-
-        return toolCall;
+    _inferToolDomain(toolCall = {}) {
+        return ToolDispatchPolicy.inferToolDomain(toolCall);
     }
 
     _extractToolCallFromNarration(text = '') {
@@ -2364,6 +2131,33 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
             return { name: 'browserAction', args: { action: 'clearAndType', selector: clearAndTypeMatch[1], text: clearAndTypeMatch[2] } };
         }
 
+        const generateImageMatch = value.match(/generateImage\s*\(\s*prompt\s*=\s*['"]([\s\S]*?)['"](?:\s*,\s*savePath\s*=\s*['"]([^'"]+)['"])?(?:\s*,\s*aspectRatio\s*=\s*['"]([^'"]+)['"])?/i);
+        if (generateImageMatch) {
+            const args = { prompt: generateImageMatch[1] };
+            if (generateImageMatch[2]) args.savePath = generateImageMatch[2];
+            if (generateImageMatch[3]) args.aspectRatio = generateImageMatch[3];
+            return { name: 'generateImage', args };
+        }
+
+        const generateVideoMatch = value.match(/generateVideo\s*\(\s*prompt\s*=\s*['"]([\s\S]*?)['"](?:\s*,\s*outputPath\s*=\s*['"]([^'"]+)['"])?/i);
+        if (generateVideoMatch) {
+            const args = { prompt: generateVideoMatch[1] };
+            if (generateVideoMatch[2]) args.outputPath = generateVideoMatch[2];
+            return { name: 'generateVideo', args };
+        }
+
+        const quoteArtifactsMatch = value.match(/createAgencyQuoteArtifacts\s*\(\s*quoteName\s*=\s*['"]([^'"]+)['"](?:\s*,\s*format\s*=\s*['"]([^'"]+)['"])?/i);
+        if (quoteArtifactsMatch) {
+            const args = { quoteName: quoteArtifactsMatch[1] };
+            if (quoteArtifactsMatch[2]) args.format = quoteArtifactsMatch[2];
+            return { name: 'createAgencyQuoteArtifacts', args };
+        }
+
+        const quotePlanMatch = value.match(/buildAgencyQuotePlan\s*\(([\s\S]*?)\)/i);
+        if (quotePlanMatch) {
+            return { name: 'buildAgencyQuotePlan', args: {} };
+        }
+
         return null;
     }
 
@@ -2384,9 +2178,101 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
         return /\b(banner|poster|flyer|thumbnail|creative|ad\s*creative)\b/.test(t) || /\b(generate|create)\b.*\b(image|banner|creative)\b/.test(t);
     }
 
+    _isResearchBeforePromotionRequest(text = '') {
+        const t = String(text || '').toLowerCase();
+        return /\b(get|extract|fetch|read|collect|analyze|analyse|scan)\b/.test(t)
+            && /\b(details?|product|products|website|url|page|site)\b/.test(t)
+            && /\b(promote|publish|post|boost|meta|facebook|instagram|ads?)\b/.test(t);
+    }
+
+    _shouldRequireCreativeAssetForMeta({ toolCall = {}, latestUser = '', args = {} } = {}) {
+        if (String(toolCall?.name || '') !== 'metaAds') return false;
+        const action = String(toolCall?.args?.action || args?.action || '').toLowerCase();
+        if (!action) return false;
+        if (String(args?.imagePath || toolCall?.args?.imagePath || '').trim()) return false;
+        const request = String(latestUser || '').toLowerCase();
+        const explicitCreativeIntent = /\b(generate|create|design|make)\b.*\b(image|banner|poster|creative|thumbnail|photo ad|ad creative)\b/.test(request) ||
+            /\b(need|want|use)\b.*\b(image|banner|poster|creative|thumbnail)\b/.test(request) ||
+            /\b(image|banner|poster|creative|thumbnail)\b.*\bfor ad|for meta|for facebook|for instagram\b/.test(request);
+        return explicitCreativeIntent;
+    }
+
+    _extractManualProductPromotionDraft(text = '') {
+        const value = String(text || '').trim();
+        if (!value) return null;
+        const lower = value.toLowerCase();
+        if (!/\bproduct name\b/.test(lower) || !/\bproduct url\b/.test(lower) || !/\bpromote\b/.test(lower)) return null;
+
+        const readField = (label) => value.match(new RegExp(`${label}\\s*:\\s*([^\\n]+)`, 'i'))?.[1]?.trim() || '';
+        const productName = readField('product name');
+        const description = readField('description');
+        const productUrl = readField('product url');
+        const productImageUrl = readField('product image url');
+        const price = readField('price');
+
+        if (!productName || !productUrl) return null;
+
+        const compactDescription = description.replace(/\s+/g, ' ').trim();
+        const priceLine = price ? `Now at ${price}.` : '';
+        const baseMessage = [
+            `${productName}`,
+            compactDescription || '',
+            priceLine,
+            'Shop now for everyday comfort and classic style.',
+            '#MensFashion #PoloTshirt #ComboOffer #DailyWear #ShopNow'
+        ].filter(Boolean).join('\n\n');
+
+        return {
+            channel: 'meta_organic',
+            title: productName,
+            description: compactDescription,
+            message: baseMessage,
+            cta: 'SHOP_NOW',
+            ctaLabel: 'SHOP NOW',
+            link: productUrl,
+            imagePath: null,
+            imageUrl: productImageUrl || null,
+            tags: '#MensFashion #PoloTshirt #ComboOffer #DailyWear #ShopNow',
+            channels: ['facebook'],
+            preparedAt: new Date().toISOString()
+        };
+    }
+
     _isMetaOrganicImageRequest(text = '') {
         const t = String(text || '').toLowerCase();
         return /\b(meta|facebook|instagram|organic)\b/.test(t) && /\b(image|banner|poster|creative|photo|ad)\b/.test(t);
+    }
+
+    _extractBrowserBlockerReason(text = '') {
+        return BrowserMissionPolicy.extractBrowserBlockerReason(text);
+    }
+
+    _isCookiePolicyRedirect(text = '') {
+        const value = String(text || '').toLowerCase();
+        return value.includes('cookie-policy') || value.includes('cookie policy') || value.includes('cookies policy');
+    }
+
+    _buildDeterministicToolCorrection(userRequest = '') {
+        const domain = String(this.currentTaskContract?.routingProfile?.domain || this.activeMissionDomain || 'general').toLowerCase();
+        const objective = String(this.currentTaskContract?.objective || userRequest || '').trim();
+        const isOrganicMetaRequest = this._isOrganicPublishIntent(objective) || (/\b(meta|metaads|facebook|instagram)\b/i.test(objective) && /\b(promote|publish|post)\b/i.test(objective));
+        const firstUrl = this._extractFirstUrl(objective);
+        if (domain.includes('browser') && domain.includes('marketing')) {
+            return `SYSTEM CORRECTION: This is a browser-first mixed mission. Do NOT use searchWeb yet and do NOT publish/promote yet. Use browserAction only to extract the real product details from "${firstUrl || 'the provided site'}". If the page redirects to cookie-policy or home, recover inside the site using visible UI, search, back, or product navigation until the real product page is found. After the product details are extracted, then prepare the marketing/ad step. Respond ONLY with the next valid browserAction tool call.`;
+        }
+        if (domain === 'marketing' && isOrganicMetaRequest) {
+            return `SYSTEM CORRECTION: This is an organic Meta execution request. Do not explain or stall. Call metaAds now using action "publishOrganicPost" with a concise promotional message, link "${firstUrl || ''}", and channels ["facebook","instagram"]. If a required Meta credential like pageId is missing, ask only for that exact field or rely on saved config. Respond ONLY with a valid tool call.`;
+        }
+        if (['image', 'media'].includes(domain)) {
+            return `SYSTEM CORRECTION: This is an image/media execution request. Do not explain or stall. Call generateImage now with a concrete prompt derived from: "${objective}". Use the available tool schema and continue only after the image artifact exists.`;
+        }
+        if (domain === 'video') {
+            return `SYSTEM CORRECTION: This is a video execution request. Do not explain or stall. Call generateVideo now with a concrete prompt derived from: "${objective}". Use the available tool schema and continue only after the video artifact exists.`;
+        }
+        if (domain === 'commercial') {
+            return `SYSTEM CORRECTION: This is a commercial execution request. Do not explain or stall. Call buildAgencyQuotePlan or createAgencyQuoteArtifacts now using the available context from: "${objective}". Continue only after the quote artifact exists or a single exact missing client field is requested.`;
+        }
+        return '';
     }
 
     _getLatestUserText() {
@@ -2493,112 +2379,23 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
     }
 
     _isExternalActionConfirmed(name, result) {
-        if (!name) return false;
-        if (name === 'metaAds') return this._isSuccessfulMetaPublishResult(result);
-        if (name === 'linkedinPublishPost' || (name === 'linkedinAds' && args?.action === 'publishPost')) {
-            return Boolean(result && typeof result === 'object' && (result.success === true || result.id));
-        }
-        if (name === 'linkedinDeletePost' || (name === 'linkedinAds' && args?.action === 'deletePost')) {
-            return Boolean(result && typeof result === 'object' && (result.success === true || result.deleted === true));
-        }
-        if (name === 'xDeletePost' || (name === 'xAds' && args?.action === 'deletePost')) {
-            return Boolean(result && typeof result === 'object' && (result.success === true || result.deleted === true));
-        }
-        if (['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd'].includes(name)) {
-            if (Array.isArray(result) && result.length > 0) return true;
-            return Boolean(result && typeof result === 'object' && (result.resource_name || result.id || result.success === true));
-        }
-        if (name === 'sendEmail' || name === 'sendWhatsApp' || name === 'sendWhatsAppMedia') {
-            const serialized = typeof result === 'string' ? result.toLowerCase() : JSON.stringify(result || {}).toLowerCase();
-            return !serialized.startsWith('error') && !serialized.includes('"error"');
-        }
-        return true;
+        return ExternalActionPolicy.isExternalActionConfirmed(name, {}, result, {
+            isSuccessfulMetaPublishResult: (value) => this._isSuccessfulMetaPublishResult(value)
+        });
     }
 
     async _preflightExternalAction(toolCall = {}) {
-        const { name, args = {} } = toolCall;
-        if (name === 'metaAds') {
-            const status = typeof this.tools?.metaAds?.getSetupStatus === 'function'
-                ? await this.tools.metaAds.getSetupStatus()
-                : await MetaAdsTool.getSetupStatus();
-            const action = String(args.action || '');
-
-            // GUARD: If the Boss asked for a creative/banner, we must generate the asset first.
-            // Do not attempt Meta publishing/creative creation until an image artifact exists.
-            const latestUser = this._getLatestUserText();
-            const creativeFirst = this._isCreativeAssetRequest(latestUser);
-            if (creativeFirst && !this._hasImageArtifact()) {
-                return {
-                    ok: false,
-                    error: `Meta action ${action} blocked: banner/image must be generated first. Use generateImage, then ask for approval to publish/promote.`,
-                    missingKeys: ['IMAGE_ASSET'],
-                    provider: 'meta'
-                };
-            }
-
-            // GUARD: Block placeholder arguments so we don't enter approval loops with fake ids/paths.
-            const placeholderKeys = ['pageId', 'adAccountId', 'imageHash', 'imagePath', 'videoPath', 'link'];
-            const placeholders = placeholderKeys.filter((k) => this._isPlaceholderValue(args?.[k]));
-            if (placeholders.length) {
-                return {
-                    ok: false,
-                    error: `Meta action ${action} blocked: placeholder values detected for ${placeholders.join(', ')}. Provide real values or generate/upload the asset first.`,
-                    missingKeys: placeholders.map((k) => `REAL_${k.toUpperCase()}`),
-                    provider: 'meta'
-                };
-            }
-
-            const needsPaidSetup = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'uploadImage', 'getAccountInfo'].includes(action);
-            const needsOrganicSetup = ['publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel', 'getPageInsights'].includes(action);
-            const requestedChannels = Array.isArray(args.channels) ? args.channels.map((item) => String(item || '').trim().toLowerCase()) : [];
-            const missing = [];
-            if (!status.hasAccessToken) missing.push('META_ACCESS_TOKEN');
-            if (needsPaidSetup && !status.hasAdAccountId) missing.push('META_AD_ACCOUNT_ID');
-            if (needsOrganicSetup && !status.hasPageId) missing.push('META_PAGE_ID');
-            if (requestedChannels.includes('instagram') && !status.hasInstagramBusinessAccountId) missing.push('INSTAGRAM_BUSINESS_ACCOUNT_ID');
-            if (missing.length) {
-                return {
-                    ok: false,
-                    error: `Meta action ${action} is blocked by missing setup: ${missing.join(', ')}.`,
-                    missingKeys: missing,
-                    provider: 'meta'
-                };
-            }
-            return { ok: true };
-        }
-
-        if (name === 'googleAds' || ['googleAdsCreateCampaign', 'googleAdsCreateBudget', 'googleAdsCreateAdGroup', 'googleAdsAddKeywords', 'googleAdsCreateResponsiveSearchAd', 'googleAdsListCampaigns'].includes(name)) {
-            const status = await GoogleAdsTool.getSetupStatus();
-            const missing = [];
-            if (!status.hasClientId) missing.push('GOOGLE_ADS_CLIENT_ID');
-            if (!status.hasClientSecret) missing.push('GOOGLE_ADS_CLIENT_SECRET');
-            if (!status.hasDeveloperToken) missing.push('GOOGLE_ADS_DEVELOPER_TOKEN');
-            if (!status.hasRefreshToken) missing.push('GOOGLE_ADS_REFRESH_TOKEN');
-            if (missing.length) {
-                return {
-                    ok: false,
-                    error: `Google Ads action ${args.action || name} is blocked by missing setup: ${missing.join(', ')}.`,
-                    missingKeys: missing,
-                    provider: 'google_ads'
-                };
-            }
-            return { ok: true };
-        }
-
-        if (name === 'linkedinAds' || name === 'linkedinPublishPost' || name === 'linkedinDeletePost') {
-            const status = await LinkedInAdsTool.getSetupStatus();
-            if (!status.hasAccessToken) {
-                return {
-                    ok: false,
-                    error: 'LinkedIn publish is blocked by missing setup: LINKEDIN_ACCESS_TOKEN.',
-                    missingKeys: ['LINKEDIN_ACCESS_TOKEN'],
-                    provider: 'linkedin'
-                };
-            }
-            return { ok: true };
-        }
-
-        return { ok: true };
+        return ExternalActionPolicy.preflightExternalAction(toolCall, {
+            metaAdsTool: typeof this.tools?.metaAds?.getSetupStatus === 'function' ? this.tools.metaAds : MetaAdsTool,
+            googleAdsTool: GoogleAdsTool,
+            linkedInAdsTool: LinkedInAdsTool
+        }, {
+            latestUser: this._getLatestUserText(),
+            isCreativeAssetRequest: (text) => this._isCreativeAssetRequest(text),
+            shouldRequireCreativeAsset: (payload) => this._shouldRequireCreativeAssetForMeta(payload),
+            hasImageArtifact: () => this._hasImageArtifact(),
+            isPlaceholderValue: (value) => this._isPlaceholderValue(value)
+        });
     }
 
     _formatMetaPublishSuccess(result, draft = null) {
@@ -2704,9 +2501,13 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
     }
 
     async _dispatchTool(toolCall, options = {}) {
-        const normalizedToolCall = this._normalizeToolCall(toolCall);
+        const normalizedToolCall = this._hydrateToolCall(this._normalizeToolCall(toolCall));
         const { name } = normalizedToolCall;
         let args = normalizedToolCall.args;
+        this._emitMissionStatus('executing_tool', `Dispatching ${name}${args?.action ? `:${args.action}` : ''}.`, {
+            tool: name,
+            domain: this._inferToolDomain(normalizedToolCall)
+        });
         
         if (this.currentRun) {
             this.currentRun.toolCalls += 1;
@@ -2741,16 +2542,14 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
 
             const governance = GovernanceService.evaluate(normalizedToolCall);
             if (!options.skipGovernance && governance.requiresApproval && args?.boss_approved !== true) {
-                this.pendingApproval = {
-                    requestedAt: new Date().toISOString(),
-                    toolCall: normalizedToolCall,
-                    reason: governance.reason,
-                    preview: governance.preview,
-                    details: governance.details || null
-                };
+                this.pendingApproval = GovernanceRuntime.buildPendingApproval(normalizedToolCall, governance);
                 this.onUpdate({
                     type: 'approval_requested',
-                    message: `Approval required for ${name}. ${governance.reason}\n\nPreview:\n${governance.preview}\n\nReply YES to approve.`
+                    message: GovernanceRuntime.buildApprovalRequestMessage(name, governance)
+                });
+                this._emitMissionStatus('awaiting_approval', governance.reason, {
+                    tool: name,
+                    waitingFor: 'boss_approval'
                 });
                 this.isWaitingForInput = true;
                 return `APPROVAL REQUIRED: ${governance.reason}\n${governance.preview}`;
@@ -2770,69 +2569,48 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
 
             // A. Special Handler: Browser Action
             if (name === 'browserAction') {
-                const normalizedBrowserArgs = { ...(args || {}) };
-                if (!String(normalizedBrowserArgs.action || '').trim()) normalizedBrowserArgs.action = normalizedBrowserArgs.url ? 'open' : 'getMarkdown';
-                const result = await this.tools.browserAction(normalizedBrowserArgs);
-                const visualActions = ['open', 'click', 'clickPixel', 'type', 'keyPress', 'clickText', 'scroll', 'hover'];
-                if (visualActions.includes(normalizedBrowserArgs.action) && this.taskDir) {
-                    const screenshotName = `screenshot_${Date.now()}.png`;
-                    const screenshotPath = require('path').join(this.taskDir, screenshotName);
-                    await this.tools.browserAction({ action: 'annotateAndScreenshot', savePath: screenshotPath });
-                    const folderName = require('path').basename(this.taskDir);
-                    this.onUpdate({ type: 'thought', message: `🖼️ **Browser Update:**\n![Browser View](/outputs/${folderName}/${screenshotName})` });
-                }
-                return result;
+                return await ToolExecutionRuntime.executeBrowserAction(args, {
+                    browserAction: (browserArgs) => this.tools.browserAction(browserArgs),
+                    taskDir: this.taskDir,
+                    onUpdate: this.onUpdate
+                });
             }
 
             // B. Special Handler: Ads
             if (['metaAds', 'googleAds', 'linkedinAds', 'xAds'].includes(name)) {
-                if (name === 'metaAds') {
-                    const dangerous = ['createCampaign', 'createAdSet', 'createAdCreative', 'createAd', 'publishOrganicPost', 'publishOrganicPhoto', 'publishOrganicVideo', 'publishOrganicReel'];
-                    if (dangerous.includes(args.action) && args.boss_approved !== true) return "⚠️ MISSION BREACH: Dangerous action attempted without approval.";
-                }
-                return await this.tools[name](args);
+                return await ToolExecutionRuntime.executeAdsAction(name, args, {
+                    runAdsTool: (toolName, toolArgs) => this.tools[toolName](toolArgs)
+                });
             }
 
             // C. Special Handler: Generative Media
-            if (name === 'generateImage') {
-                const resolvedSavePath = args.savePath || path.join(this.taskDir || __dirname, `generated_image_${Date.now()}.png`);
-                const result = await ImageGenTool.generateImage(args.prompt, resolvedSavePath, { aspectRatio: args.aspectRatio, refine: args.refine });
-                if (!String(result).toLowerCase().startsWith('error')) {
-                    await this._recordMediaUsage('Gemini', 'imagen-4.0-generate-001', 'free', 0);
-                    this._registerMissionArtifact({
-                        kind: 'image',
-                        path: resolvedSavePath,
-                        prompt: args.prompt,
-                        sourceTool: 'generateImage',
-                        aspectRatio: args.aspectRatio || null
-                    });
-                }
-                return result;
-            }
-
-            if (name === 'generateVideo') {
-                if (args.prompt && !args.imagePath) {
-                    const veo = await VideoGenTool.generateWithVeo(args.prompt, args.outputPath);
-                    if (!veo.error) return `SUCCESS: Video created via Veo at ${args.outputPath}`;
-                    const repl = await VideoGenTool.generateFromPrompt(args.prompt, args.outputPath);
-                    if (!repl.error) return `SUCCESS: Video created via Replicate at ${args.outputPath}`;
-                }
-                return await VideoGenTool.imageToVideo(args.imagePath, args.outputPath);
+            if (['generateImage', 'generateVideo'].includes(name)) {
+                const mediaResult = await ToolExecutionRuntime.executeMediaAction(name, args, {
+                    taskDir: this.taskDir,
+                    rootDir: __dirname,
+                    generateImage: (prompt, savePath, mediaOptions) => ImageGenTool.generateImage(prompt, savePath, mediaOptions),
+                    recordMediaUsage: (...usageArgs) => this._recordMediaUsage(...usageArgs),
+                    registerMissionArtifact: (details) => this._registerMissionArtifact(details),
+                    generateVideoWithVeo: (prompt, outputPath) => VideoGenTool.generateWithVeo(prompt, outputPath),
+                    generateVideoFromPrompt: (prompt, outputPath) => VideoGenTool.generateFromPrompt(prompt, outputPath),
+                    imageToVideo: (imagePath, outputPath) => VideoGenTool.imageToVideo(imagePath, outputPath)
+                });
+                if (mediaResult !== null) return mediaResult;
             }
 
             // D. Dynamic Generic Tools (File, Memory, Skills, Search)
-            if (this.tools[name]) {
-                try {
-                    return await this.tools[name](args);
-                } catch (e) {
-                    console.warn(`[Dispatcher] Legacy fallback for ${name}: ${e.message}`);
-                    if (name === 'readFile') return await this.tools.readFile(args.absolutePath);
-                    if (name === 'writeFile') return await this.tools.writeFile(args.absolutePath, args.content);
-                    if (name === 'saveMemory') return await this.tools.saveMemory(args.content, args.category);
-                    if (name === 'runCommand') return await this.tools.runCommand(args.command, args.cwd);
-                    throw e;
+            const genericResult = await ToolExecutionRuntime.executeGenericTool(name, args, {
+                tools: this.tools,
+                runLegacyFallback: async (toolName, toolArgs, error) => {
+                    console.warn(`[Dispatcher] Legacy fallback for ${toolName}: ${error.message}`);
+                    if (toolName === 'readFile') return await this.tools.readFile(toolArgs.absolutePath);
+                    if (toolName === 'writeFile') return await this.tools.writeFile(toolArgs.absolutePath, toolArgs.content);
+                    if (toolName === 'saveMemory') return await this.tools.saveMemory(toolArgs.content, toolArgs.category);
+                    if (toolName === 'runCommand') return await this.tools.runCommand(toolArgs.command, toolArgs.cwd);
+                    throw error;
                 }
-            }
+            });
+            if (genericResult !== null) return genericResult;
 
             // E. Final Fallback
             switch (name) {
@@ -2850,165 +2628,7 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
     }
 
     async _runChatLoop(originalRequest = null) {
-        if (this.currentRun) this.currentRun.llmCalls += 1;
-        const llmContext = this._trimContextForLlm(this.context);
-        const response = await this.llmService.generateResponse(llmContext, { mode: 'chat', enableTools: false });
-        if (this.isStopped) return;
-
-        if (this.currentRun) {
-            if (response.provider) this.currentRun.lastLlmProvider = response.provider;
-            if (response.model) this.currentRun.lastLlmModel = response.model;
-            const usage = response.usage || {};
-            const usageEvent = await UsageTracker.recordLlmUsage({
-                provider: response.provider,
-                model: response.model,
-                clientId: this.currentClientId || null,
-                sessionId: this.currentSessionId || null,
-                runId: this.currentRun.id,
-                requestPreview: this.currentRun.requestPreview,
-                mode: 'chat',
-                inputTokens: usage.inputTokens || 0,
-                outputTokens: usage.outputTokens || 0,
-                totalTokens: usage.totalTokens || 0
-            });
-            const usageKey = `${usageEvent.provider}::${usageEvent.model}`;
-            const currentEntry = this.currentRun.providerUsage?.[usageKey] || {
-                provider: usageEvent.provider,
-                model: usageEvent.model,
-                calls: 0,
-                freeCalls: 0,
-                paidCalls: 0,
-                estimatedCostUsd: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                totalTokens: 0
-            };
-            currentEntry.calls += 1;
-            currentEntry.freeCalls += usageEvent.usageTier === 'free' ? 1 : 0;
-            currentEntry.paidCalls += usageEvent.usageTier === 'paid' ? 1 : 0;
-            currentEntry.estimatedCostUsd = Number((currentEntry.estimatedCostUsd + Number(usageEvent.estimatedCostUsd || 0)).toFixed(6));
-            currentEntry.inputTokens += Number(usageEvent.inputTokens || 0);
-            currentEntry.outputTokens += Number(usageEvent.outputTokens || 0);
-            currentEntry.totalTokens += Number(usageEvent.totalTokens || 0);
-            this.currentRun.providerUsage = this.currentRun.providerUsage || {};
-            this.currentRun.providerUsage[usageKey] = currentEntry;
-        }
-
-        const text = String(response.text || '').trim() || 'No response generated.';
-        this.onUpdate({ type: 'thought', message: text });
-        this.context.push({ role: 'assistant', content: text });
-
-        const textLower = text.toLowerCase();
-        const isAskingQuestion = textLower.includes('?') ||
-            textLower.includes('please provide') ||
-            textLower.includes('i need your') ||
-            textLower.includes('tell me');
-
-        if (isAskingQuestion) {
-            this.onUpdate({ type: 'pause' });
-            this.isWaitingForInput = true;
-            this._finishRun('paused');
-            return;
-        }
-
-        this.onUpdate({ type: 'complete', message: 'Chat response complete.' });
-        this._finishRun('completed');
-    }
-
-    async _handleApprovalResponse(userInput) {
-        const decision = GovernanceService.isApprovalResponse(userInput);
-        const pending = this.pendingApproval;
-        if (decision === null) {
-            this.onUpdate({ type: 'input_requested', message: `Approval pending for ${pending.toolCall.name}. Please reply YES to approve or NO to cancel.` });
-            return;
-        }
-
-        this.isRunning = true;
-        this.isStopped = false;
-        this.isWaitingForInput = false;
-
-        try {
-            if (!decision) {
-                this._recordAudit('approval_rejected', { tool: pending.toolCall.name, preview: pending.preview });
-                this.context.push({ role: 'user', content: `Approval rejected by user: ${userInput}` });
-                this.pendingApproval = null;
-                this.onUpdate({ type: 'thought', message: `Approval rejected for ${pending.toolCall.name}. Mission will continue without executing it.` });
-                await this._runLoop(null);
-                return;
-            }
-
-            const approvedCall = {
-                ...pending.toolCall,
-                args: { ...(pending.toolCall.args || {}), boss_approved: true }
-            };
-            if (pending.details?.requestedMode) {
-                this.currentMissionMode = String(pending.details.requestedMode).toLowerCase();
-                this.onUpdate({ type: 'thought', message: `Boss approved ${this.currentMissionMode.toUpperCase()} mode. Nexus is continuing.` });
-            }
-            this._recordAudit('approval_granted', { tool: approvedCall.name, preview: pending.preview });
-            this.context.push({ role: 'user', content: `Approval granted by user: ${userInput}` });
-            this.context.push({ role: 'assistant', content: '', toolCall: approvedCall });
-            this.onUpdate({ type: 'action', name: approvedCall.name, args: approvedCall.args });
-            this.pendingApproval = null;
-            if (approvedCall.name === 'metaAds' && String(approvedCall.args?.action || '').startsWith('publishOrganic')) {
-                this._setWorkflowState({
-                    domain: 'marketing',
-                    channel: 'meta',
-                    mode: 'organic_publish',
-                    stage: 'publishing'
-                });
-            }
-            const result = await this._dispatchTool(approvedCall, { skipGovernance: true });
-            this._captureToolOutcome(approvedCall, result);
-            this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
-            this.context.push({ role: 'tool', name: approvedCall.name, content: result });
-            if (this._isMetaOrganicPublishAction(approvedCall)) {
-                if (this._isSuccessfulMetaPublishResult(result)) {
-                    this._setWorkflowState({
-                        domain: 'marketing',
-                        channel: 'meta',
-                        mode: 'organic_publish',
-                        stage: 'published'
-                    });
-                    this.onUpdate({ type: 'complete', message: this._formatMetaPublishSuccess(result, this.currentOrganicMetaDraft) });
-                    this._finishRun('completed');
-                    return;
-                }
-                this._setWorkflowState({
-                    domain: 'marketing',
-                    channel: 'meta',
-                    mode: 'organic_publish',
-                    stage: 'publish_failed'
-                });
-                if (this._isMetaAuthError(result)) {
-                    this.pendingRequirement = {
-                        requestedAt: new Date().toISOString(),
-                        toolCall: approvedCall,
-                        keys: ['META_ACCESS_TOKEN']
-                    };
-                    this.onUpdate({
-                        type: 'input_requested',
-                        message: 'Meta publish failed because the Meta access token is expired or invalid. Reply with a fresh META_ACCESS_TOKEN (or update settings) and Nexus will continue.'
-                    });
-                    this.isWaitingForInput = true;
-                    this._finishRun('paused');
-                    return;
-                }
-                this.onUpdate({ type: 'error', message: `Organic Meta publish failed.\n${this._formatToolResult(result).slice(0, 5000)}` });
-                this.isWaitingForInput = true;
-                this._finishRun('paused');
-                return;
-            }
-            if (!this._isExternalActionConfirmed(approvedCall.name, result)) {
-                this.onUpdate({ type: 'error', message: `${approvedCall.name} did not return a confirmed success response.\n${this._formatToolResult(result).slice(0, 5000)}` });
-                this.isWaitingForInput = true;
-                this._finishRun('paused');
-                return;
-            }
-            await this._runLoop(null);
-        } finally {
-            this.isRunning = false;
-        }
+        return QueryEngine.runChatLoop(this, originalRequest);
     }
 
     _recordAudit(type, payload) {
@@ -3025,13 +2645,7 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
         if (!classification) return;
 
         const playbook = SelfHealingService.getPlaybook(classification, toolCall);
-        this.recoveryHistory.unshift({
-            at: new Date().toISOString(),
-            tool: toolCall.name,
-            classification,
-            playbook
-        });
-        this.recoveryHistory = this.recoveryHistory.slice(0, 50);
+        this.recoveryHistory = SelfHealingRuntime.recordSelfHealingEvent(this.recoveryHistory, toolCall, classification, playbook);
         this._recordAudit('self_healing_detected', { tool: toolCall.name, classification: classification.type });
         await MemoryService.saveRecoveryPattern({
             tool: toolCall.name,
@@ -3064,20 +2678,14 @@ As a professional expert, analyze this failure and propose 3 distinct ways the B
             
             // 1. First, search the Fix Library for proven solutions
             const blueprints = await MemoryService.findFixBlueprints(toolName, classification.type);
-            let blueprintContext = "";
+            let blueprintContext = '';
             if (blueprints && blueprints.length > 0) {
-                this.onUpdate({ type: 'thought', message: `📚 Fix Library: Found ${blueprints.length} proven solution(s) for [${toolName}].` });
-                blueprintContext = `### PROVEN FIX BLUEPRINTS FOUND:
-${blueprints.map((b, idx) => `[Blueprint ${idx + 1}]: ${b.description}\nSuggested Patch:\n${b.patch}`).join('\n\n')}
-
-INSTRUCTION: A proven fix exists for this error. Use 'replaceFileContent' to apply the most relevant blueprint above, then retry.
-\n`;
+                this.onUpdate({ type: 'thought', message: `Fix Library: Found ${blueprints.length} proven solution(s) for [${toolName}].` });
+                blueprintContext = SelfHealingRuntime.buildBlueprintContext(blueprints);
             }
 
             // 2. Map tool names to filenames
-            let toolFileName = `${toolName}.js`;
-            if (toolName === 'browserAction') toolFileName = 'browser.js';
-            if (toolName === 'readFile' || toolName === 'writeFile' || toolName === 'listDir' || toolName === 'replaceFileContent') toolFileName = 'fileSystem.js';
+            const toolFileName = SelfHealingRuntime.mapToolToSourceFile(toolName);
             
             const toolFile = path.join(__dirname, 'tools', toolFileName);
             if (fs.existsSync(toolFile)) {
@@ -3085,15 +2693,7 @@ INSTRUCTION: A proven fix exists for this error. Use 'replaceFileContent' to app
                 this.context.push({ 
                     role: 'tool', 
                     name: toolName, 
-                    content: `[SYSTEM DIAGNOSTIC] A logic/path error occurred.
-${blueprintContext}
-SOVEREIGN ENGINEERING PROTOCOL ACTIVATED:
-1. Analyze the tool source below.
-2. If no blueprint above fits, identify the root cause and apply a new precision fix.
-3. CRITICAL: If you create a NEW fix, you MUST also use 'saveMemory' to store a 'Fix Blueprint' with a clear description so this can be used later.
-
-TOOL SOURCE [${toolFileName}]:
-${toolSource}` 
+                    content: SelfHealingRuntime.buildRepairDiagnosticPayload({ blueprintContext, toolSource, toolFileName }) 
                 });
                 return;
             }
@@ -3145,48 +2745,138 @@ ${toolSource}`
         await this.resume(`Boss approved repair mode. Repair the issue safely and continue.`);
     }
 
-    _detectMissingKeys(resultString) {
-        const text = String(resultString || '');
-        const directKeys = Array.from(new Set((text.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) || []).filter((key) => key.includes('_'))));
-        if (directKeys.length) return directKeys;
+    async _handleUnhandledRuntimeError(error) {
+        const classification = RuntimeFailureRuntime.classifyRuntimeFailure(error);
+        if (!classification) return false;
 
-        const inferred = [];
-        const lower = text.toLowerCase();
-        if (lower.includes('meta api token missing') || lower.includes('meta access token')) inferred.push('META_ACCESS_TOKEN');
-        if (lower.includes('missing page id')) inferred.push('META_PAGE_ID');
-        if (lower.includes('gmail credentials')) inferred.push('GMAIL_USER', 'GMAIL_APP_PASSWORD');
-        if (lower.includes('whatsapp credentials')) inferred.push('META_ACCESS_TOKEN', 'WHATSAPP_PHONE_ID');
-        if (lower.includes('linkedin_access_token') || lower.includes('linkedin access token')) inferred.push('LINKEDIN_ACCESS_TOKEN');
-        if (lower.includes('openrouter_api_token')) inferred.push('OPENROUTER_API_TOKEN');
-        if (lower.includes('replicate_api_token')) inferred.push('REPLICATE_API_TOKEN');
-        if (lower.includes('brave_search_api_key')) inferred.push('BRAVE_SEARCH_API_KEY');
-        return Array.from(new Set(inferred));
+        const pending = RuntimeFailureRuntime.buildRuntimeRepairRequest({
+            classification,
+            error,
+            sourceFile: 'index.js'
+        });
+
+        this.pendingRepair = {
+            requestedAt: pending.requestedAt,
+            toolCall: { name: 'orchestratorRuntime', args: { sourceFile: pending.sourceFile } },
+            classification: pending.classification,
+            playbook: {
+                strategy: 'boss_repair_mode',
+                message: pending.message
+            }
+        };
+        this._recordAudit('runtime_self_healing_detected', {
+            sourceFile: pending.sourceFile,
+            classification: pending.classification.type,
+            summary: pending.classification.summary
+        });
+        this.onUpdate({
+            type: 'repair_suggested',
+            message: pending.message
+        });
+        this.isWaitingForInput = true;
+        this._finishRun('paused');
+        return true;
+    }
+
+    _detectMissingKeys(resultString) {
+        return RequirementRuntime.inferMissingKeys(resultString);
+    }
+
+    _looksLikeMetaToken(value = '') {
+        return /^EAA[\w]+/i.test(String(value || '').trim());
     }
 
     async _handleToolRequirement(toolCall, resultString) {
-        const text = String(resultString || '');
-        const lower = text.toLowerCase();
-        if (!(lower.includes('missing') || lower.includes('not configured') || lower.includes('not initialized'))) return false;
-
-        const keys = this._detectMissingKeys(text);
-        if (!keys.length) return false;
-
         const scopeLabel = this.currentClientId ? 'current client' : 'Boss workspace';
+        const classification = RequirementRuntime.classifyToolRequirement({
+            toolCall,
+            resultString,
+            scope: this.currentClientId ? 'client' : 'boss',
+            scopeLabel,
+            looksLikeMetaToken: (value) => this._looksLikeMetaToken(value)
+        });
+        if (!classification) return false;
 
         this.pendingRequirement = {
             requestedAt: new Date().toISOString(),
             toolCall,
-            keys,
-            scope: this.currentClientId ? 'client' : 'boss'
+            keys: classification.keys,
+            scope: classification.scope,
+            kind: classification.kind || 'config'
         };
-        const keyMessage = keys.length === 1
-            ? `Reply with the value for ${keys[0]} and Nexus will save it to the ${scopeLabel}, then continue.`
-            : `Reply using KEY=value or KEY: value lines for these settings: ${keys.join(', ')}. Nexus will save them to the ${scopeLabel}, then continue.`;
         this.onUpdate({
             type: 'input_requested',
-            message: `Mission is blocked by missing configuration for ${toolCall.name}: ${keys.join(', ')}.\n\nSave target: ${scopeLabel}.\n${keyMessage}`
+            message: classification.message
         });
         return true;
+    }
+
+    async _handleApprovalResponse(userInput) {
+        const decision = GovernanceService.isApprovalResponse(userInput);
+        const pending = this.pendingApproval;
+        if (decision === null) {
+            this.onUpdate({ type: 'input_requested', message: GovernanceRuntime.buildApprovalPromptMessage(pending) });
+            return;
+        }
+
+        this.isRunning = true;
+        this.isStopped = false;
+        this.isWaitingForInput = false;
+
+        try {
+            if (!decision) {
+                this._recordAudit('approval_rejected', { tool: pending.toolCall.name, preview: pending.preview });
+                this.context.push({ role: 'user', content: `Approval rejected by user: ${userInput}` });
+                this.pendingApproval = null;
+                this.onUpdate({ type: 'thought', message: `Approval rejected for ${pending.toolCall.name}. Mission will continue without executing it.` });
+                await this._runLoop(null);
+                return;
+            }
+
+            const approvedCall = GovernanceRuntime.buildApprovedCall(pending);
+            this.pendingApproval = null;
+            const result = await this._dispatchTool(approvedCall, { skipGovernance: true });
+            this._captureToolOutcome(approvedCall, result);
+            this.onUpdate({ type: 'result', message: this._formatToolResult(result).slice(0, 5000) });
+            this.context.push({ role: 'tool', name: approvedCall.name, content: result });
+            if (this._isMetaOrganicPublishAction(approvedCall)) {
+                if (this._isSuccessfulMetaPublishResult(result)) {
+                    this._setWorkflowState({
+                        domain: 'marketing',
+                        channel: 'meta',
+                        mode: 'organic_publish',
+                        stage: 'published'
+                    });
+                    this.onUpdate({ type: 'complete', message: this._formatMetaPublishSuccess(result, this.currentOrganicMetaDraft) });
+                    this._finishRun('completed');
+                    return;
+                }
+                this._setWorkflowState({
+                    domain: 'marketing',
+                    channel: 'meta',
+                    mode: 'organic_publish',
+                    stage: 'publish_failed'
+                });
+                if (await this._handleToolRequirement(approvedCall, this._formatToolResult(result))) {
+                    this.isWaitingForInput = true;
+                    this._finishRun('paused');
+                    return;
+                }
+                this.onUpdate({ type: 'error', message: `Organic Meta publish failed.\n${this._formatToolResult(result).slice(0, 5000)}` });
+                this.isWaitingForInput = true;
+                this._finishRun('paused');
+                return;
+            }
+            if (!this._isExternalActionConfirmed(approvedCall.name, result)) {
+                this.onUpdate({ type: 'error', message: `${approvedCall.name} did not return a confirmed success response.\n${this._formatToolResult(result).slice(0, 5000)}` });
+                this.isWaitingForInput = true;
+                this._finishRun('paused');
+                return;
+            }
+            await this._runLoop(null);
+        } finally {
+            this.isRunning = false;
+        }
     }
 
     async _saveRequirementValues(values) {
@@ -3206,7 +2896,10 @@ ${toolSource}`
         const pending = this.pendingRequirement;
         const trimmed = String(userInput || '').trim();
         if (!trimmed) {
-            this.onUpdate({ type: 'input_requested', message: `Still waiting for ${pending.keys.join(', ')}. I will save them to the ${pending.scope === 'client' ? 'current client' : 'Boss workspace'}.` });
+            const waitMessage = pending.kind === 'transient_asset'
+                ? `Still waiting for ${pending.keys.join(', ')} for the current mission. Reply with the image/file URL or local path.`
+                : `Still waiting for ${pending.keys.join(', ')}. I will save them to the ${pending.scope === 'client' ? 'current client' : 'Boss workspace'}.`;
+            this.onUpdate({ type: 'input_requested', message: waitMessage });
             return;
         }
 
@@ -3240,7 +2933,8 @@ ${toolSource}`
         }
 
         let values = {};
-        if (pending.keys.length === 1 && !trimmed.includes('=')) {
+        const isSingleKeyUrlLike = pending.keys.length === 1 && /^https?:\/\//i.test(trimmed);
+        if (pending.keys.length === 1 && (!trimmed.includes('=') && !trimmed.includes(':') || isSingleKeyUrlLike)) {
             values[pending.keys[0]] = trimmed;
         } else {
             const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -3260,6 +2954,27 @@ ${toolSource}`
             return;
         }
 
+        if (pending.kind === 'transient_asset') {
+            const assetValue = values[pending.keys[0]];
+            if (this.currentOrganicMetaDraft) {
+                this.currentOrganicMetaDraft.imagePath = assetValue;
+                this.currentOrganicMetaDraft.imageUrl = assetValue;
+            }
+            if (this.pendingApproval?.toolCall?.name === 'metaAds') {
+                this.pendingApproval.toolCall.args = {
+                    ...(this.pendingApproval.toolCall.args || {}),
+                    imagePath: assetValue
+                };
+            }
+            this.lastUploadedFile = assetValue;
+            this._recordAudit('requirement_supplied', { keys: pending.keys, tool: pending.toolCall.name, kind: pending.kind });
+            this.context.push({ role: 'user', content: `Boss supplied required mission asset for ${pending.keys.join(', ')}. Continue the current mission.` });
+            this.pendingRequirement = null;
+            this.onUpdate({ type: 'thought', message: `Using supplied ${pending.keys.join(', ')} for the current mission and resuming.` });
+            await this.resume('Required mission asset has been provided. Continue the current mission using that asset without asking for the same field again.');
+            return;
+        }
+
         const saveMeta = await this._saveRequirementValues(values);
         this._recordAudit('requirement_saved', { keys: pending.keys, tool: pending.toolCall.name });
         this.context.push({ role: 'user', content: `Boss supplied required configuration for ${pending.keys.join(', ')}. Continue the current mission.` });
@@ -3270,6 +2985,7 @@ ${toolSource}`
 
     _beginRun(request) {
         this.stepCount = 0; // Reset step counter for each new mission
+        this.lastMissionStatusSignature = null;
         this.currentRun = {
             id: `run_${Date.now()}`,
             requestPreview: String(request || '').trim().slice(0, 160) || 'Mission',
@@ -3365,59 +3081,14 @@ ${toolSource}`
      * Gets the current serializable state for persistence.
      */
     getPersistentState() {
-        return {
-            context: this.context,
-            lastUploadedFile: this.lastUploadedFile,
-            stepCount: this.stepCount,
-            currentClientId: this.currentClientId,
-            currentMarketingWorkflow: this.currentMarketingWorkflow,
-            missionMode: this.currentMissionMode,
-            manualMissionMode: this.manualMissionMode,
-            isWaitingForInput: this.isWaitingForInput,
-            currentRun: this.currentRun,
-            recentRuns: this.recentRuns,
-            currentOrganicMetaDraft: this.currentOrganicMetaDraft,
-            currentWorkflowState: this.currentWorkflowState,
-            currentMissionArtifact: this.currentMissionArtifact || null,
-            missionArtifactHistory: this.missionArtifactHistory || [],
-            pendingActionChain: this.pendingActionChain || [],
-            lastPublishedTargets: this.lastPublishedTargets || [],
-            activeMissionDomain: this.activeMissionDomain || 'general',
-            missionTaskStack: this.missionTaskStack || [],
-            pendingApproval: this.pendingApproval,
-            pendingRepair: this.pendingRepair,
-            auditTrail: this.auditTrail,
-            recoveryHistory: this.recoveryHistory
-        };
+        return MissionStateRuntime.buildPersistentState(this);
     }
 
     /**
      * Loads a previously saved state.
      */
     restorePersistentState(state) {
-        if (!state) return;
-        if (state.context) this.context = state.context;
-        if (state.lastUploadedFile) this.lastUploadedFile = state.lastUploadedFile;
-        if (state.currentClientId !== undefined) this.currentClientId = state.currentClientId;
-        if (state.currentMarketingWorkflow !== undefined) this.currentMarketingWorkflow = state.currentMarketingWorkflow;
-        if (state.missionMode !== undefined) this.currentMissionMode = state.missionMode;
-        if (state.manualMissionMode !== undefined) this.manualMissionMode = state.manualMissionMode;
-        if (state.isWaitingForInput !== undefined) this.isWaitingForInput = state.isWaitingForInput;
-        if (state.currentRun) this.currentRun = state.currentRun;
-        if (state.recentRuns) this.recentRuns = state.recentRuns;
-        if (state.currentOrganicMetaDraft) this.currentOrganicMetaDraft = state.currentOrganicMetaDraft;
-        if (state.currentWorkflowState) this.currentWorkflowState = state.currentWorkflowState;
-        if (state.currentMissionArtifact) this.currentMissionArtifact = state.currentMissionArtifact;
-        if (state.missionArtifactHistory) this.missionArtifactHistory = state.missionArtifactHistory;
-        if (state.pendingActionChain) this.pendingActionChain = state.pendingActionChain;
-        if (state.lastPublishedTargets) this.lastPublishedTargets = state.lastPublishedTargets;
-        if (state.activeMissionDomain) this.activeMissionDomain = state.activeMissionDomain;
-        if (state.missionTaskStack) this.missionTaskStack = state.missionTaskStack;
-        if (state.pendingApproval) this.pendingApproval = state.pendingApproval;
-        if (state.pendingRequirement) this.pendingRequirement = state.pendingRequirement;
-        if (state.pendingRepair) this.pendingRepair = state.pendingRepair;
-        if (state.auditTrail) this.auditTrail = state.auditTrail;
-        if (state.recoveryHistory) this.recoveryHistory = state.recoveryHistory;
+        MissionStateRuntime.restorePersistentState(this, state);
     }
 }
 
@@ -3438,6 +3109,9 @@ if (require.main === module) {
 }
 
 module.exports = NexusOrchestrator;
+
+
+
 
 
 

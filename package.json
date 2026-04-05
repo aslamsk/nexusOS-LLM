@@ -10,9 +10,10 @@
     "test": "node tests/run-marketing-tests.js",
     "test:nexus-guards": "node tests/test_nexus_regression_guards.js",
     "test:browser": "node tests/browser-tool-smoke.js",
+    "test:e2e-critical:live": "node tests/e2e_critical_live_batch.js",
     "verify:deploy": "node -c server.js && node -c index.js && node -c core/marketing.js && node -c core/marketingPrompts.js && node -c core/marketingTemplates.js && node -c tools/marketingUtils.js && npm.cmd test && npm.cmd run test:nexus-guards && cd frontend && npm.cmd run build -- --configLoader native",
     "test:tools-smoke": "node tests/tool_smoke_matrix.js",
-    "test:e2e-critical:plan": "node -e \"console.log('See tests/TOOL_STABILITY_PLAN.md for the critical E2E execution order.')\""
+    "test:e2e-critical:plan": "node tests/e2e_critical_matrix.js"
   },
   "keywords": [],
   "author": "",

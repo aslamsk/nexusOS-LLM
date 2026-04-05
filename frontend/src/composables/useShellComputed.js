@@ -138,6 +138,24 @@ export function useShellComputed(options) {
     const latestEngineLog = [...runtimeLogs.value].reverse().find((entry) => entry.type === 'thought' && String(entry.message || '').startsWith('Execution engine:'))
     return latestEngineLog ? String(latestEngineLog.message || '').replace(/^Execution engine:\s*/, '') : 'Waiting for the next tool call.'
   })
+  const latestMissionStatus = computed(() => {
+    const latestMissionLog = [...runtimeLogs.value].reverse().find((entry) => entry.type === 'thought' && String(entry.message || '').startsWith('Mission Status:'))
+    const raw = latestMissionLog ? String(latestMissionLog.message || '').replace(/^Mission Status:\s*/, '').trim() : ''
+    const parsed = { raw, phase: '', mode: '', domain: '', tool: '', waitingFor: '', detail: '' }
+    if (!raw) return parsed
+    raw.split('|').map((chunk) => chunk.trim()).forEach((chunk) => {
+      const [key, ...rest] = chunk.split('=')
+      const value = rest.join('=').trim()
+      if (!key || !value) return
+      if (key === 'phase') parsed.phase = value
+      if (key === 'mode') parsed.mode = value
+      if (key === 'domain') parsed.domain = value
+      if (key === 'tool') parsed.tool = value
+      if (key === 'waiting_for') parsed.waitingFor = value
+      if (key === 'detail') parsed.detail = value
+    })
+    return parsed
+  })
   const engineThemeClass = computed(() => {
     const provider = String(llmStatus.value.provider || '').toLowerCase()
     if (provider.includes('openrouter')) return 'engine-openrouter'
@@ -146,6 +164,19 @@ export function useShellComputed(options) {
     return 'engine-gemini'
   })
   const currentStage = computed(() => {
+    if (latestMissionStatus.value.phase) {
+      const phaseMap = {
+        routing: 'Routing',
+        llm_wait: 'Waiting On Model',
+        executing_tool: 'Executing Tool',
+        awaiting_approval: 'Awaiting Approval',
+        blocked: 'Blocked'
+      }
+      return {
+        label: phaseMap[latestMissionStatus.value.phase] || 'Active',
+        detail: latestMissionStatus.value.detail || latestMissionStatus.value.raw || 'Mission is in progress.'
+      }
+    }
     const latest = runtimeLogs.value.at(-1)
     if (!latest) return { label: 'Idle', detail: 'Ready for the next mission.' }
     if (latest.type === 'step') return { label: 'Planning', detail: latest.message }
@@ -244,6 +275,7 @@ export function useShellComputed(options) {
     pendingApprovalSummary,
     modeRoutingHint,
     currentEngine,
+    latestMissionStatus,
     engineThemeClass,
     currentStage,
     hasWaitingMission,

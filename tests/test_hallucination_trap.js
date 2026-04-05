@@ -1,72 +1,48 @@
+const assert = require('assert');
 const NexusOrchestrator = require('../index');
-const LLMService = require('../core/llm');
 
-async function testHallucinationTrap() {
-    console.log("--- Testing Hallucination Trap ---");
-    
-    // Mock LLM response that simulates a hallucination
-    const mockHallucination = {
-        text: "I have successfully generated the image for you. Here it is: [Image: boy_pickle.png]. Task Complete.",
-        toolCall: null,
-        provider: 'Gemini',
-        model: 'gemini-1.5-pro'
-    };
+function testHallucinationTrap() {
+    console.log('--- Testing Hallucination Trap ---');
 
-    // Override LLMService to return our mock
-    const originalGenerate = LLMService.prototype.generateResponse;
-    LLMService.prototype.generateResponse = async () => {
-        console.log("[Mock LLM] Returning hallucination content...");
-        return mockHallucination;
-    };
+    const orchestrator = new NexusOrchestrator();
 
-    let trapTriggered = false;
+    const hallucinatedImage = 'I have successfully generated the image for you. Here it is: [Image: boy_pickle.png]. Task Complete.';
+    orchestrator.currentTaskContract = orchestrator._buildTaskContract('Generate an image of a boy.');
 
-    const orchestrator = new NexusOrchestrator((event) => {
-        if (event.type === 'thought') {
-            console.log(`[Thought] ${event.message}`);
-            if (event.message.includes('Detection') && event.message.includes('Narrated action without tool call')) {
-                trapTriggered = true;
-                console.log("✅ SUCCESS: Narrative Guard triggered and emitted warning.");
-            }
-        } else if (event.type === 'complete') {
-            console.log(`[Complete] ${event.message}`);
-        } else if (event.type === 'error') {
-            console.log(`[Error] ${event.message}`);
-        }
-    });
+    assert.strictEqual(
+        orchestrator._containsNarratedToolSuccess(hallucinatedImage),
+        true,
+        'Narrated fake image success should be detected'
+    );
 
-    try {
-        console.log("Starting mission execution...");
-        
-        // Execute the mission
-        const execPromise = orchestrator.execute("Generate an image of a boy.");
-        
-        // Timeout to stop it after it triggers
-        const timeout = setTimeout(() => {
-            console.log("[Test] stopping orchestrator...");
-            orchestrator.isStopped = true; 
-        }, 12000);
+    const imageCorrection = orchestrator._buildNarratedActionCorrection('Generate an image of a boy.');
+    assert.ok(
+        imageCorrection.includes('generateImage'),
+        'Image hallucination correction should force generateImage'
+    );
 
-        await execPromise;
-        clearTimeout(timeout);
+    orchestrator.currentTaskContract = orchestrator._buildTaskContract('create a quote for monthly services');
+    const hallucinatedQuote = 'Quote is ready and saved to proposal.pdf. Mission complete.';
+    assert.strictEqual(
+        orchestrator._containsNarratedToolSuccess(hallucinatedQuote),
+        true,
+        'Narrated fake quote deliverable should be detected'
+    );
 
-        if (trapTriggered) {
-            console.log("--- Hallucination Trap Test PASSED ---");
-            process.exit(0);
-        } else {
-            console.error("❌ FAILURE: Narrative Guard failed to trigger.");
-            process.exit(1);
-        }
-    } catch (err) {
-        if (trapTriggered) {
-            console.log("--- Hallucination Trap Test PASSED (stopped/error but triggered) ---");
-            process.exit(0);
-        }
-        console.error(`[Test Error] ${err.message}`);
-        process.exit(1);
-    } finally {
-        LLMService.prototype.generateResponse = originalGenerate;
-    }
+    const quoteCorrection = orchestrator._buildNarratedActionCorrection('create a quote for monthly services');
+    assert.ok(
+        quoteCorrection.includes('buildAgencyQuotePlan') || quoteCorrection.includes('createAgencyQuoteArtifacts'),
+        'Commercial hallucination correction should force quote tools'
+    );
+
+    orchestrator.currentTaskContract = orchestrator._buildTaskContract('open https://example.com and fill the form');
+    const browserCorrection = orchestrator._buildNarratedActionCorrection('open https://example.com and fill the form');
+    assert.ok(
+        browserCorrection.includes('browserAction'),
+        'Browser hallucination correction should force browserAction'
+    );
+
+    console.log('--- Hallucination Trap Test PASSED ---');
 }
 
 testHallucinationTrap();

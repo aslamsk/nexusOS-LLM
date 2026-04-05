@@ -98,6 +98,20 @@ function buildDiagnostic(requiredKeys, has) {
     };
 }
 
+function formatJobErrorForBoss(errorMessage = '') {
+    const text = String(errorMessage || '').trim();
+    if (!text) return 'Unknown failure';
+    const lower = text.toLowerCase();
+    if (lower.includes('captcha')) return 'CAPTCHA detected on the page';
+    if (lower.includes('otp') || lower.includes('verification code')) return 'OTP / verification code required';
+    if (lower.includes('checkpoint')) return 'Account checkpoint / identity confirmation detected';
+    if (lower.includes('mfa') || lower.includes('two-factor') || lower.includes('2fa')) return 'MFA required';
+    if (lower.includes('resource_exhausted') || lower.includes('quota')) return 'Provider quota exhausted';
+    if (lower.includes('invalid_argument') || lower.includes('generatecontentrequest.contents')) return 'Provider payload formatting error';
+    if (lower.includes('missing') && lower.includes('_')) return text;
+    return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+}
+
 function buildAnyKeyDiagnostic(candidateKeys, has) {
     const configuredKeys = candidateKeys.filter((key) => has(key));
     return {
@@ -1996,9 +2010,10 @@ io.on('connection', (socket) => {
                 const delayMs = BASE_RETRY_DELAY_MS * Math.pow(2, nextJob.attempts - 1);
                 nextJob.status = 'retry_wait';
                 nextJob.nextRunAt = new Date(Date.now() + delayMs).toISOString();
+                const bossReason = formatJobErrorForBoss(error.message);
                 socket.emit('nexus_log', {
                     type: 'thought',
-                    message: `Mission failed for the Boss and will retry automatically in ${Math.round(delayMs / 1000)}s. Attempt ${nextJob.attempts + 1}/${MAX_JOB_ATTEMPTS}.`
+                    message: `Mission failed for the Boss and will retry automatically in ${Math.round(delayMs / 1000)}s. Attempt ${nextJob.attempts + 1}/${MAX_JOB_ATTEMPTS}. Reason: ${bossReason}.`
                 });
             } else {
                 nextJob.status = 'dead_letter';

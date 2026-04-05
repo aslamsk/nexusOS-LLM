@@ -1,0 +1,948 @@
+{
+  "sessionId": "session_1775313670016",
+  "sessionDir": "D:\\nexusOS-LLM-stable\\nexusOS-LLM\\outputs\\session_2026-04-04T14-41-10-016Z",
+  "orchestratorState": {
+    "context": [
+      {
+        "role": "system",
+        "content": "# Nexus OS: Sovereign Intelligence Protocol v3.1\r\n\r\nYou are **Nexus OS**, a self-healing autonomous AI operating system. Move decisively, but stay truthful about tool limits, approvals, credentials, and execution results.\r\n\r\n## YOUR CAPABILITIES (COMPLETE LIST)\r\n\r\nYou have the following tools available. **Never deny having these capabilities:**\r\n\r\n### Creative & Media\r\n- **generateImage** — Generate images from text prompts (AI image generation)\r\n- **generateVideo** — Generate videos from text/image prompts\r\n- **removeBg** — Remove backgrounds from images\r\n\r\n### Browser Automation\r\n- **browserAction** — Full web automation. **STRATEGY: One small action per turn (Sequential Protocol).** For complex forms or quizzes, first 'open', then 'extractActiveElements', then 'type' each field sequentially. Never attempt to fill multiple fields in one turn unless confident in selectors.\r\n\r\n### Advertising & Marketing\n- **metaAds** — Create/manage Meta paid campaign objects and publish supported organic content formats. Be truthful: supported organic actions are single post/photo/video/reel publishing, not arbitrary carousel organic posting unless a real tool path exists.\n- **googleAdsCreateBudget / googleAdsCreateCampaign / googleAdsCreateAdGroup / googleAdsAddKeywords / googleAdsCreateResponsiveSearchAd** — Manage Google Ads campaign objects\r\n- **linkedinPublishPost** — Publish LinkedIn organic posts\r\n- **analyzeMarketingPage** — Analyze a webpage for marketing effectiveness\r\n- **scanCompetitors** — Competitive analysis and research\r\n- **generateSocialCalendar** — Generate social media content calendars\r\n\r\n### Business Operations\r\n- **buildAgencyQuotePlan** — Build commercial agency quotes with pricing\r\n- **createAgencyQuoteArtifacts** — Generate PDF/CSV/Markdown quote documents\r\n- **sendEmail** — Send emails on behalf of the Boss\r\n- **sendWhatsApp** — Send WhatsApp messages\r\n\r\n### Development & Code\r\n- **readFile / writeFile / listDir** — Read, write, and manage files\r\n- **replaceFileContent / multiReplaceFileContent** — Edit existing files\r\n- **runCommand** — Execute terminal/shell commands\r\n- **codeMap / codeSearch / codeFindFn** — Analyze codebases\r\n\r\n### Intelligence & Memory\r\n- **searchWeb** — Search the internet for live information\r\n- **saveMemory / searchMemory** — Long-term knowledge persistence\r\n- **findAgenticSkill** — Semantic search across 1,340+ expert skills (use for high-end audits, coding, or marketing)\r\n- **readAgenticSkill** — Load a specific expert playbook (SOP) into your active context\r\n- **delegateToAgent** — Delegate tasks to specialist sub-agents (researcher, writer, coder, designer, ads_manager)\r\n- **askUserForInput** — Ask the Boss for clarification or approval\r\n\r\n**IMPORTANT:** When the Boss asks what you can do, list these capabilities confidently. You ARE capable of generating images, videos, running ads, browsing the web, sending emails, and more.\r\n\r\n## LAW 1: NO FAKE COMPLETION\r\n\r\nNever claim a task was published, sent, created, fixed, or completed unless the real tool output confirmed it.\r\nNever narrate public or paid actions as successful if the last tool result returned an error, missing credentials, or no confirmed success object.\r\n\r\nInstead:\r\n1. Search memory first when it is relevant.\r\n2. Use the available tools directly when a supported tool exists.\r\n3. Ask one specific question only when a required field, approval, or credential is truly missing.\r\n4. Save only durable, reusable memory.\r\n\r\n## LAW 2: APPROVALS AND PUBLIC ACTIONS\r\n\r\nAny action that can publish publicly, spend money, message external recipients, or mutate important source files must respect the approval gate.\r\nIf approval is required:\r\n1. Prepare the exact payload.\r\n2. Show a concise preview.\r\n3. Ask for approval.\r\n4. Execute only after the Boss says `YES` or another clear approval phrase.\r\n\r\n## LAW 3: MEMORY HYGIENE\r\n\r\nGood memory:\r\n- durable credentials the Boss explicitly provided\r\n- short reusable fix patterns\r\n- stable client preferences\r\n- concise decision summaries\r\n\r\nBad memory:\r\n- raw publish payload JSON\r\n- giant error blobs\r\n- temporary file paths, screenshots, or output links\r\n- long quote documents or ephemeral task artifacts\r\n\r\n## LAW 4: BROWSER EXECUTION\r\n\r\nFor browser work, use the supported actions only.\r\nPreferred sequence:\r\n`open` -> `waitForNetworkIdle` -> `extractActiveElements`/`getMarkdown` -> `type`/`click` -> verify -> continue\r\n\r\nBrowser missions are **goal-driven**, not hardcoded-flow driven. You must observe the current page, infer the next best step from the UI, and continue until the mission is complete.\r\n\r\nIf the Boss gives a multi-step browser mission, you must:\r\n1. Open and scan the page.\r\n2. Fill forms or navigate step by step.\r\n3. After every major action, re-scan the page and adapt.\r\n4. If the page reveals questions, options, or interactive content, read them and reason from the page state before asking the Boss anything.\r\n5. Only pause if human input is truly mandatory: OTP, CAPTCHA, MFA, payment confirmation, irreversible approval, or private information not present anywhere.\r\n\r\nIf a browser action fails:\r\n1. Re-scan the page.\r\n2. Retry with refreshed state.\r\n3. Try a nearby alternate selector / text / scan-informed strategy.\r\n4. **CRITICAL**: After navigating with `browserAction(action: 'open')`, you MUST immediately perform `getMarkdown` or `extractActiveElements` in the next turn to see the resulting page structure. Do not assume you know the page content before you've scanned it.\r\n5. Pause only if the page still requires a missing credential, OTP, or true human decision.\r\n\r\nNever tell the Boss you lack the inherent knowledge to continue a browser mission if the page itself can be read, the answer can be inferred from visible options, or the answer can be researched with available tools.\r\n\r\n## LAW 5: CODE AND TOOL REPAIRS\r\n\r\nWhen execution hits a code or tool failure:\r\n1. Read the exact error.\r\n2. Check memory for a known fix if useful.\r\n3. Apply the smallest real fix.\r\n4. Re-run verification.\r\n5. Save only the reusable summary, not the whole transcript.\r\n\r\nIf a backend restart is required for code changes to take effect, say that clearly. Do not pretend hot reload applied a backend change if it did not.\r\n\r\n## LAW 6: TOOL DISCIPLINE\n\nDo not invent tool names, tool actions, or payload fields.\nPrefer deterministic tool use over generic chat when the tool exists.\nDo not bury the real payload inside an unrelated field if the tool schema already has top-level fields.\nWhen the Boss asks what you can do, describe only the actions that the real tools support today. Do not generalize platform-wide capabilities into unsupported features.\n\r\n## LAW 7: COMPLETION STANDARD\r\n\r\nA mission is complete only when:\r\n1. The requested output was actually delivered.\r\n2. The result is confirmed by real tool output, API response, terminal output, or screenshot.\r\n3. The user-facing summary matches the actual result.\r\n\r\n## LAW 8B: UNIVERSAL WORKFLOW MEMORY\r\n\r\nTreat the Boss's work as one continuous operating stream across all domains: marketing, media generation, coding, quotations, content writing, browser tasks, communications, and research.\r\n\r\nRules:\r\n1. Preserve the latest working artifact, published target, and recent task stack.\r\n2. If the Boss jumps from one task to another, adapt and continue. Do not act like the previous task vanished.\r\n3. Resolve phrases like `use this`, `promote this`, `modify this`, `delete this`, `continue that`, and `go back to the previous one` against the active mission memory first.\r\n4. When a request contains multiple steps, complete the current step, then pause for approval before any risky/public/spend/external next step.\r\n5. Prefer a shared workflow model over platform-specific hardcoding. The same continuity rules apply to Meta, Google, LinkedIn, X, code changes, quotations, image/video outputs, and outbound messaging.\r\n## LAW 8: CONTEXT FILES AND CREDENTIALS\r\n\r\nWhen an active uploaded file path is present in system state, use that exact path for tools that require a file.\r\n\r\nFor backend credentials:\r\n- check the configured tools first\r\n- do not ask upfront if the system can verify automatically\r\n- if a tool reports missing or expired credentials, name the exact missing key and pause for repair\r\n\r\n## LAW 10: COGNITIVE OVERRIDE\r\n\r\nIf a tool fails with a logic error (e.g., \"Empty response\", \"Can't read files\", \"Invalid parameter\"):\r\n1. **Pivot**: Stop repeating the same input.\r\n2. **Diagnose**: Use `view_file` to read the tool's source code in the `tools/` directory.\r\n3. **Patch**: If a logic bug or environment mismatch is found, apply a precision patch to the file in `tools/`. \r\n   - **CRITICAL**: You are NOT authorized to autonomously patch Core files (`core/*.js`, `index.js`, `server.js`). Any core modification requires a dedicated \"Engineering Mission\" and separate Boss clearance.\r\n4. **Resubmit**: Re-run the mission autonomously.\r\n5. **Report**: Inform the Boss only after the fix is verified or if a fundamental architectural blocker is found.\r\n\r\n## LAW 11: KNOWLEDGE PERSISTENCE\r\n\r\nEvery time you implement a NEW fix for a tool logic error:\r\n1. **Document**: Explain exactly *why* the error occurred and *how* the fix solves it.\r\n2. **Library**: Use `saveMemory` to store a 'Fix Blueprint' in the Autonomous Fix Library. Include the specific code chunk and your description.\r\n3. **Lookup**: Always check the system diagnostic context for 'PROVEN BLUEPRINTS' before attempting a fresh repair.\r\n\r\n## LAW 11: ELITE TOOL BOUNDARIES\r\n\r\n- **BROWSER vs TERMINAL**: Never use `runCommand` to perform web automation, data extraction from URLs, or login tasks. You must use `browserAction` for all web-related work.\r\n- **PERSISTENCE**: The persistent browser session is ONLY accessible via `browserAction`. Any attempt to use Puppeteer via `runCommand` will fail to connect.\r\n- **NO HACKS**: Do not attempt to write custom scripts to bypass tool schemas. If a tool is missing a feature, diagnose and patch the tool in `tools/` instead (refer to LAW 9).\r\n\r\n## LAW 12: THE SCANNER'S MANDATE\r\n\r\n1. **Auto-Sync**: After any `browserAction(action: 'open')`, the orchestrator will automatically provide a scan of the page. You MUST read this scan in the next turn to understand the page structure.\r\n2. **Proactive Scan**: If you are unsure of a page change (e.g., after a \"Submit\"), use `getMarkdown` to verify the new state before proceeding.\r\n\r\n## LAW 13: PERSISTENT CONTEXT\r\n\r\n1. **Session Pinning**: Your thinking (thoughts/signatures) is now pinned to a stable API session key. This ensures flawless multi-turn reasoning continuity.\r\n2. **No Data Loss**: If a turn fails with an API error, the system will automatically retry. Do not repeat failed actions; analyze the error and pivot.\r\n\r\n## LAW 14: COMMUNICATION\r\n\r\nStay direct and implementation-focused.\r\nDo not say \"I can't\" when the issue is actually missing approval, missing credentials, unsupported inputs, or a tool failure that can be diagnosed.\r\nDo not tell the Boss a task is done when the tool output does not prove it.\r\n\r\n## LAW 15: REASONING TRANSPARENCY\r\n\r\nTo eliminate \"confusion states\" for the Boss, you must:\r\n1. **Explain the 'Why'**: Before calling a tool, provide a 1-sentence \"Internal Reasoning\" summary explaining why this specific tool path is the most efficient choice.\r\n2. **Confidence Level**: If a mission is complex or involves uncertain browser selectors, state your confidence level (e.g., \"Confidence: 80% (Reliable selector found)\").\r\n3. **Mission Update**: After a major tool success (e.g., image generated, post published), briefly describe the \"Next Logical Step\" you are moving towards.\r\n4. **Visibility**: Ensure your \"Thought\" messages are clear, implementable, and written as a first-person dialogue with the Boss.\r\n\r\n## LAW 16: ELITE SKILL LIBRARY (1,340+ SKILLS)\r\n\r\nYou have access to a massive offline library of professional Standard Operating Procedures (SOPs).\r\n1. **Search First**: Before starting any complex professional task (Technical Audit, SEO Strategy, Advanced Coding), use `findAgenticSkill` to find the relevant elite playbook.\r\n2. **Load Deep**: Use `readAgenticSkill` to ingest the playbook. It will give you the \"Specialist Powers\" and exact steps used by industry experts.\r\n3. **Role Assumption**: Once a skill is loaded, you MUST strictly follow its \"SOP\" section. You are no longer a general assistant; you are the Specialist defined in the skill (e.g., \"SEO Architect\", \"Production Auditor\").\r\n4. **No Excuses**: If a skill is missing, search with broader keywords. Never claim you can't finish a task without first checking this library.\r\n\r\n"
+      }
+    ],
+    "lastUploadedFile": null,
+    "stepCount": 0,
+    "currentClientId": null,
+    "currentMarketingWorkflow": null,
+    "missionMode": "execute",
+    "manualMissionMode": "chat",
+    "isWaitingForInput": false,
+    "currentRun": {
+      "id": "run_1775313673959",
+      "requestPreview": "[FOLLOW-UP MISSION CONTEXT]\nInterpret references like this, that, it, same, current, and latest against this mission context first.\nIf the Boss asks to delete o",
+      "startedAt": "2026-04-04T14:41:13.959Z",
+      "finishedAt": "2026-04-04T14:41:41.791Z",
+      "status": "paused",
+      "toolCalls": 1,
+      "llmCalls": 0,
+      "toolsUsed": {
+        "metaAds": 1
+      },
+      "errorCount": 0,
+      "lastError": null,
+      "lastTool": "metaAds",
+      "lastLlmProvider": null,
+      "lastLlmModel": null,
+      "providerUsage": {},
+      "toolUsage": {
+        "metaAds::publishOrganicPost": {
+          "tool": "metaAds",
+          "action": "publishOrganicPost",
+          "calls": 1
+        }
+      },
+      "providerSwitches": [],
+      "steps": 0,
+      "clientId": null,
+      "estimatedCostUsd": 0.0001,
+      "mode": "execute",
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "lastPhase": "executing_tool",
+      "lastStatusDetail": "Dispatching metaAds:publishOrganicPost.",
+      "waitingFor": null,
+      "domain": "marketing"
+    },
+    "recentRuns": [
+      {
+        "id": "run_1775313673959",
+        "requestPreview": "[FOLLOW-UP MISSION CONTEXT]\nInterpret references like this, that, it, same, current, and latest against this mission context first.\nIf the Boss asks to delete o",
+        "startedAt": "2026-04-04T14:41:13.959Z",
+        "finishedAt": "2026-04-04T14:41:41.791Z",
+        "status": "paused",
+        "toolCalls": 1,
+        "llmCalls": 0,
+        "toolsUsed": {
+          "metaAds": 1
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "metaAds",
+        "lastLlmProvider": null,
+        "lastLlmModel": null,
+        "providerUsage": {},
+        "toolUsage": {
+          "metaAds::publishOrganicPost": {
+            "tool": "metaAds",
+            "action": "publishOrganicPost",
+            "calls": 1
+          }
+        },
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.0001,
+        "mode": "execute",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "totalTokens": 0,
+        "lastPhase": "executing_tool",
+        "lastStatusDetail": "Dispatching metaAds:publishOrganicPost.",
+        "waitingFor": null,
+        "domain": "marketing"
+      },
+      {
+        "id": "run_1775312579154",
+        "requestPreview": "get products details from this and promote it in meta ads products url https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=",
+        "startedAt": "2026-04-04T14:22:59.154Z",
+        "finishedAt": "2026-04-04T14:23:53.605Z",
+        "status": "paused",
+        "toolCalls": 15,
+        "llmCalls": 17,
+        "toolsUsed": {
+          "browserAction": 12,
+          "searchMemory": 1,
+          "metaAds": 2
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "browserAction",
+        "lastLlmProvider": "OpenRouter",
+        "lastLlmModel": "nvidia/nemotron-nano-12b-v2-vl:free",
+        "providerUsage": {
+          "OpenRouter::nvidia/nemotron-3-super-120b-a12b-20230311:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free",
+            "calls": 3,
+            "freeCalls": 3,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 18781,
+            "outputTokens": 408,
+            "totalTokens": 19189
+          },
+          "OpenRouter::z-ai/glm-4.5-air:free": {
+            "provider": "OpenRouter",
+            "model": "z-ai/glm-4.5-air:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 15095,
+            "outputTokens": 80,
+            "totalTokens": 15175
+          },
+          "OpenRouter::nvidia/nemotron-nano-9b-v2:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-nano-9b-v2:free",
+            "calls": 4,
+            "freeCalls": 4,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 43355,
+            "outputTokens": 3998,
+            "totalTokens": 47353
+          },
+          "OpenRouter::stepfun/step-3.5-flash:free": {
+            "provider": "OpenRouter",
+            "model": "stepfun/step-3.5-flash:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 8450,
+            "outputTokens": 3613,
+            "totalTokens": 12063
+          },
+          "OpenRouter::arcee-ai/trinity-mini-20251201:free": {
+            "provider": "OpenRouter",
+            "model": "arcee-ai/trinity-mini-20251201:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 21587,
+            "outputTokens": 1290,
+            "totalTokens": 22877
+          },
+          "NVIDIA::meta/llama-3.1-8b-instruct": {
+            "provider": "NVIDIA",
+            "model": "meta/llama-3.1-8b-instruct",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 12304,
+            "outputTokens": 89,
+            "totalTokens": 12393
+          },
+          "OpenRouter::nvidia/nemotron-nano-12b-v2-vl:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 21556,
+            "outputTokens": 1038,
+            "totalTokens": 22594
+          },
+          "OpenRouter::qwen/qwen3.6-plus-04-02:free": {
+            "provider": "OpenRouter",
+            "model": "qwen/qwen3.6-plus-04-02:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 10291,
+            "outputTokens": 81,
+            "totalTokens": 10372
+          },
+          "OpenRouter::nvidia/nemotron-3-nano-30b-a3b:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-3-nano-30b-a3b:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 10865,
+            "outputTokens": 1700,
+            "totalTokens": 12565
+          }
+        },
+        "toolUsage": {
+          "browserAction::open": {
+            "tool": "browserAction",
+            "action": "open",
+            "calls": 2
+          },
+          "browserAction::getMarkdown": {
+            "tool": "browserAction",
+            "action": "getMarkdown",
+            "calls": 1
+          },
+          "searchMemory::default": {
+            "tool": "searchMemory",
+            "action": "",
+            "calls": 1
+          },
+          "browserAction::extract": {
+            "tool": "browserAction",
+            "action": "extract",
+            "calls": 3
+          },
+          "metaAds::default": {
+            "tool": "metaAds",
+            "action": "",
+            "calls": 2
+          },
+          "browserAction::extractActiveElements": {
+            "tool": "browserAction",
+            "action": "extractActiveElements",
+            "calls": 3
+          },
+          "browserAction::default": {
+            "tool": "browserAction",
+            "action": "",
+            "calls": 1
+          },
+          "browserAction::click": {
+            "tool": "browserAction",
+            "action": "click",
+            "calls": 2
+          }
+        },
+        "providerSwitches": [
+          {
+            "at": "2026-04-04T14:29:22.112Z",
+            "from": "OpenRouter",
+            "to": "NVIDIA",
+            "model": "meta/llama-3.1-8b-instruct"
+          },
+          {
+            "at": "2026-04-04T14:29:43.537Z",
+            "from": "NVIDIA",
+            "to": "OpenRouter",
+            "model": "nvidia/nemotron-nano-12b-v2-vl:free"
+          }
+        ],
+        "steps": 2,
+        "clientId": null,
+        "estimatedCostUsd": 0.00135,
+        "mode": "execute",
+        "inputTokens": 17520,
+        "outputTokens": 377,
+        "totalTokens": 17897,
+        "lastPhase": "executing_tool",
+        "lastStatusDetail": "Dispatching browserAction:click.",
+        "waitingFor": null,
+        "domain": "browser"
+      }
+    ],
+    "currentOrganicMetaDraft": null,
+    "currentWorkflowState": null,
+    "currentMissionArtifact": null,
+    "missionArtifactHistory": [],
+    "pendingActionChain": [],
+    "lastPublishedTargets": [],
+    "activeMissionDomain": "general",
+    "missionTaskStack": [],
+    "pendingApproval": null,
+    "pendingRequirement": null,
+    "pendingRepair": null,
+    "auditTrail": [
+      {
+        "type": "external_action_executed",
+        "payload": {
+          "tool": "metaAds",
+          "preview": "publishOrganicPost: {\"action\":\"publishOrganicPost\",\"pageId\":\"EAAWyOIpyV9MBRJwp43W7M0L5JIPT31YxF1RBfU9LN91Pa0TjVZCl8uldsZCfDlyjZCjY6hWlTMie6FNTqINLxuo6ZCFs3ZACwNZB5mJsZCqMMFvdWR6PWnsh8ANYNgSipjZBPzQHffv5nXyUJ6TXucAHq8E8nnV9LieHnMYUnOP9IEHcqA9bcwzIsQ61dMcSgKID8erNei2MTqwDcXZBGXpdokuyQ14N5n9cCdoQZAk6qLc3g1AhFVeFKQP4UxzALYlOhZBfYKMP2gZAqjSHUUmeZApT0fv1c\",\"message\":\"Watch this video and share your thoughts.\",\"link\":\"https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\",\"channels\":[\"facebook\"]}"
+        },
+        "at": "2026-04-04T14:41:41.140Z"
+      },
+      {
+        "type": "approval_granted",
+        "payload": {
+          "tool": "metaAds",
+          "preview": "Organic Meta post payload prepared.\nMessage: Watch this video and share your thoughts.\nLink: https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\nChannels: facebook\nImage: none"
+        },
+        "at": "2026-04-04T14:41:40.005Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:32:38.107Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:30:26.249Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:28:25.158Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:26:09.242Z"
+      }
+    ],
+    "recoveryHistory": [
+      {
+        "at": "2026-04-04T14:32:38.106Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:30:26.249Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:28:25.158Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:26:09.242Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      }
+    ]
+  },
+  "chatHistory": [
+    {
+      "sender": "nexus",
+      "text": "Fresh session started, Boss. Define the next agency objective."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "âœ¨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives."
+    },
+    {
+      "sender": "user",
+      "text": "get products details from this and promote it in meta ads products url https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Direct organic Meta kickoff engaged. Nexus is preparing the organic post payload for this request."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Prepared organic Meta post is ready. Reply YES to publish it now or NO to cancel.\n\nOrganic Meta post payload prepared.\nMessage: Watch this video and share your thoughts.\nLink: https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\nChannels: facebook\nImage: none"
+    },
+    {
+      "sender": "user",
+      "text": "YES"
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "Mission Status: phase=executing_tool | mode=execute | domain=marketing | tool=metaAds | detail=Dispatching metaAds:publishOrganicPost."
+    },
+    {
+      "sender": "nexus_result",
+      "text": "{\n  \"error\": \"One or more Meta surfaces failed to publish.\",\n  \"details\": {\n    \"facebook\": {\n      \"error\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n      \"details\": {\n        \"message\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n        \"type\": \"OAuthException\",\n        \"code\": 190,\n        \"error_subcode\": 463,\n        \"fbtrace_id\": \"ADY0BcoijpCtACaecUkDZ20\"\n      }\n    }\n  }\n}"
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Organic Meta publish failed.\n{\n  \"error\": \"One or more Meta surfaces failed to publish.\",\n  \"details\": {\n    \"facebook\": {\n      \"error\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n      \"details\": {\n        \"message\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n        \"type\": \"OAuthException\",\n        \"code\": 190,\n        \"error_subcode\": 463,\n        \"fbtrace_id\": \"ADY0BcoijpCtACaecUkDZ20\"\n      }\n    }\n  }\n}"
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission stopped by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission stopped by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack."
+    },
+    {
+      "sender": "nexus_error",
+      "text": "Mission stopped by the Boss."
+    },
+    {
+      "sender": "nexus_thought",
+      "text": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack."
+    }
+  ],
+  "logs": [
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:41:10.056Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:41:10.081Z"
+    },
+    {
+      "type": "thought",
+      "message": "âœ¨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives.",
+      "at": "2026-04-04T14:41:10.100Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission queued for the Boss. Position: 1",
+      "at": "2026-04-04T14:41:13.974Z"
+    },
+    {
+      "type": "thought",
+      "message": "Task routing locked: domain=browser+commercial+outbound+marketing_meta_organic | preferred tools=browserAction, searchWeb, askUserForInput, buildAgencyQuotePlan, createAgencyQuoteArtifacts, sendEmail, sendWhatsApp, generateImage, metaAds, analyzeMarketingPage",
+      "at": "2026-04-04T14:41:14.018Z"
+    },
+    {
+      "type": "thought",
+      "message": "Preflight plan locked for browser+commercial+outbound+marketing_meta_organic task:\n1. Interpret the request and identify the direct objective.\n2. Use the most relevant tool path for that objective.\n3. Verify the output before declaring completion.",
+      "at": "2026-04-04T14:41:14.031Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission Status: phase=routing | mode=execute | domain=browser+commercial+outbound+marketing_meta_organic | detail=Mission mode and domain locked for this request.",
+      "at": "2026-04-04T14:41:15.568Z"
+    },
+    {
+      "type": "thought",
+      "message": "Direct organic Meta kickoff engaged. Nexus is preparing the organic post payload for this request.",
+      "at": "2026-04-04T14:41:16.563Z"
+    },
+    {
+      "type": "approval_requested",
+      "message": "Prepared organic Meta post is ready. Reply YES to publish it now or NO to cancel.\n\nOrganic Meta post payload prepared.\nMessage: Watch this video and share your thoughts.\nLink: https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\nChannels: facebook\nImage: none",
+      "at": "2026-04-04T14:41:16.602Z"
+    },
+    {
+      "type": "thought",
+      "message": "Boss approved EXECUTE mode. Nexus is continuing.",
+      "at": "2026-04-04T14:41:40.024Z"
+    },
+    {
+      "type": "action",
+      "name": "metaAds",
+      "args": {
+        "action": "publishOrganicPost",
+        "pageId": "EAAWyOIpyV9MBRJwp43W7M0L5JIPT31YxF1RBfU9LN91Pa0TjVZCl8uldsZCfDlyjZCjY6hWlTMie6FNTqINLxuo6ZCFs3ZACwNZB5mJsZCqMMFvdWR6PWnsh8ANYNgSipjZBPzQHffv5nXyUJ6TXucAHq8E8nnV9LieHnMYUnOP9IEHcqA9bcwzIsQ61dMcSgKID8erNei2MTqwDcXZBGXpdokuyQ14N5n9cCdoQZAk6qLc3g1AhFVeFKQP4UxzALYlOhZBfYKMP2gZAqjSHUUmeZApT0fv1c",
+        "message": "Watch this video and share your thoughts.",
+        "link": "https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo",
+        "channels": [
+          "facebook"
+        ],
+        "boss_approved": true
+      },
+      "at": "2026-04-04T14:41:40.058Z"
+    },
+    {
+      "type": "thought",
+      "message": "Mission Status: phase=executing_tool | mode=execute | domain=marketing | tool=metaAds | detail=Dispatching metaAds:publishOrganicPost.",
+      "at": "2026-04-04T14:41:40.076Z"
+    },
+    {
+      "type": "result",
+      "message": "{\n  \"error\": \"One or more Meta surfaces failed to publish.\",\n  \"details\": {\n    \"facebook\": {\n      \"error\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n      \"details\": {\n        \"message\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n        \"type\": \"OAuthException\",\n        \"code\": 190,\n        \"error_subcode\": 463,\n        \"fbtrace_id\": \"ADY0BcoijpCtACaecUkDZ20\"\n      }\n    }\n  }\n}",
+      "at": "2026-04-04T14:41:41.788Z"
+    },
+    {
+      "type": "error",
+      "message": "Organic Meta publish failed.\n{\n  \"error\": \"One or more Meta surfaces failed to publish.\",\n  \"details\": {\n    \"facebook\": {\n      \"error\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n      \"details\": {\n        \"message\": \"Error validating access token: Session has expired on Saturday, 28-Mar-26 10:00:00 PDT. The current time is Saturday, 04-Apr-26 07:42:45 PDT.\",\n        \"type\": \"OAuthException\",\n        \"code\": 190,\n        \"error_subcode\": 463,\n        \"fbtrace_id\": \"ADY0BcoijpCtACaecUkDZ20\"\n      }\n    }\n  }\n}",
+      "at": "2026-04-04T14:41:41.828Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:42:31.518Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:43:04.678Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:44:13.850Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:44:15.823Z"
+    },
+    {
+      "type": "thought",
+      "message": "🛑 **Kill Switch Activated:** Nexus is terminating all active processes and clearing the execution stack.",
+      "at": "2026-04-04T14:44:15.824Z"
+    },
+    {
+      "type": "thought",
+      "message": "âœ¨ **System Purge:** All transient mission baggage has been cleared. Ready for fresh sovereign directives.",
+      "at": "2026-04-04T14:44:15.825Z"
+    }
+  ],
+  "runSummary": {
+    "activeRun": null,
+    "pendingApproval": null,
+    "pendingRequirement": null,
+    "pendingRepair": null,
+    "currentMissionArtifact": null,
+    "missionArtifactHistory": [],
+    "pendingActionChain": [],
+    "lastPublishedTargets": [],
+    "activeMissionDomain": "general",
+    "missionTaskStack": [],
+    "missionMode": "execute",
+    "auditTrail": [
+      {
+        "type": "external_action_executed",
+        "payload": {
+          "tool": "metaAds",
+          "preview": "publishOrganicPost: {\"action\":\"publishOrganicPost\",\"pageId\":\"EAAWyOIpyV9MBRJwp43W7M0L5JIPT31YxF1RBfU9LN91Pa0TjVZCl8uldsZCfDlyjZCjY6hWlTMie6FNTqINLxuo6ZCFs3ZACwNZB5mJsZCqMMFvdWR6PWnsh8ANYNgSipjZBPzQHffv5nXyUJ6TXucAHq8E8nnV9LieHnMYUnOP9IEHcqA9bcwzIsQ61dMcSgKID8erNei2MTqwDcXZBGXpdokuyQ14N5n9cCdoQZAk6qLc3g1AhFVeFKQP4UxzALYlOhZBfYKMP2gZAqjSHUUmeZApT0fv1c\",\"message\":\"Watch this video and share your thoughts.\",\"link\":\"https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\",\"channels\":[\"facebook\"]}"
+        },
+        "at": "2026-04-04T14:41:41.140Z"
+      },
+      {
+        "type": "approval_granted",
+        "payload": {
+          "tool": "metaAds",
+          "preview": "Organic Meta post payload prepared.\nMessage: Watch this video and share your thoughts.\nLink: https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo\nChannels: facebook\nImage: none"
+        },
+        "at": "2026-04-04T14:41:40.005Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:32:38.107Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:30:26.249Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:28:25.158Z"
+      },
+      {
+        "type": "self_healing_detected",
+        "payload": {
+          "tool": "browserAction",
+          "classification": "browser_mismatch"
+        },
+        "at": "2026-04-04T14:26:09.242Z"
+      }
+    ],
+    "recoveryHistory": [
+      {
+        "at": "2026-04-04T14:32:38.106Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:30:26.249Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:28:25.158Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      },
+      {
+        "at": "2026-04-04T14:26:09.242Z",
+        "tool": "browserAction",
+        "classification": {
+          "type": "browser_mismatch",
+          "severity": "medium",
+          "summary": "Browser interaction did not match the current page state."
+        },
+        "playbook": {
+          "strategy": "auto_scan",
+          "safe": true,
+          "message": "Run browser element extraction and retry with updated page context."
+        }
+      }
+    ],
+    "recentRuns": [
+      {
+        "id": "run_1775313673959",
+        "requestPreview": "[FOLLOW-UP MISSION CONTEXT]\nInterpret references like this, that, it, same, current, and latest against this mission context first.\nIf the Boss asks to delete o",
+        "startedAt": "2026-04-04T14:41:13.959Z",
+        "finishedAt": "2026-04-04T14:41:41.791Z",
+        "status": "paused",
+        "toolCalls": 1,
+        "llmCalls": 0,
+        "toolsUsed": {
+          "metaAds": 1
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "metaAds",
+        "lastLlmProvider": null,
+        "lastLlmModel": null,
+        "providerUsage": {},
+        "toolUsage": {
+          "metaAds::publishOrganicPost": {
+            "tool": "metaAds",
+            "action": "publishOrganicPost",
+            "calls": 1
+          }
+        },
+        "providerSwitches": [],
+        "steps": 0,
+        "clientId": null,
+        "estimatedCostUsd": 0.0001,
+        "mode": "execute",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "totalTokens": 0,
+        "lastPhase": "executing_tool",
+        "lastStatusDetail": "Dispatching metaAds:publishOrganicPost.",
+        "waitingFor": null,
+        "domain": "marketing"
+      },
+      {
+        "id": "run_1775312579154",
+        "requestPreview": "get products details from this and promote it in meta ads products url https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=",
+        "startedAt": "2026-04-04T14:22:59.154Z",
+        "finishedAt": "2026-04-04T14:23:53.605Z",
+        "status": "paused",
+        "toolCalls": 15,
+        "llmCalls": 17,
+        "toolsUsed": {
+          "browserAction": 12,
+          "searchMemory": 1,
+          "metaAds": 2
+        },
+        "errorCount": 0,
+        "lastError": null,
+        "lastTool": "browserAction",
+        "lastLlmProvider": "OpenRouter",
+        "lastLlmModel": "nvidia/nemotron-nano-12b-v2-vl:free",
+        "providerUsage": {
+          "OpenRouter::nvidia/nemotron-3-super-120b-a12b-20230311:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free",
+            "calls": 3,
+            "freeCalls": 3,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 18781,
+            "outputTokens": 408,
+            "totalTokens": 19189
+          },
+          "OpenRouter::z-ai/glm-4.5-air:free": {
+            "provider": "OpenRouter",
+            "model": "z-ai/glm-4.5-air:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 15095,
+            "outputTokens": 80,
+            "totalTokens": 15175
+          },
+          "OpenRouter::nvidia/nemotron-nano-9b-v2:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-nano-9b-v2:free",
+            "calls": 4,
+            "freeCalls": 4,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 43355,
+            "outputTokens": 3998,
+            "totalTokens": 47353
+          },
+          "OpenRouter::stepfun/step-3.5-flash:free": {
+            "provider": "OpenRouter",
+            "model": "stepfun/step-3.5-flash:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 8450,
+            "outputTokens": 3613,
+            "totalTokens": 12063
+          },
+          "OpenRouter::arcee-ai/trinity-mini-20251201:free": {
+            "provider": "OpenRouter",
+            "model": "arcee-ai/trinity-mini-20251201:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 21587,
+            "outputTokens": 1290,
+            "totalTokens": 22877
+          },
+          "NVIDIA::meta/llama-3.1-8b-instruct": {
+            "provider": "NVIDIA",
+            "model": "meta/llama-3.1-8b-instruct",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 12304,
+            "outputTokens": 89,
+            "totalTokens": 12393
+          },
+          "OpenRouter::nvidia/nemotron-nano-12b-v2-vl:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+            "calls": 2,
+            "freeCalls": 2,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 21556,
+            "outputTokens": 1038,
+            "totalTokens": 22594
+          },
+          "OpenRouter::qwen/qwen3.6-plus-04-02:free": {
+            "provider": "OpenRouter",
+            "model": "qwen/qwen3.6-plus-04-02:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 10291,
+            "outputTokens": 81,
+            "totalTokens": 10372
+          },
+          "OpenRouter::nvidia/nemotron-3-nano-30b-a3b:free": {
+            "provider": "OpenRouter",
+            "model": "nvidia/nemotron-3-nano-30b-a3b:free",
+            "calls": 1,
+            "freeCalls": 1,
+            "paidCalls": 0,
+            "estimatedCostUsd": 0,
+            "inputTokens": 10865,
+            "outputTokens": 1700,
+            "totalTokens": 12565
+          }
+        },
+        "toolUsage": {
+          "browserAction::open": {
+            "tool": "browserAction",
+            "action": "open",
+            "calls": 2
+          },
+          "browserAction::getMarkdown": {
+            "tool": "browserAction",
+            "action": "getMarkdown",
+            "calls": 1
+          },
+          "searchMemory::default": {
+            "tool": "searchMemory",
+            "action": "",
+            "calls": 1
+          },
+          "browserAction::extract": {
+            "tool": "browserAction",
+            "action": "extract",
+            "calls": 3
+          },
+          "metaAds::default": {
+            "tool": "metaAds",
+            "action": "",
+            "calls": 2
+          },
+          "browserAction::extractActiveElements": {
+            "tool": "browserAction",
+            "action": "extractActiveElements",
+            "calls": 3
+          },
+          "browserAction::default": {
+            "tool": "browserAction",
+            "action": "",
+            "calls": 1
+          },
+          "browserAction::click": {
+            "tool": "browserAction",
+            "action": "click",
+            "calls": 2
+          }
+        },
+        "providerSwitches": [
+          {
+            "at": "2026-04-04T14:29:22.112Z",
+            "from": "OpenRouter",
+            "to": "NVIDIA",
+            "model": "meta/llama-3.1-8b-instruct"
+          },
+          {
+            "at": "2026-04-04T14:29:43.537Z",
+            "from": "NVIDIA",
+            "to": "OpenRouter",
+            "model": "nvidia/nemotron-nano-12b-v2-vl:free"
+          }
+        ],
+        "steps": 2,
+        "clientId": null,
+        "estimatedCostUsd": 0.00135,
+        "mode": "execute",
+        "inputTokens": 17520,
+        "outputTokens": 377,
+        "totalTokens": 17897,
+        "lastPhase": "executing_tool",
+        "lastStatusDetail": "Dispatching browserAction:click.",
+        "waitingFor": null,
+        "domain": "browser"
+      }
+    ],
+    "totals": {
+      "missions": 2,
+      "successRate": 0,
+      "paused": 2,
+      "toolCalls": 16,
+      "llmCalls": 17,
+      "estimatedCostUsd": 0.00145,
+      "totalTokens": 17897
+    }
+  },
+  "jobQueue": [
+    {
+      "id": "job_1775313673953",
+      "prompt": "get products details from this and promote it in meta ads products url https://mkfashion.in/product/aggregator-5T7cEUX7R4MZqkrlMr3G-10390411477284?size=L&color=Combo",
+      "clientId": null,
+      "missionMode": "chat",
+      "status": "awaiting_input",
+      "createdAt": "2026-04-04T14:41:13.953Z",
+      "startedAt": "2026-04-04T14:41:13.955Z",
+      "finishedAt": null,
+      "estimatedCostUsd": 0,
+      "attempts": 0,
+      "nextRunAt": null
+    }
+  ],
+  "currentJobId": null,
+  "lastUpdated": "2026-04-04T14:44:15.825Z"
+}

@@ -23,6 +23,7 @@ class LLMService {
         this.activeControllers = new Set();
         this.pinnedKeys = new Map(); // [RESILIENCE] sessionId -> successfulKeyName
         this.providerPins = new Map(); // [RESILIENCE] sessionId -> preferred provider for the rest of the run
+        this.geminiCooldownUntil = 0;
         this.readFileState = new Map(); // [CLAUDE-STALENESS-GUARD] absolutePath -> { timestamp, contentHash, lastReadTurn }
         this.planOpenRouterModels = [
             'openai/gpt-oss-20b:free',
@@ -62,6 +63,15 @@ class LLMService {
         return orderedProviders
             .filter((provider) => provider.name === pinnedProvider)
             .concat(orderedProviders.filter((provider) => provider.name !== pinnedProvider));
+    }
+
+    _isGeminiCoolingDown(now = Date.now()) {
+        return Number(this.geminiCooldownUntil || 0) > now;
+    }
+
+    _startGeminiCooldown(durationMs = 10 * 60 * 1000) {
+        this.geminiCooldownUntil = Date.now() + Math.max(1000, Number(durationMs || 0));
+        return this.geminiCooldownUntil;
     }
 
     /**
@@ -279,11 +289,12 @@ class LLMService {
                     properties: {
                         action: {
                             type: "string",
-                            enum: ["open", "click", "clickPixel", "clickText", "type", "clearAndType", "focus", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle", "waitForSelector"],
-                            description: "The action to perform. Use only supported browser actions. Prefer 'open' for navigation, 'waitForSelector' to confirm page state, 'clearAndType' for login fields, 'getMarkdown' for a hierarchical page view, 'extractActiveElements' for interactive items with coordinates, and 'clickPixel' only if CSS selectors fail."
+                            enum: ["open", "click", "clickPixel", "clickText", "type", "clearAndType", "fillByLabel", "focus", "keyPress", "hover", "scroll", "extract", "extractActiveElements", "getMarkdown", "screenshot", "waitForNetworkIdle", "waitForSelector", "dismissInterruptions"],
+                            description: "The action to perform. Use only supported browser actions. Prefer 'open' for navigation, 'waitForSelector' to confirm page state, 'clearAndType' for stable selectors, 'fillByLabel' when labels/placeholders are more reliable than selectors, 'getMarkdown' for a hierarchical page view, 'extractActiveElements' for interactive items with coordinates, 'dismissInterruptions' to clear cookie banners/modals/app prompts, and 'clickPixel' only if CSS selectors fail."
                         },
                         url: { type: "string", description: "URL to open (for 'open')." },
                         selector: { type: "string", description: "CSS selector (for 'click', 'type', 'hover', 'scroll', 'extract')." },
+                        label: { type: "string", description: "Human-visible field label, placeholder, or aria-label (for 'fillByLabel')." },
                         text: { type: "string", description: "Text to type (for 'type')." },
                         key: { type: "string", description: "Key to press (for 'keyPress', e.g., 'Enter')." },
                         x: { type: "number", description: "X coordinate (for 'clickPixel', 'hover')." },
@@ -854,8 +865,8 @@ class LLMService {
      * Map Nexus messages to Gemini-compatible format.
      */
     formatMessagesForGemini(messages) {
-        // IMPORTANT: The JS SDK expects camelCase part names even if the wire format is snake_case.
         // Do not send thought/thought_signature back to the API; it is not part of the request schema.
+        // The Gemini request payload here must use snake_case tool parts.
         const formatted = messages.map((msg) => {
             if (msg.role === 'system') {
                 const systemText = typeof msg.content === 'string' ? msg.content.trim() : String(msg.content ?? '').trim();
@@ -878,7 +889,7 @@ class LLMService {
                 if (assistantText) parts.push({ text: assistantText });
                 if (msg.toolCall) {
                     parts.push({
-                        functionCall: {
+                        function_call: {
                             name: msg.toolCall.name,
                             args: msg.toolCall.args || {}
                         }
@@ -894,7 +905,7 @@ class LLMService {
                 return {
                     role: 'user',
                     parts: [{
-                        functionResponse: {
+                        function_response: {
                             name: msg.name,
                             response: { result: resultContent }
                         }
@@ -914,8 +925,8 @@ class LLMService {
             entry.parts.length > 0 &&
             entry.parts.some((part) =>
                 (typeof part.text === 'string' && part.text.trim()) ||
-                part.functionCall ||
-                part.functionResponse
+                part.function_call ||
+                part.function_response
             )
         );
     }
@@ -1030,16 +1041,23 @@ class LLMService {
                 if (!provider.apiKey && provider.name !== 'Gemini') continue;
 
                 if (provider.name === 'Gemini') {
+                    if (this._isGeminiCoolingDown()) {
+                        const remainingSeconds = Math.max(1, Math.ceil((this.geminiCooldownUntil - Date.now()) / 1000));
+                        if (onStatus) onStatus(`Gemini cooldown active. Skipping Gemini for ${remainingSeconds}s and using fallback providers...`);
+                        continue;
+                    }
                     // [RESILIENCE] Integrated Gemini Multi-Key Rotation
                     try {
                         const geminiResponse = await this._generateWithGeminiMultiKey(messages, systemInstruction, mode, enableTools, options);
                         if (geminiResponse && !geminiResponse.text.startsWith('Error calling LLM:')) return geminiResponse;
                         console.warn(`[LLM Gemini Failure] Rotating to backup provider chain...`);
                         if (sessionId) this.providerPins.set(sessionId, 'OpenRouter');
+                        this._startGeminiCooldown();
                         if (onStatus) onStatus('Gemini failed for this turn. Pinning this session to fallback provider...');
                     } catch (err) {
                         console.error(`[LLM Gemini Fatal Error]`, err.message);
                         if (sessionId) this.providerPins.set(sessionId, 'OpenRouter');
+                        this._startGeminiCooldown();
                         if (onStatus) onStatus('Gemini quota/error detected. Pinning this session to fallback provider...');
                     }
                     continue;
